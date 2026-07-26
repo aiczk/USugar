@@ -58,6 +58,7 @@ public sealed class SyntheticContext
 
     // B67: user enums whose ToString()/concat/interpolation needs the synthesized __enumstr_ helper.
     readonly HashSet<INamedTypeSymbol> _enumToString = new(SymbolEqualityComparer.Default);
+    readonly HashSet<INamedTypeSymbol> _classToString = new(SymbolEqualityComparer.Default);
 
     // Variance (2026-07-04 design 2.2, B-1): per-(target, sig-S) sig adapter bridges. DelegateInvoke
     // is the DESTINATION delegate's own Invoke (conv-var declarations), distinct from TargetMethod
@@ -128,10 +129,12 @@ public sealed class SyntheticContext
         _demandsPublished = true;
         return new SyntheticDemandPlan(
             _closureBridgeFuncs,
+            _plannedDelegateSites,
             _receiverBridges.Values,
             _delegateBridges.Values,
             _multicastSigs,
             _enumToString,
+            _classToString,
             _sigAdapterBridges.Values,
             _wrapperSigs);
     }
@@ -205,6 +208,15 @@ public sealed class SyntheticContext
         _enumToString.Add(enumType);
     }
 
+    public void RegisterClassToString(INamedTypeSymbol classType)
+    {
+        RequireMutable();
+        if (_demandsPublished && !_classToString.Contains(classType))
+            throw new InvalidOperationException(
+                $"Class ToString dispatch for '{classType}' was first discovered during body emission.");
+        _classToString.Add(classType);
+    }
+
     public void RegisterWrapper(DelegateBindingPlan binding, IMethodSymbol outerInvoke,
         IMethodSymbol innerInvoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
@@ -265,5 +277,6 @@ public sealed class SyntheticContext
         => left != null && right != null
            && left.Kind == right.Kind
            && left.BridgeName == right.BridgeName
+           && left.InnerBridgeName == right.InnerBridgeName
            && SameDemandMethod(left.TargetMethod, right.TargetMethod);
 }

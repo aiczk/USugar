@@ -20,6 +20,7 @@ internal sealed class BoundProgram
     public readonly BoundDeconstructionTable Deconstructions;
     public readonly BoundMethodBodyTable MethodBodies;
     public readonly BoundMethodAnalysisTable MethodAnalyses;
+    public readonly BoundSyntheticDispatchTable SyntheticDispatch;
     public readonly BoundAbiPlan Abi;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
@@ -40,6 +41,7 @@ internal sealed class BoundProgram
         BoundDeconstructionTable deconstructions,
         BoundMethodBodyTable methodBodies,
         BoundMethodAnalysisTable methodAnalyses,
+        BoundSyntheticDispatchTable syntheticDispatch,
         BoundAbiPlan abi)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
@@ -59,6 +61,8 @@ internal sealed class BoundProgram
             ?? throw new ArgumentNullException(nameof(methodBodies));
         MethodAnalyses = methodAnalyses
             ?? throw new ArgumentNullException(nameof(methodAnalyses));
+        SyntheticDispatch = syntheticDispatch
+            ?? throw new ArgumentNullException(nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
     }
 }

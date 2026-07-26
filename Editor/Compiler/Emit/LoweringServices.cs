@@ -1668,10 +1668,23 @@ public sealed class LoweringServices
     /// DelegateBridgeEmitter's emitted-name set. Snapshots the type-param map for the same reason
     /// ResolveDelegateBridge does (§7 A-M1): synthetic emission runs after body emission, when the
     /// ambient map may already be cleared.</summary>
-    internal void RegisterMulticastSig(string sigPart, IMethodSymbol invoke, MulticastOperations operation)
+    internal void PlanMulticastSig(
+        string sigPart,
+        IMethodSymbol invoke,
+        MulticastOperations operation)
     {
         _state.Synthetics.RegisterMulticast(
             sigPart, invoke, _state.Generics.TypeParamMap, operation);
+    }
+
+    internal void RequireMulticastSig(
+        string sigPart,
+        IMethodSymbol invoke,
+        MulticastOperations operation)
+    {
+        if (invoke == null) throw new ArgumentNullException(nameof(invoke));
+        _state.Program.SyntheticDemands.RequireMulticast(
+            sigPart, operation);
     }
 
     // B67: the synthesized value→name helper's name for a user enum (one per enum, drained in UasmEmitter).
@@ -1698,12 +1711,43 @@ public sealed class LoweringServices
     /// (Udon cannot synthesize the comma-separated decomposition — that is gold-plating).</summary>
     internal CLeaf TryEmitEnumToString(CLeaf value, ITypeSymbol type)
     {
-        if (RegisterEnumToStringDemand(type) is not { } e)
+        if (RequireEnumToStringDemand(type) is not { } e)
             return null;
         return InternalCall(EnumToStringHelperName(e), new List<CLeaf> { value }, StorageTypes.String);
     }
 
-    internal INamedTypeSymbol RegisterEnumToStringDemand(ITypeSymbol type, bool rejectFlags = true)
+    internal INamedTypeSymbol PlanEnumToStringDemand(
+        ITypeSymbol type,
+        bool rejectFlags = true)
+    {
+        var enumType = ClassifyEnumToStringDemand(type, rejectFlags);
+        if (enumType != null)
+            _state.Synthetics.RegisterEnumToString(enumType);
+        return enumType;
+    }
+
+    internal INamedTypeSymbol RequireEnumToStringDemand(
+        ITypeSymbol type,
+        bool rejectFlags = true)
+    {
+        var enumType = ClassifyEnumToStringDemand(type, rejectFlags);
+        return enumType == null
+            ? null
+            : _state.Program.SyntheticDemands.RequireEnumToString(enumType);
+    }
+
+    internal INamedTypeSymbol PlanClassToStringDemand(ITypeSymbol type)
+    {
+        var resolved = ResolveType(type) as INamedTypeSymbol;
+        if (resolved == null || !TypeClassifier.IsUserClass(resolved))
+            return null;
+        _state.Synthetics.RegisterClassToString(resolved);
+        return resolved;
+    }
+
+    INamedTypeSymbol ClassifyEnumToStringDemand(
+        ITypeSymbol type,
+        bool rejectFlags)
     {
         var resolved = ResolveType(type);
         if (!IsFoldedEnum(resolved) || resolved is not INamedTypeSymbol e)
@@ -1716,7 +1760,6 @@ public sealed class LoweringServices
                 + "synthesize the comma-separated flag decomposition. Format the individual flag bits manually "
                 + "(e.g. compare against each flag and build the string yourself).");
         }
-        _state.Synthetics.RegisterEnumToString(e);
         return e;
     }
 
@@ -1725,7 +1768,7 @@ public sealed class LoweringServices
     /// <see cref="RegisterMulticastSig"/> (first registration wins; a second site needing the same
     /// (outer,inner) wrapper is a no-op here) — keyed by the wrapper's own name since that's already the
     /// unique key for this pair.</summary>
-    internal string RegisterWrapperSig(IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
+    internal string PlanWrapperSig(IMethodSymbol outerInvoke, IMethodSymbol innerInvoke,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         var wrapperName = DelegateAbi.WrapperName(
@@ -1739,7 +1782,20 @@ public sealed class LoweringServices
         return wrapperName;
     }
 
-    DelegateBindingPlan RegisterDelegateDemand(IMethodSymbol method, string bridgeName,
+    internal string RequireWrapperSig(
+        IMethodSymbol outerInvoke,
+        IMethodSymbol innerInvoke,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
+    {
+        var wrapperName = DelegateAbi.WrapperName(
+            DelegateAbi.BuildSigPart(
+                outerInvoke, _state.Session.Types, typeParamMap),
+            DelegateAbi.BuildSigPart(
+                innerInvoke, _state.Session.Types, typeParamMap));
+        return _state.Program.SyntheticDemands.RequireWrapper(wrapperName);
+    }
+
+    DelegateBindingPlan PlanDelegateDemand(IMethodSymbol method, string bridgeName,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
@@ -2007,21 +2063,87 @@ public sealed class LoweringServices
 
     internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
-        var binding = ResolveDelegateBridgeCore(op, false);
+        var site = DelegateDemandCensus.SiteKey(
+            op.Syntax, _state.Methods.CurrentOwnerSpecs);
+        var plan = _state.Program.SyntheticDemands.RequireDelegateBinding(site);
         _state.Synthetics.RecordDelegateBinding(
-            DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding.Plan);
-        return binding;
+            site, plan);
+        return MaterializeDelegateBinding(op, plan);
     }
 
     internal DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
     {
-        var binding = ResolveDelegateBridgeCore(op, true).Plan;
+        var binding = PlanDelegateBridgeCore(op).Plan;
         _state.Synthetics.PlanDelegateBinding(
             DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding);
         return binding;
     }
 
-    MaterializedDelegateBinding ResolveDelegateBridgeCore(IDelegateCreationOperation op, bool planning)
+    MaterializedDelegateBinding MaterializeDelegateBinding(
+        IDelegateCreationOperation operation,
+        DelegateBindingPlan plan)
+    {
+        CLeaf targetInstance = null;
+        if (operation.Target is IMethodReferenceOperation methodReference
+            && methodReference.Instance != null
+            && methodReference.Instance is not IInstanceReferenceOperation)
+            targetInstance = VisitExpression(methodReference.Instance);
+
+        if (plan.Kind == DelegateBindingKind.Receiver)
+        {
+            var receiver = targetInstance
+                ?? (_state.Methods.CurrentStructReceiverParamId is { } receiverId
+                    ? LoadField(
+                        receiverId,
+                        new StorageType(AggregateAbi.ArrayType))
+                    : throw new NotSupportedException(
+                        $"Method group '{plan.TargetMethod.Name}' has no receiver in this context."));
+            if (plan.TargetMethod.ContainingType is INamedTypeSymbol receiverType
+                && TypeClassifier.IsUserStruct(receiverType))
+                receiver = AggregateAbi.DeepClone(
+                    _builder, receiver, receiverType,
+                    _state.Aggregates.GetLayout);
+            return new MaterializedDelegateBinding(
+                plan, FuncRef(plan.BridgeName), null, receiver);
+        }
+
+        if (plan.Kind == DelegateBindingKind.CrossProgram)
+        {
+            if (targetInstance == null)
+                throw new NotSupportedException(
+                    $"Cross-program method group '{plan.TargetMethod.Name}' has no receiver.");
+            return new MaterializedDelegateBinding(
+                plan,
+                Const(0u, StorageTypes.UInt32),
+                targetInstance,
+                Const(null, StorageTypes.Object));
+        }
+
+        if (plan.Kind == DelegateBindingKind.Wrapper)
+        {
+            if (targetInstance == null
+                || string.IsNullOrEmpty(plan.InnerBridgeName))
+                throw new InvalidOperationException(
+                    $"Wrapper binding '{plan.BridgeName}' is incomplete.");
+            var innerBundle = DelegateAbi.EmitBundleMint(
+                _builder,
+                () => targetInstance,
+                Const(plan.InnerBridgeName, StorageTypes.String),
+                Const(0u, StorageTypes.UInt32),
+                Const(null, StorageTypes.Object));
+            return new MaterializedDelegateBinding(
+                plan, FuncRef(plan.BridgeName), null, innerBundle);
+        }
+
+        return new MaterializedDelegateBinding(
+            plan,
+            FuncRef(plan.BridgeName),
+            targetInstance,
+            ClosureEnvLeaf(plan.TargetMethod));
+    }
+
+    MaterializedDelegateBinding PlanDelegateBridgeCore(
+        IDelegateCreationOperation op)
     {
         IMethodSymbol targetMethod = null;
         CLeaf targetInstance = null;
@@ -2036,19 +2158,11 @@ public sealed class LoweringServices
                 baseReceiver = methodRef.Instance is IInstanceReferenceOperation
                     { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
                 if (methodRef.Instance != null && methodRef.Instance is not IInstanceReferenceOperation)
-                    targetInstance = planning
-                        ? Const(null, StorageTypes.Object)
-                        : VisitExpression(methodRef.Instance);
+                    targetInstance = Const(null, StorageTypes.Object);
                 break;
         }
         if (targetMethod == null)
             throw new System.NotSupportedException($"Unsupported delegate target: {op.Target.GetType().Name}");
-        if (!planning && op.Target is IMethodReferenceOperation methodReference)
-            targetMethod = RequireBoundCallSite(
-                methodReference,
-                CallableSiteKind.Method,
-                targetMethod).Callable.Site.Target;
-
         // MG auto-wrap (design 2026-07-11 v2, replacing the B54 struct reject and the v1 class MG
         // reject): a class/struct INSTANCE method group binds via a RECEIVER-BRIDGE — the receiver
         // object[] rides DelegateAbi.Env (the slot a closure env uses), and the bridge re-dispatches
@@ -2064,13 +2178,7 @@ public sealed class LoweringServices
         {
             var member = RequireStructMember(targetMethod);
             var memberFunc = _methodFunctions[member];
-            var recvLeaf = planning ? Const(null, StorageTypes.ObjectArray) : targetInstance
-                ?? (_state.Methods.CurrentStructReceiverParamId is { } rid
-                    ? LoadField(rid, new StorageType(AggregateAbi.ArrayType))
-                    : throw new System.NotSupportedException(
-                        $"Method group '{targetMethod.Name}' has no receiver in this context."));
-            if (!planning && member.ContainingType is INamedTypeSymbol cloneCt && TypeClassifier.IsUserStruct(cloneCt))
-                recvLeaf = AggregateAbi.DeepClone(_builder, recvLeaf, cloneCt, _state.Aggregates.GetLayout);
+            var recvLeaf = Const(null, StorageTypes.ObjectArray);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
             _state.Synthetics.RegisterReceiverBridge(binding);
@@ -2112,7 +2220,7 @@ public sealed class LoweringServices
 
         // Stage 2 §3.7: DelegateAbi.Env for a capturing closure target (null for named methods / base.M
         // / capture-free lambdas). Resolved here in the creation site's frame.
-        var envLeaf = planning ? Const(null, StorageTypes.Object) : ClosureEnvLeaf(targetMethod);
+        var envLeaf = Const(null, StorageTypes.Object);
 
         // Wave-9 [W3]: `base.M` binds the BASE implementation NON-virtually (C# ldftn). When the
         // compiled class (or an intermediate) overrides M, the locally registered function for the
@@ -2126,7 +2234,7 @@ public sealed class LoweringServices
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -2162,7 +2270,7 @@ public sealed class LoweringServices
                 _state.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -2206,7 +2314,7 @@ public sealed class LoweringServices
                     + "(the specialization's bridge must live in this program).");
             RequireRegisteredCallable(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            RegisterDelegateDemand(constructed, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(constructed, bridgeExportName, _state.Generics.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -2224,7 +2332,7 @@ public sealed class LoweringServices
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-internal method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanBuilder.IsExcludedFromSpeculativeBridge),
@@ -2246,7 +2354,7 @@ public sealed class LoweringServices
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            RegisterDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
         }
         else
         {
@@ -2303,19 +2411,20 @@ public sealed class LoweringServices
                         FuncRef(adapterName), targetInstance, envLeaf);
                 }
 
-                var innerBundle = planning ? Const(null, StorageTypes.ObjectArray)
-                    : DelegateAbi.EmitBundleMint(_builder, () => targetInstance,
-                        Const(bridgeExportName, StorageTypes.String), Const(0u, StorageTypes.UInt32),
-                        Const(null, StorageTypes.Object));
+                var innerBundle = Const(null, StorageTypes.ObjectArray);
 
                 // The wrapper's INNER dispatch must speak the inner bundle's OWN protocol — here, the
                 // third-party target's OWN signature (targetMethod, sig-T), never sig-S: DelegateAbi.Method names
                 // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
-                var wrapperName = RegisterWrapperSig(delegateInvoke, targetMethod, _state.Generics.TypeParamMap);
+                var wrapperName = PlanWrapperSig(delegateInvoke, targetMethod, _state.Generics.TypeParamMap);
                 return new MaterializedDelegateBinding(
-                    new DelegateBindingPlan(DelegateBindingKind.Wrapper, targetMethod, wrapperName),
+                    new DelegateBindingPlan(
+                        DelegateBindingKind.Wrapper,
+                        targetMethod,
+                        wrapperName,
+                        bridgeExportName),
                     FuncRef(wrapperName), null, innerBundle);
             }
         }
@@ -2521,12 +2630,6 @@ public sealed class LoweringServices
 
     // ── M4b: ToString dispatch on v1-class receivers (the object.ToString slot) ──
 
-    IMethodSymbol _objectToString;
-    IMethodSymbol ObjectToStringSlot()
-        => _objectToString ??= _compilation.GetSpecialType(SpecialType.System_Object)
-            .GetMembers("ToString").OfType<IMethodSymbol>()
-            .First(m => !m.IsStatic && m.Parameters.Length == 0);
-
     /// <summary>One string.Concat(object,object) operand, already evaluated from its UNWRAPPED node:
     /// dispatches a v1-class value through the object.ToString slot (M4b), rejects a type that cannot
     /// stringify honestly (v1-class-free ndim per CW15 — the class case is handled above, not rejected),
@@ -2559,9 +2662,9 @@ public sealed class LoweringServices
     internal CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
         bool nullIsError, bool useOverrides)
     {
-        var slot = ObjectToStringSlot();
-        var site = CallableSites.Synthetic(CallableSiteKind.Method, slot);
-        var targets = _state.VirtualDispatch.Resolve(site, recvTy).RuntimeTargets;
+        var slot = _state.Program.SyntheticDispatch.ObjectToStringSlot;
+        var targets = _state.Program.SyntheticDispatch
+            .Require(recvTy, slot).RuntimeTargets;
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
         var recvSlot = _state.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));

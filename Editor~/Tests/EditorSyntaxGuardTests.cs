@@ -96,6 +96,8 @@ public class EditorSyntaxGuardTests
         {
             Path.Combine(emitRoot, "Handlers"),
             Path.Combine(emitRoot, "LValueLowerer.cs"),
+            Path.Combine(emitRoot, "LoweringServices.cs"),
+            Path.Combine(emitRoot, "ReceiverBridgeEmitter.cs"),
         };
         var files = roots.SelectMany(path => Directory.Exists(path)
                 ? Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories)
@@ -176,6 +178,37 @@ public class EditorSyntaxGuardTests
         Assert.True(failures.Length == 0,
             "Body handlers may only require callable specializations already materialized "
             + "in the bound program.\n"
+            + string.Join("\n", failures));
+    }
+
+    [Fact]
+    public void BodyHandlersCannotPlanSyntheticHelpers()
+    {
+        var packageRoot = FindPackageRoot();
+        var handlers = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit", "Handlers");
+        var forbidden = new[]
+        {
+            "PlanMulticastSig(",
+            "PlanWrapperSig(",
+            "PlanEnumToStringDemand(",
+            ".Synthetics.Register",
+        };
+        var failures = Directory.GetFiles(
+                handlers, "*.cs", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item => forbidden.Any(token =>
+                    item.line.Contains(token, StringComparison.Ordinal)))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
+                    + item.line.Trim()))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body handlers may only require synthetic helpers already present in "
+            + "BoundProgram.SyntheticDemands.\n"
             + string.Join("\n", failures));
     }
 

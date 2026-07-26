@@ -1032,6 +1032,7 @@ internal sealed class ProgramLoweringPipeline
             _state.Methods.RegisteredBodies, GetMethodBodyOperation, discovery.FieldInitOps));
         PlanSyntheticDemands(discovery);
         var syntheticDemands = _state.Synthetics.PublishPlan();
+        var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var methodBodies = BoundMethodBodyTable.Materialize(
             _compilation,
             _state.Methods.RegisteredBodies.Select(
@@ -1052,11 +1053,49 @@ internal sealed class ProgramLoweringPipeline
             boundSource.Deconstructions,
             methodBodies,
             methodAnalyses,
+            syntheticDispatch,
             new BoundAbiPlan(_environment.AbiCatalog));
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
         RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
+    }
+
+    BoundSyntheticDispatchTable BindSyntheticDispatch(
+        SyntheticDemandPlan demands)
+    {
+        var objectToString = _compilation
+            .GetSpecialType(SpecialType.System_Object)
+            .GetMembers("ToString")
+            .OfType<IMethodSymbol>()
+            .First(method =>
+                !method.IsStatic && method.Parameters.Length == 0);
+        var sites = new Dictionary<
+            BoundSyntheticDispatchKey, DispatchPlan>();
+
+        void Bind(INamedTypeSymbol receiver, IMethodSymbol target)
+        {
+            var key = new BoundSyntheticDispatchKey(receiver, target);
+            if (sites.ContainsKey(key)) return;
+            sites.Add(
+                key,
+                _state.VirtualDispatch.Resolve(
+                    CallableSites.Synthetic(
+                        CallableSiteKind.Method, target),
+                    receiver));
+        }
+
+        foreach (var receiver in demands.ClassToStringTypes)
+            Bind(receiver, objectToString);
+        foreach (var demand in demands.ReceiverBridges)
+        {
+            var member = demand.Binding.TargetMethod;
+            if (member.ContainingType is INamedTypeSymbol receiver)
+                Bind(receiver, member);
+        }
+
+        return new BoundSyntheticDispatchTable(
+            objectToString, sites);
     }
 
     (BoundCallSiteTable CallSites,

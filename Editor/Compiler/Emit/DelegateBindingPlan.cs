@@ -18,13 +18,19 @@ public sealed class DelegateBindingPlan
     public DelegateBindingKind Kind { get; }
     public IMethodSymbol TargetMethod { get; }
     public string BridgeName { get; }
+    public string InnerBridgeName { get; }
 
-    public DelegateBindingPlan(DelegateBindingKind kind, IMethodSymbol targetMethod, string bridgeName)
+    public DelegateBindingPlan(
+        DelegateBindingKind kind,
+        IMethodSymbol targetMethod,
+        string bridgeName,
+        string innerBridgeName = null)
     {
         Kind = kind;
         TargetMethod = targetMethod ?? throw new ArgumentNullException(nameof(targetMethod));
         BridgeName = !string.IsNullOrEmpty(bridgeName)
             ? bridgeName : throw new ArgumentException("Delegate bridge name is required.", nameof(bridgeName));
+        InnerBridgeName = innerBridgeName;
     }
 }
 

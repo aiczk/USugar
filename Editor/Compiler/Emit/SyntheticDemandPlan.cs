@@ -11,37 +11,111 @@ using Microsoft.CodeAnalysis;
 internal sealed class SyntheticDemandPlan
 {
     readonly IReadOnlyDictionary<string, StructuredFunction> _closureBridgeFunctions;
+    readonly IReadOnlyDictionary<string, DelegateBindingPlan> _delegateBindings;
+    readonly HashSet<INamedTypeSymbol> _enumToStringTypes;
+    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _receiverBridges;
+    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _delegateBridges;
+    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _signatureAdapterBridges;
 
     public readonly IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges;
     public readonly IReadOnlyDictionary<string, MulticastSigPlan> MulticastSignatures;
     public readonly IReadOnlyCollection<INamedTypeSymbol> EnumToStringTypes;
+    public readonly IReadOnlyCollection<INamedTypeSymbol> ClassToStringTypes;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> SignatureAdapterBridges;
     public readonly IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSignatures;
 
     public SyntheticDemandPlan(
         IDictionary<string, StructuredFunction> closureBridgeFunctions,
+        IDictionary<string, DelegateBindingPlan> delegateBindings,
         IEnumerable<DelegateBridgeDemand> receiverBridges,
         IEnumerable<DelegateBridgeDemand> delegateBridges,
         IDictionary<string, MulticastSigPlan> multicastSignatures,
         IEnumerable<INamedTypeSymbol> enumToStringTypes,
+        IEnumerable<INamedTypeSymbol> classToStringTypes,
         IEnumerable<DelegateBridgeDemand> signatureAdapterBridges,
         IDictionary<string, DelegateWrapperDemand> wrapperSignatures)
     {
         _closureBridgeFunctions = CopyMap(closureBridgeFunctions);
-        ReceiverBridges = Array.AsReadOnly(receiverBridges.ToArray());
-        DelegateBridges = Array.AsReadOnly(delegateBridges.ToArray());
+        _delegateBindings = CopyMap(delegateBindings);
+        var receiverBridgeArray = receiverBridges.ToArray();
+        var delegateBridgeArray = delegateBridges.ToArray();
+        var signatureAdapterArray = signatureAdapterBridges.ToArray();
+        _receiverBridges = ByBridgeName(receiverBridgeArray);
+        _delegateBridges = ByBridgeName(delegateBridgeArray);
+        _signatureAdapterBridges = ByBridgeName(signatureAdapterArray);
+        ReceiverBridges = Array.AsReadOnly(receiverBridgeArray);
+        DelegateBridges = Array.AsReadOnly(delegateBridgeArray);
         MulticastSignatures = CopyMap(multicastSignatures);
-        EnumToStringTypes = Array.AsReadOnly(enumToStringTypes.ToArray());
-        SignatureAdapterBridges = Array.AsReadOnly(signatureAdapterBridges.ToArray());
+        var enums = enumToStringTypes.ToArray();
+        _enumToStringTypes = new HashSet<INamedTypeSymbol>(
+            enums, SymbolEqualityComparer.Default);
+        EnumToStringTypes = Array.AsReadOnly(enums);
+        ClassToStringTypes = Array.AsReadOnly(classToStringTypes.ToArray());
+        SignatureAdapterBridges = Array.AsReadOnly(signatureAdapterArray);
         WrapperSignatures = CopyMap(wrapperSignatures);
     }
 
     public bool TryGetClosureBridge(string name, out StructuredFunction function)
         => _closureBridgeFunctions.TryGetValue(name, out function);
 
+    public DelegateBindingPlan RequireDelegateBinding(string site)
+        => _delegateBindings.TryGetValue(site, out var binding)
+            ? binding
+            : throw new InvalidOperationException(
+                $"Delegate site '{site}' was absent from the bound program.");
+
+    public void RequireMulticast(string signature, MulticastOperations operation)
+    {
+        if (MulticastSignatures.TryGetValue(signature, out var planned)
+            && (planned.Operations & operation) == operation)
+            return;
+        throw new InvalidOperationException(
+            $"Multicast helper '{signature}' ({operation}) was absent from the bound program.");
+    }
+
+    public INamedTypeSymbol RequireEnumToString(INamedTypeSymbol enumType)
+    {
+        if (_enumToStringTypes.Contains(enumType)) return enumType;
+        throw new InvalidOperationException(
+            $"Enum ToString helper for '{enumType}' was absent from the bound program.");
+    }
+
+    public string RequireWrapper(string wrapperName)
+    {
+        if (WrapperSignatures.ContainsKey(wrapperName)) return wrapperName;
+        throw new InvalidOperationException(
+            $"Delegate wrapper '{wrapperName}' was absent from the bound program.");
+    }
+
+    public void RequireReceiverBridge(string bridgeName)
+        => RequireBridge(_receiverBridges, bridgeName, "receiver bridge");
+
+    public void RequireDelegateBridge(string bridgeName)
+        => RequireBridge(_delegateBridges, bridgeName, "delegate bridge");
+
+    public void RequireSignatureAdapter(string bridgeName)
+        => RequireBridge(_signatureAdapterBridges, bridgeName, "signature adapter");
+
+    static void RequireBridge(
+        IReadOnlyDictionary<string, DelegateBridgeDemand> bridges,
+        string bridgeName,
+        string category)
+    {
+        if (bridges.ContainsKey(bridgeName)) return;
+        throw new InvalidOperationException(
+            $"Synthetic {category} '{bridgeName}' was absent from the bound program.");
+    }
+
     static IReadOnlyDictionary<string, TValue> CopyMap<TValue>(
         IDictionary<string, TValue> source)
         => new ReadOnlyDictionary<string, TValue>(
             new Dictionary<string, TValue>(source, StringComparer.Ordinal));
+
+    static IReadOnlyDictionary<string, DelegateBridgeDemand> ByBridgeName(
+        IEnumerable<DelegateBridgeDemand> demands)
+        => new ReadOnlyDictionary<string, DelegateBridgeDemand>(
+            demands.ToDictionary(
+                demand => demand.Binding.BridgeName,
+                StringComparer.Ordinal));
 }

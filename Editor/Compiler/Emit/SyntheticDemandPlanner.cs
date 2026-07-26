@@ -23,7 +23,7 @@ internal sealed class SyntheticDemandPlanner
                 _lowering.State.Generics.TypeParamMap,
                 out var outerInvoke, out var innerInvoke))
         {
-            _lowering.RegisterWrapperSig(outerInvoke, innerInvoke, _lowering.State.Generics.TypeParamMap);
+            _lowering.PlanWrapperSig(outerInvoke, innerInvoke, _lowering.State.Generics.TypeParamMap);
             return;
         }
         if (operation is ICompoundAssignmentOperation compound
@@ -33,7 +33,7 @@ internal sealed class SyntheticDemandPlanner
         {
             var signature = DelegateAbi.BuildSigPart(
                 invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
-            _lowering.RegisterMulticastSig(signature, invoke,
+            _lowering.PlanMulticastSig(signature, invoke,
                 compound.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
@@ -43,7 +43,7 @@ internal sealed class SyntheticDemandPlanner
             && _lowering.ResolveType(binary.Type) is INamedTypeSymbol binaryDelegate
             && binaryDelegate.DelegateInvokeMethod is { } binaryInvoke)
         {
-            _lowering.RegisterMulticastSig(
+            _lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
                     binaryInvoke, _lowering.State.Session.Types,
                     _lowering.State.Generics.TypeParamMap), binaryInvoke,
@@ -57,7 +57,7 @@ internal sealed class SyntheticDemandPlanner
             && _lowering.ResolveType(eventType) is INamedTypeSymbol eventDelegate
             && eventDelegate.DelegateInvokeMethod is { } eventInvoke)
         {
-            _lowering.RegisterMulticastSig(
+            _lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
                     eventInvoke, _lowering.State.Session.Types,
                     _lowering.State.Generics.TypeParamMap), eventInvoke,
@@ -72,20 +72,42 @@ internal sealed class SyntheticDemandPlanner
             if (instanceType is INamedTypeSymbol nullable
                 && nullable.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
                 instanceType = nullable.TypeArguments[0];
-            _lowering.RegisterEnumToStringDemand(instanceType, rejectFlags: false);
+            _lowering.PlanEnumToStringDemand(instanceType, rejectFlags: false);
+            var isBase = invocation.Instance is IInstanceReferenceOperation
+            {
+                Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax
+            };
+            var family = isBase
+                         && invocation.Instance.Type?.SpecialType
+                         == SpecialType.System_Object
+                ? _lowering.CurrentMethod?.ContainingType
+                : invocation.Instance.Type;
+            _lowering.PlanClassToStringDemand(family);
         }
         else if (operation is IInterpolationOperation interpolation)
-            _lowering.RegisterEnumToStringDemand(interpolation.Expression.Type, rejectFlags: false);
+        {
+            _lowering.PlanEnumToStringDemand(interpolation.Expression.Type, rejectFlags: false);
+            _lowering.PlanClassToStringDemand(interpolation.Expression.Type);
+        }
         else if (operation is IBinaryOperation { OperatorKind: BinaryOperatorKind.Add } concat
                  && _lowering.ResolveType(concat.Type)?.SpecialType == SpecialType.System_String)
         {
-            _lowering.RegisterEnumToStringDemand(LoweringServices.UnwrapConcatOperand(concat.LeftOperand)?.Type, rejectFlags: false);
-            _lowering.RegisterEnumToStringDemand(LoweringServices.UnwrapConcatOperand(concat.RightOperand)?.Type, rejectFlags: false);
+            var left = LoweringServices.UnwrapConcatOperand(concat.LeftOperand)?.Type;
+            var right = LoweringServices.UnwrapConcatOperand(concat.RightOperand)?.Type;
+            _lowering.PlanEnumToStringDemand(left, rejectFlags: false);
+            _lowering.PlanEnumToStringDemand(right, rejectFlags: false);
+            _lowering.PlanClassToStringDemand(left);
+            _lowering.PlanClassToStringDemand(right);
         }
         else if (operation is ICompoundAssignmentOperation
                  { OperatorKind: BinaryOperatorKind.Add } compoundConcat
                  && _lowering.ResolveType(compoundConcat.Target.Type)?.SpecialType == SpecialType.System_String)
-            _lowering.RegisterEnumToStringDemand(LoweringServices.UnwrapConcatOperand(compoundConcat.Value)?.Type, rejectFlags: false);
+        {
+            var value = LoweringServices.UnwrapConcatOperand(
+                compoundConcat.Value)?.Type;
+            _lowering.PlanEnumToStringDemand(value, rejectFlags: false);
+            _lowering.PlanClassToStringDemand(value);
+        }
     }
 
 }

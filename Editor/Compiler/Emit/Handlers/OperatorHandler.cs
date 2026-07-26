@@ -106,7 +106,7 @@ public class OperatorHandler : IExpressionHandler
 
             var sigPart = DelegateAbi.BuildSigPart(
                 invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
-            _lowering.RegisterMulticastSig(sigPart, invoke,
+            _lowering.RequireMulticastSig(sigPart, invoke,
                 op.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine
                     : MulticastOperations.Remove);

@@ -621,7 +621,7 @@ public class ExpressionHandler : IExpressionHandler
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
             // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under
                 // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
-                var wrapperName = _lowering.RegisterWrapperSig(vDstInvoke, vSrcInvoke, _lowering.State.Generics.TypeParamMap);
+                var wrapperName = _lowering.RequireWrapperSig(vDstInvoke, vSrcInvoke, _lowering.State.Generics.TypeParamMap);
 
                 // A null delegate VALUE converts to null (C# semantics: converting null is null) — never
                 // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from

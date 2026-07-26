@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using Microsoft.CodeAnalysis;
 
 // The one place a type-param map is built. Every generic-emit composition (spec install, closure
@@ -37,6 +38,6 @@ public static class TypeParamScope
                 if (newWins || !dict.ContainsKey(parms[i]))
                     dict[parms[i]] = args[i];
             }
-        return dict;
+        return new ReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>(dict);
     }
 }
