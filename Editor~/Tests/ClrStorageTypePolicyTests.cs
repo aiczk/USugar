@@ -258,8 +258,10 @@ public class LoweringDecisionProbe : UdonSharpBehaviour
         Assert.Equal(StorageTypes.ObjectArray, aggregate.Storage);
         Assert.Equal(
             RuntimeBundleKind.Aggregate,
-            aggregate.SourceShape?.Bundle);
-        Assert.False(aggregate.SourceShape?.ContainsUserClassPayload);
+            session.Types.SourceShape(fields["aggregate"]).Bundle);
+        Assert.False(
+            session.Types.SourceShape(fields["aggregate"])
+                .ContainsUserClassPayload);
 
         var generic = session.Types.Describe(fields["registeredGeneric"]);
         Assert.Equal(UdonRepresentationKind.Exact, generic.Representation);
@@ -269,7 +271,9 @@ public class LoweringDecisionProbe : UdonSharpBehaviour
         Assert.Equal(
             UdonRuntimeTypeTest.UniversalObject,
             universal.RuntimeTypeTest);
-        Assert.True(universal.SourceShape?.ContainsOpaqueObject);
+        Assert.True(
+            session.Types.SourceShape(fields["universalObject"])
+                .ContainsOpaqueObject);
     }
 
     [Fact]

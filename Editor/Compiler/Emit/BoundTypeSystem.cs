@@ -45,8 +45,8 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         var key = BoundTypeKey.Create(type, typeParameterMap);
         var resolved = Resolve(type, typeParameterMap);
         var lowering = _source.Describe(type, typeParameterMap);
-        RecordSourceShape(key, lowering.SourceShape
-            ?? _source.SourceShape(type, typeParameterMap));
+        RecordSourceShape(
+            key, _source.SourceShape(type, typeParameterMap));
         if (resolved is INamedTypeSymbol
                 { TypeKind: TypeKind.Interface } iface
             && _layouts.InterfaceIsLocalUserClassOnly(iface))
@@ -55,8 +55,7 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
                 StorageTypes.ObjectArray,
                 UdonRepresentationKind.ObjectArrayBehaviourAlias,
                 UdonRuntimeTypeTest.Unsupported,
-                lowering.InstalledEvidence,
-                lowering.SourceShape);
+                lowering.InstalledEvidence);
         if (_lowerings.TryGetValue(key, out var existing))
         {
             if (existing.Storage != lowering.Storage

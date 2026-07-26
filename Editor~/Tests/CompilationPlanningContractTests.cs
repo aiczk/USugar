@@ -194,6 +194,10 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(BoundUdonTypeSystem));
         Assert.Contains(fields, field => field.FieldType == typeof(UdonTypeFactRegistry));
         Assert.Contains(fields, field => field.FieldType == typeof(FrozenLayoutPlan));
+        Assert.Null(typeof(UdonTypeLowering).GetProperty(
+            "SourceShape",
+            BindingFlags.Instance | BindingFlags.Public
+            | BindingFlags.NonPublic));
         var forbiddenAuthorities = new[]
         {
             typeof(CompilationSession),
