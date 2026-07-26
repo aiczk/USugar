@@ -9,7 +9,7 @@ internal sealed class SpecializationRegistrar
     public SpecializationRegistrar(LoweringServices lowering) => _lowering = lowering;
 
     public void Register(IMethodSymbol specialization)
-        => _lowering.RegisterGenericSpecialization(specialization);
+        => _lowering.MaterializeGenericSpecialization(specialization);
 
     public void Register(ClosureSpecializationCandidate candidate)
     {
@@ -22,7 +22,7 @@ internal sealed class SpecializationRegistrar
             candidate.OwnerSpecs.Length > 0 ? candidate.OwnerSpecs[0] : null,
             null, null, candidate.OwnerSpecs);
         if (candidate.Method.IsGenericMethod)
-            _lowering.RegisterGenericSpecialization(candidate.Method);
+            _lowering.MaterializeGenericSpecialization(candidate.Method);
         else
             _lowering.RegisterLocalFunction(candidate.Method);
     }

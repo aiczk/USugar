@@ -155,6 +155,12 @@ public class CompilationPlanningContractTests
             typeof(LoweringEnvironment).GetFields(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             field => field.FieldType == typeof(UdonAbiBinder));
+        Assert.Null(typeof(LoweringServices).GetMethod(
+            "RegisterGenericSpecialization",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        Assert.Null(typeof(LoweringServices).GetMethod(
+            "ResolveStructMember",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
         Assert.All(
             typeof(BoundAbiPlan).GetFields(
                 BindingFlags.Instance | BindingFlags.NonPublic),

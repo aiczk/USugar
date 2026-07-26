@@ -448,7 +448,7 @@ public class StatementHandler : IOperationHandler
         if (resolvedType is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
             && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
-            _lowering.EmitCallToMethod(_lowering.ResolveStructMember(dispose), new List<CLeaf> { val });
+            _lowering.EmitCallToMethod(_lowering.RequireStructMember(dispose), new List<CLeaf> { val });
             return;
         }
 

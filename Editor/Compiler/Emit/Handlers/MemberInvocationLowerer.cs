@@ -74,7 +74,7 @@ internal sealed class MemberInvocationLowerer
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && TypeClassifier.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
-            var ret = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(aggGetterRaw),
+            var ret = _lowering.EmitCallToMethod(_lowering.RequireStructMember(aggGetterRaw),
                 new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && TypeClassifier.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, getRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
@@ -148,7 +148,7 @@ internal sealed class MemberInvocationLowerer
                 // (SP<T>.get_Doubled → SP<int>.get_Doubled inside a Box<int> spec) and registers the closed
                 // spec on demand; an already-closed getter (a class-body call site) is returned unchanged
                 // and was pre-registered by the collection layer.
-                var sgv = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(sPropGetter), new List<CLeaf>());
+                var sgv = _lowering.EmitCallToMethod(_lowering.RequireStructMember(sPropGetter), new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, sgv, sgAgg, _lowering.State.Aggregates.GetLayout) : sgv;
             }
@@ -309,7 +309,7 @@ internal sealed class MemberInvocationLowerer
         {
             var sargs = new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) };
             sargs.AddRange(_lowering.EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
-            var ret = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(idxGetterRaw), sargs);
+            var ret = _lowering.EmitCallToMethod(_lowering.RequireStructMember(idxGetterRaw), sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && TypeClassifier.IsAggregateValue(idxRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, idxRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
         }
@@ -570,7 +570,7 @@ internal sealed class MemberInvocationLowerer
             _owner.Externs.GuardRefOutArguments(init.Arguments, chainCtor);
                 var chainArgs = new List<CLeaf> { inst };
             var chainPrepared = _owner.Externs.MarshalArgumentsByOrdinal(init.Arguments, chainCtor, chainArgs);
-                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(target), chainArgs));
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(target), chainArgs));
             _owner.Externs.EmitRefOutCopyBack(init.Arguments, chainCtor, 0, chainPrepared);
             }
             return;
@@ -588,7 +588,7 @@ internal sealed class MemberInvocationLowerer
     /// ctor chain — the base ctor runs its own field inits, base chain, and body (needed for a base ctor with
     /// side effects, e.g. a virtual call under charter #6).</summary>
     void CallBaseCtor(IMethodSymbol ctorSym, CLeaf inst)
-        => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(ctorSym), new List<CLeaf> { inst }));
+        => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(ctorSym), new List<CLeaf> { inst }));
 
     CLeaf VisitClassInitializerExpression(IOperation value, INamedTypeSymbol mintedType)
     {
@@ -634,7 +634,7 @@ internal sealed class MemberInvocationLowerer
                 var ctorArgs = new List<CLeaf> { instance };
         var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
-                    _lowering.ResolveStructMember(constructor), ctorArgs));
+                    _lowering.RequireStructMember(constructor), ctorArgs));
         _owner.Externs.EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
             instance => _lowering.EmitAggregateObjectInitializer(instance, layout, op.Initializer),
@@ -780,7 +780,7 @@ internal sealed class MemberInvocationLowerer
             var ctorArgs = new List<CLeaf> { _lowering.SlotRef(slot) };
             var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
             _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
-                _lowering.ResolveStructMember(constructor), ctorArgs));
+                _lowering.RequireStructMember(constructor), ctorArgs));
             _owner.Externs.EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).

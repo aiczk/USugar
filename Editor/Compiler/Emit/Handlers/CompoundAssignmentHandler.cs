@@ -76,7 +76,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
             && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
         {
-            var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
+            var res = _lowering.EmitCallToMethod(_lowering.RequireStructMember(cuOpM), new List<CLeaf> { leftVal, rightVal });
             lv.Write(res);
             return res;
         }
@@ -215,7 +215,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
                     $"Interface event '{localInterface.Name}.{evt.Name}' has no minted implementation.");
             if (targets.Count == 1)
             {
-                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(targets[0].Impl),
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(targets[0].Impl),
                     new List<CLeaf> { _lowering.SlotRef(recvSlot), _lowering.SlotRef(handlerSlot) }, op.Syntax));
                 return null;
             }
@@ -227,7 +227,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
                     new List<CLeaf> { typeObj, _lowering.LoadField(target.TypeObjVar, StorageTypes.String) },
                     StorageTypes.Boolean);
                 _lowering.Builder.EmitIf(match, _ => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
-                    _lowering.ResolveStructMember(target.Impl),
+                    _lowering.RequireStructMember(target.Impl),
                     new List<CLeaf> { _lowering.SlotRef(recvSlot), _lowering.SlotRef(handlerSlot) }, op.Syntax)), null);
             }
             return null;
@@ -252,7 +252,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
             {
                 if (accessor.IsStatic)
                 {
-                    _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(accessor),
+                    _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(accessor),
                         new List<CLeaf> { handlerValue }, op.Syntax));
                     return null;
                 }
@@ -262,7 +262,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
                         : throw new System.NotSupportedException(
                             $"Custom event '{evt.Name}' has no class receiver in this context."))
                     : stagedReceiver;
-                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.ResolveStructMember(accessor),
+                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(accessor),
                     new List<CLeaf> { receiver, handlerValue }, op.Syntax));
                 return null;
             }
@@ -346,7 +346,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
             && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && TypeClassifier.IsObjectArrayEmulated(iuOpCt))
         {
-            var res = _lowering.EmitCallToMethod(_lowering.ResolveStructMember(iuOpM), new List<CLeaf> { targetVal });
+            var res = _lowering.EmitCallToMethod(_lowering.RequireStructMember(iuOpM), new List<CLeaf> { targetVal });
             lv.Write(res);
             return op.IsPostfix ? lv.Value : res;
         }

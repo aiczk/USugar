@@ -144,7 +144,7 @@ public sealed class DeconstructionAssignmentHandler : IOperationHandler
                         || e is IDeclarationExpressionOperation { Expression: ITupleOperation }))
                         throw new System.NotSupportedException(
                             "Nested user-defined Deconstruct targets are not supported yet.");
-                    var method = _lowering.ResolveStructMember(deconstruct);
+                    var method = _lowering.RequireStructMember(deconstruct);
                     if (method.Parameters.Length != targetTuple.Elements.Length
                         || method.Parameters.Any(p => p.RefKind != RefKind.Out))
                         throw new System.NotSupportedException(

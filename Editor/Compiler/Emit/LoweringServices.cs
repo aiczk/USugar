@@ -1292,7 +1292,7 @@ public sealed class LoweringServices
     /// value: the C# order), the same lowering PreparePropertySet gives plain assignment.</summary>
     void EmitInitializerSetterAssignment(CLeaf instance, IPropertyReferenceOperation propRef, IOperation valueOp)
     {
-        var setter = ResolveStructMember(propRef.Property.SetMethod);
+        var setter = RequireStructMember(propRef.Property.SetMethod);
         var args = new List<CLeaf> { instance };
         if (propRef.Property.IsIndexer) args.AddRange(EvaluateIndexerArgs(propRef));
         args.Add(VisitExpression(valueOp));
@@ -1352,7 +1352,7 @@ public sealed class LoweringServices
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
             && propRef.Instance?.Type is INamedTypeSymbol aggSetType && TypeClassifier.IsObjectArrayEmulated(aggSetType))
         {
-            var aggSetter = ResolveStructMember(aggSetterRaw);
+            var aggSetter = RequireStructMember(aggSetterRaw);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
             return aggSetVal => EmitExprStmt(
                 EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
@@ -1364,7 +1364,7 @@ public sealed class LoweringServices
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
             && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && TypeClassifier.IsObjectArrayEmulated(aggIdxSetType))
         {
-            var aggIdxSetter = ResolveStructMember(aggIdxSetterRaw);
+            var aggIdxSetter = RequireStructMember(aggIdxSetterRaw);
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
             setterArgs.AddRange(EvaluateIndexerArgs(propRef)); // wave-9 r4: named index args bind by ordinal
             return aggIdxVal =>
@@ -1415,7 +1415,7 @@ public sealed class LoweringServices
                 && !USugarCompilerHelper.IsFrameworkNamespace(sourceSetter.ContainingNamespace)
                 && UasmEmitter.IsComputedProperty(propRef.Property))
             {
-                var resolvedSetter = ResolveStructMember(sourceSetter);
+                var resolvedSetter = RequireStructMember(sourceSetter);
                 return staticVal => EmitExprStmt(
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
@@ -1828,7 +1828,7 @@ public sealed class LoweringServices
     // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
     // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
     // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
-    internal void RegisterGenericSpecialization(IMethodSymbol constructed)
+    internal void MaterializeGenericSpecialization(IMethodSymbol constructed)
     {
         // SS2B (M2b): a GENERIC local function is a hoisted closure and registers in the per-spec
         // registry under (own type args + ambient enclosing-spec args) — its constructed symbol is
@@ -1925,12 +1925,31 @@ public sealed class LoweringServices
     /// through the live type-param map, then register on demand exactly like a plain self-recursive
     /// call — both operations are idempotent, so this is a no-op for non-generic structs and for members
     /// already reached by an external concretely-typed call site.</summary>
-    internal IMethodSymbol ResolveStructMember(IMethodSymbol member)
+    internal IMethodSymbol RequireRegisteredCallable(IMethodSymbol method)
+    {
+        if (method == null) throw new ArgumentNullException(nameof(method));
+        var closureKind = method.MethodKind is MethodKind.LambdaMethod
+            or MethodKind.LocalFunction;
+        if (closureKind)
+        {
+            var identity = _state.ResolveClosureIdentity(method);
+            if (_state.Methods.TryGetClosureSpec(
+                    method, identity.KeyArgs, out _))
+                return method;
+        }
+        else if (_methodFunctions.ContainsKey(method))
+        {
+            return method;
+        }
+
+        throw new InvalidOperationException(
+            $"Callable '{method.ToDisplayString()}' was absent from the bound program.");
+    }
+
+    internal IMethodSymbol RequireStructMember(IMethodSymbol member)
     {
         var resolved = SubstituteMethodTypeArgs(member);
-        if (!_methodFunctions.ContainsKey(resolved))
-            RegisterGenericSpecialization(resolved);
-        return resolved;
+        return RequireRegisteredCallable(resolved);
     }
 
     // The [X6]/[Y2] instantiation-pin gates were retired by the per-spec closure separation
@@ -2043,7 +2062,7 @@ public sealed class LoweringServices
             && targetMethod.ContainingType is INamedTypeSymbol recvCt0
             && TypeClassifier.IsObjectArrayEmulated(recvCt0))
         {
-            var member = ResolveStructMember(targetMethod); // ensure-registered (a MG may be the member's only reference)
+            var member = RequireStructMember(targetMethod);
             var memberFunc = _methodFunctions[member];
             var recvLeaf = planning ? Const(null, StorageTypes.ObjectArray) : targetInstance
                 ?? (_state.Methods.CurrentStructReceiverParamId is { } rid
@@ -2126,7 +2145,7 @@ public sealed class LoweringServices
                 if (!constructedLf.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
                 {
                     targetMethod = constructedLf;
-                    RegisterGenericSpecialization(targetMethod); // idempotent per composite key
+                    RequireRegisteredCallable(targetMethod);
                 }
             }
             // SS2B: a non-generic hoisted closure resolves through the per-spec registry (the ambient
@@ -2185,7 +2204,7 @@ public sealed class LoweringServices
                     + "declared on the compiled class, an inherited user base class, or a helper class/struct "
                     + "as a static, and every type argument resolves to a concrete type at the creation site "
                     + "(the specialization's bridge must live in this program).");
-            RegisterGenericSpecialization(constructed);
+            RequireRegisteredCallable(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
             RegisterDelegateDemand(constructed, bridgeExportName, _state.Generics.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
@@ -2492,10 +2511,10 @@ public sealed class LoweringServices
         if (setValue != null)
         {
             args.Add(setValue);
-            EmitExprStmt(EmitCallToMethod(ResolveStructMember(t.Impl), args));
+            EmitExprStmt(EmitCallToMethod(RequireStructMember(t.Impl), args));
             return null;
         }
-        var ret = EmitCallToMethod(ResolveStructMember(t.Impl), args);
+        var ret = EmitCallToMethod(RequireStructMember(t.Impl), args);
         return prop.Type is INamedTypeSymbol retAgg && TypeClassifier.IsAggregateValue(retAgg)
             ? AggregateAbi.DeepClone(_builder, ret, retAgg, _state.Aggregates.GetLayout) : ret;
     }
@@ -2614,7 +2633,7 @@ public sealed class LoweringServices
     /// runtime-name constant.</summary>
     CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
         => useOverrides && TypeClassifier.IsUserClass(t.Impl.ContainingType)
-            ? EmitCallToMethod(ResolveStructMember(t.Impl), new List<CLeaf> { recvRef })
+            ? EmitCallToMethod(RequireStructMember(t.Impl), new List<CLeaf> { recvRef })
             : Const(ClassAbi.RuntimeTypeName(t.Concrete), StorageTypes.String);
 
     // ── Call helpers ──

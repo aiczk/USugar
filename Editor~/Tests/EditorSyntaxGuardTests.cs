@@ -154,6 +154,31 @@ public class EditorSyntaxGuardTests
             + string.Join("\n", failures));
     }
 
+    [Fact]
+    public void BodyHandlersCannotMaterializeCallableSpecializations()
+    {
+        var packageRoot = FindPackageRoot();
+        var handlers = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit", "Handlers");
+        var failures = Directory.GetFiles(
+                handlers, "*.cs", SearchOption.AllDirectories)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item => item.line.Contains(
+                    "MaterializeGenericSpecialization(",
+                    StringComparison.Ordinal))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
+                    + item.line.Trim()))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body handlers may only require callable specializations already materialized "
+            + "in the bound program.\n"
+            + string.Join("\n", failures));
+    }
+
     static string FindPackageRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory);

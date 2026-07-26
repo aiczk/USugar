@@ -214,7 +214,7 @@ public sealed class InvocationHandler : IExpressionHandler
             // by MethodKind, before any container-gated arm; RegisterGenericSpecialization is container-
             // agnostic and idempotent, so the behaviour-host path stays byte-identical.
             case MethodKind.LocalFunction:
-                _lowering.RegisterGenericSpecialization(target);
+                _lowering.RequireRegisteredCallable(target);
                 return _externs.EmitUserMethodCall(op, target);
         }
 
@@ -278,7 +278,7 @@ public sealed class InvocationHandler : IExpressionHandler
             // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
             // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateValue,
             // which is false for a class — so mutations through the receiver are visible to every alias).
-            var structTarget = _lowering.ResolveStructMember(target);
+            var structTarget = _lowering.RequireStructMember(target);
             // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
             // referencing the method's T finds the owner in the closure-compose (the class arm does this
             // via RegisterGenericSpecialization; the struct path registers the spec separately).
@@ -332,7 +332,7 @@ public sealed class InvocationHandler : IExpressionHandler
         // User-defined generic method → monomorphize
         if (target.IsGenericMethod && SymbolEqualityComparer.Default.Equals(target.OriginalDefinition.ContainingType, _lowering.ClassSymbol))
         {
-            _lowering.RegisterGenericSpecialization(target);
+            _lowering.RequireRegisteredCallable(target);
             return _externs.EmitUserMethodCall(op, target);
         }
 
@@ -357,7 +357,7 @@ public sealed class InvocationHandler : IExpressionHandler
         if (target.IsGenericMethod && !target.TypeArguments.Any(ta => ta is ITypeParameterSymbol)
             && UasmEmitter.IsBaseInstanceMethod(target, _lowering.ClassSymbol))
         {
-            _lowering.RegisterGenericSpecialization(target);
+            _lowering.RequireRegisteredCallable(target);
                 return _externs.EmitUserMethodCall(op, target);
         }
 
@@ -368,7 +368,7 @@ public sealed class InvocationHandler : IExpressionHandler
             var constructed = target.ReducedFrom != null
                 ? target.ReducedFrom.OriginalDefinition.Construct(target.TypeArguments.ToArray())
                 : target.OriginalDefinition.Construct(target.TypeArguments.ToArray());
-            _lowering.RegisterGenericSpecialization(constructed);
+            _lowering.RequireRegisteredCallable(constructed);
             var args = new List<CLeaf>();
             if (target.ReducedFrom != null && op.Instance != null)
             {
@@ -419,7 +419,7 @@ public sealed class InvocationHandler : IExpressionHandler
             && !fsGenCt.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
         {
             _externs.GuardRefOutArguments(op, target);
-            _lowering.RegisterGenericSpecialization(target);
+            _lowering.RequireRegisteredCallable(target);
             var args = new List<CLeaf>();
             var gsPrepared = _externs.MarshalArguments(op, args);
             var gsResult = _lowering.EmitCallToMethod(target, args);
@@ -447,7 +447,7 @@ public sealed class InvocationHandler : IExpressionHandler
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);
             if (targets.Count == 1)
-                return EmitStructInstanceCall(op, _lowering.ResolveStructMember(targets[0].Impl));
+                return EmitStructInstanceCall(op, _lowering.RequireStructMember(targets[0].Impl));
             return EmitUnreachableVirtualCall(op, localInterface, target);
         }
 
@@ -519,7 +519,7 @@ public sealed class InvocationHandler : IExpressionHandler
             _lowering.Builder.EmitIf(eq, _ =>
             {
                 _lowering.EmitAssign(matched, _lowering.Const(true, StorageTypes.Boolean));
-                var impl = _lowering.ResolveStructMember(t.Impl);
+                var impl = _lowering.RequireStructMember(t.Impl);
                 var call = _lowering.EmitCallToMethod(impl, callArgs);
                 if (isVoid) _lowering.EmitExprStmt(call);
                 else _lowering.EmitAssign(destSlot, call);
