@@ -74,7 +74,7 @@ internal sealed class InvocationHandler : IExpressionHandler
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var boundSite = _lowering.RequireBoundCallSite(
-            op, CallableSiteKind.Method, op.TargetMethod);
+            op, CallableSiteKind.Method);
         var target = boundSite.Target;
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
@@ -228,8 +228,8 @@ internal sealed class InvocationHandler : IExpressionHandler
             // #6); `base.M()` and non-user-class receivers are excluded. The predicate is shared with the
             // recursion-graph enumerator (VirtualDispatch.IsDispatchSite) so spilling can never drift from
             // dispatch. The receiver's type is resolved through the monomorphization map here.
-            if (_lowering.ResolveType(op.Instance?.Type) is INamedTypeSymbol recvTy
-                && VirtualDispatch.IsDispatchSite(target, op.Instance, recvTy))
+            if (boundSite.UsesRuntimeDispatch
+                && boundSite.ReceiverType is { } recvTy)
             {
                 var targets = boundSite.RequireDispatch().RuntimeTargets;
                 _lowering.AssertClosedVirtualDispatch(recvTy, targets, target);

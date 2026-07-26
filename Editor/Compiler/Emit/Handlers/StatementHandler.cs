@@ -148,8 +148,7 @@ internal sealed class StatementHandler : IOperationHandler
         var tailTarget = tailCall == null
             ? null
             : _lowering.RequireBoundTarget(
-                tailCall, CallableSiteKind.Method,
-                tailCall.TargetMethod);
+                tailCall, CallableSiteKind.Method);
         // Tail call optimization: return self(args) → overwrite params + goto entry.
         // Wave-9 round-8 [Y3]: TCO is only sound when every ref/out arg threads the SAME parameter
         // (param→param is an identity rebind under the shared flat heap). A re-chained ref/out

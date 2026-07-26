@@ -83,15 +83,19 @@ public sealed class VirtualDispatch
         INamedTypeSymbol compiledClass = null)
     {
         var interfaceDispatch = receiverType?.TypeKind == TypeKind.Interface;
+        var usesRuntimeDispatch = interfaceDispatch
+            || IsDispatchSite(site.Target, site.Receiver, receiverType);
         var runtimeTargets = interfaceDispatch
             ? ResolveInterfaceTargets(receiverType, site.Target)
-            : IsDispatchSite(site.Target, site.Receiver, receiverType)
+            : usesRuntimeDispatch
                 ? ResolveTargets(receiverType, site.Target)
                 : new List<VDispatchTarget>();
         var cross = compiledClass == null
             ? default : ResolveCrossProgramLocalTarget(compiledClass, site.Target);
         return new DispatchPlan(site, runtimeTargets, cross,
-            runtimeTargets.Count == 0 ? DispatchPrecision.Static : DispatchPrecision.ClosedWorld);
+            usesRuntimeDispatch
+                ? DispatchPrecision.ClosedWorld
+                : DispatchPrecision.Static);
     }
 
     /// <summary>Resolve where a variable/interface receiver dispatch lands if it points back to the

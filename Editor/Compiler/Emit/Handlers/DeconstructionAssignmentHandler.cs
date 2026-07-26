@@ -180,8 +180,7 @@ internal sealed class DeconstructionAssignmentHandler : IOperationHandler
             // callees pass through unchanged when the call-site table is materialized.
             var callTarget = _lowering.RequireBoundCallSite(
                 invocation,
-                CallableSiteKind.Method,
-                invocation.TargetMethod).Callable.Site.Target;
+                CallableSiteKind.Method).Callable.Site.Target;
             var isCrossBehaviour = ExternResolver.IsUdonSharpBehaviour(callTarget.ContainingType)
                 && invocation.Instance is not IInstanceReferenceOperation
                 && callTarget.ContainingType.Name != "UdonSharpBehaviour";

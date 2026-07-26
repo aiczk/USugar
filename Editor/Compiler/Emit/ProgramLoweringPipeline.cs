@@ -1211,17 +1211,34 @@ internal sealed class ProgramLoweringPipeline
                     rawSite.Kind, target, rawSite.Operation, rawSite.Receiver);
                 var resolved = EdgeResolver.ResolveCallableSite(site);
                 DispatchPlan? dispatch = null;
+                INamedTypeSymbol receiver = null;
+                var usesRuntimeDispatch = false;
                 if (!target.IsStatic)
                 {
-                    var receiver = TypeEnvironment.CloseType(
+                    receiver = TypeEnvironment.CloseType(
                             _compilation, rawSite.Receiver?.Type, typeMap)
                         as INamedTypeSymbol ?? target.ContainingType;
                     dispatch = _virtualDispatch.Resolve(
                         site, receiver, _classSymbol);
+                    usesRuntimeDispatch =
+                        VirtualDispatch.IsDispatchSite(
+                            target, rawSite.Receiver, receiver)
+                        || rawSite.Kind is
+                            CallableSiteKind.PropertyGet
+                            or CallableSiteKind.PropertySet
+                           && receiver.TypeKind == TypeKind.Interface
+                           && _planner.InterfaceIsLocalUserClassOnly(
+                               receiver);
                 }
                 var key = new BoundCallSiteKey(
-                    operation.Syntax, rawSite.Kind, target, scope);
-                if (!sites.TryAdd(key, new BoundCallSite(resolved, dispatch)))
+                    operation.Syntax, rawSite.Kind, scope);
+                if (!sites.TryAdd(
+                        key,
+                        new BoundCallSite(
+                            resolved,
+                            dispatch,
+                            receiver,
+                            usesRuntimeDispatch)))
                     throw new InvalidOperationException(
                         $"Callable site '{operation.Syntax}' was bound twice in one specialization.");
             }

@@ -34,7 +34,7 @@ internal sealed class OperatorHandler : IExpressionHandler
         var operatorMethod = op.OperatorMethod;
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+                op, CallableSiteKind.Operator).Callable.Site.Target;
 
         LoweringServices.RejectChecked(op.IsChecked);
 
@@ -351,7 +351,7 @@ internal sealed class OperatorHandler : IExpressionHandler
         var operatorMethod = op.OperatorMethod;
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+                op, CallableSiteKind.Operator).Callable.Site.Target;
 
         LoweringServices.RejectChecked(op.IsChecked);
 
@@ -663,7 +663,7 @@ internal sealed class OperatorHandler : IExpressionHandler
             var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
                 ? null
                 : _lowering.RequireBoundCallable(
-                    rec, CallableSiteKind.Method, deconstructMethod);
+                    rec, CallableSiteKind.Method);
             if (deconstruct == null
                 || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
                 || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
@@ -734,14 +734,23 @@ internal sealed class OperatorHandler : IExpressionHandler
                         + "(only System/Unity properties and fields).");
             }
 
+            var propertySite = sub.Member is IPropertyReferenceOperation property
+                ? _lowering.RequireBoundCallSite(
+                    property, CallableSiteKind.PropertyGet)
+                : null;
             CLeaf memberVal;
             if (isAgg && TypeClassifier.IsUserClass(aggMatchType)
                 && sub.Member is IPropertyReferenceOperation vSubRef
-                && VirtualDispatch.FindAccessor(vSubRef.Property, getter: true) is { } vSubGetter
-                && VirtualDispatch.IsVirtualCall(vSubGetter))
+                && propertySite.UsesRuntimeDispatch)
             {
-                var dispatched = _lowering.EmitAccessorDispatch(vSubRef, aggMatchType, vSubGetter,
-                    valueVal, new List<CLeaf>(), null);
+                var dispatched = _lowering.EmitAccessorDispatch(
+                    vSubRef,
+                    propertySite.ReceiverType ?? aggMatchType,
+                    propertySite.Callable.Site.Target,
+                    valueVal,
+                    new List<CLeaf>(),
+                    null,
+                    propertySite);
                 var vSubSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(memberType));
                 _lowering.EmitAssign(vSubSlot, dispatched);
                 memberVal = _lowering.SlotRef(vSubSlot);
@@ -759,7 +768,7 @@ internal sealed class OperatorHandler : IExpressionHandler
             {
                 memberVal = _lowering.EmitCallToMethod(
                     _lowering.RequireBoundCallable(
-                        cpr, CallableSiteKind.PropertyGet, cgetter),
+                        cpr, CallableSiteKind.PropertyGet),
                     new List<CLeaf> { valueVal });
             }
             else

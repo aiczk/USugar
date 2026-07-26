@@ -512,7 +512,7 @@ internal sealed class ExpressionHandler : IExpressionHandler
         var operatorMethod = conv.OperatorMethod;
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
-                conv, CallableSiteKind.Conversion, operatorMethod).Callable.Site.Target;
+                conv, CallableSiteKind.Conversion).Callable.Site.Target;
 
         LoweringServices.RejectChecked(conv.IsChecked);
 

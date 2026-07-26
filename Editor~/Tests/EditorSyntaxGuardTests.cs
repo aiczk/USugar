@@ -202,6 +202,8 @@ public class EditorSyntaxGuardTests
             "ClassifyConversion",
             "TryGetConstFieldInitializer",
             "RecordSourceLowering",
+            "VirtualDispatch.FindAccessor(",
+            "VirtualDispatch.IsDispatchSite(",
         };
         var failures = roots.SelectMany(path => Directory.Exists(path)
                 ? Directory.GetFiles(

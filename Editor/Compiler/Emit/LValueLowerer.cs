@@ -33,17 +33,27 @@ internal sealed class LValueLowerer
 
     LoweringServices.LValuePlan CaptureLValue(IOperation target)
     {
+        var getterSite = target is IPropertyReferenceOperation property
+            ? _lowering.RequireBoundCallSite(
+                property, CallableSiteKind.PropertyGet)
+            : null;
         // CW1 lift: compound/inc-dec READ of a runtime-polymorphic accessor on a v1-class receiver —
         // dispatch the getter through the typeobj machinery and cache the STAGED legs so
         // EmitWriteBack's dispatch twin stores through the same cell (receiver/index side effects run
         // exactly once). The static arms below bind the receiver's STATIC accessor.
         if (target is IPropertyReferenceOperation vCapRef
-            && VirtualDispatch.FindAccessor(vCapRef.Property, getter: true) is { } vCapGetter
-            && _lowering.IsAccessorDispatchSite(vCapRef, vCapGetter, out var vCapRecvTy))
+            && _lowering.IsAccessorDispatchSite(
+                getterSite, out var vCapRecvTy))
         {
             var (vCapRecv, vCapIdx) = _lowering.StageAccessorDispatchLegs(vCapRef);
             var current = _lowering.EmitAccessorDispatch(
-                vCapRef, vCapRecvTy, vCapGetter, vCapRecv, vCapIdx, null);
+                vCapRef,
+                vCapRecvTy,
+                getterSite.Callable.Site.Target,
+                vCapRecv,
+                vCapIdx,
+                null,
+                getterSite);
             return new LoweringServices.LValuePlan { Value = current, ArrayVal = vCapRecv, IndexArgs = vCapIdx };
         }
 
@@ -58,11 +68,7 @@ internal sealed class LValueLowerer
             // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && VirtualDispatch.FindAccessor(
-                    idxRef.Property, getter: true) is { } idxSourceGetter
-                && _lowering.RequireBoundTarget(
-                    idxRef, CallableSiteKind.PropertyGet,
-                    idxSourceGetter) is { } idxDispatchGetter
+                && getterSite.Target is { } idxDispatchGetter
                 && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter):
             {
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
@@ -88,8 +94,7 @@ internal sealed class LValueLowerer
                 getterArgs.AddRange(cachedArgs);
                 var currentVal = _lowering.EmitCallToMethod(
                     _lowering.RequireBoundCallable(
-                        sIdxRef, CallableSiteKind.PropertyGet,
-                        sIdxGetterRaw),
+                        sIdxRef, CallableSiteKind.PropertyGet),
                     getterArgs);
                 return new LoweringServices.LValuePlan { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
@@ -150,8 +155,7 @@ internal sealed class LValueLowerer
                     CLeaf getVal = _lowering.EmitCallToMethod(
                         _lowering.RequireBoundCallable(
                             aggCapPropRef,
-                            CallableSiteKind.PropertyGet,
-                            capGetterRaw),
+                            CallableSiteKind.PropertyGet),
                         new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
                         getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.State.Aggregates.GetLayout);
@@ -238,12 +242,16 @@ internal sealed class LValueLowerer
 
     void EmitWriteBack(IOperation target, CLeaf valueVal, LoweringServices.LValuePlan lv)
     {
+        var setterSite = target is IPropertyReferenceOperation property
+            ? _lowering.RequireBoundCallSite(
+                property, CallableSiteKind.PropertySet)
+            : null;
         // CW1 lift: compound/inc-dec WRITE-BACK of a runtime-polymorphic accessor on a v1-class
         // receiver — dispatch the setter, reusing the legs CaptureLValue's dispatch twin staged
         // (fresh legs only on the capture-less paths, mirroring the static arms' `??` fallbacks).
         if (target is IPropertyReferenceOperation vWbRef
-            && VirtualDispatch.FindAccessor(vWbRef.Property, getter: false) is { } vWbSetter
-            && _lowering.IsAccessorDispatchSite(vWbRef, vWbSetter, out var vWbRecvTy))
+            && _lowering.IsAccessorDispatchSite(
+                setterSite, out var vWbRecvTy))
         {
             var vWbRecv = lv.ArrayVal;
             var vWbIdx = lv.IndexArgs;
@@ -251,8 +259,14 @@ internal sealed class LValueLowerer
                 (vWbRecv, vWbIdx) = _lowering.StageAccessorDispatchLegs(vWbRef);
             var vWbSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(vWbRef.Property.Type));
             _lowering.EmitAssign(vWbSlot, valueVal);
-            _lowering.EmitAccessorDispatch(vWbRef, vWbRecvTy, vWbSetter, vWbRecv,
-                vWbIdx ?? new List<CLeaf>(), _lowering.SlotRef(vWbSlot));
+            _lowering.EmitAccessorDispatch(
+                vWbRef,
+                vWbRecvTy,
+                setterSite.Callable.Site.Target,
+                vWbRecv,
+                vWbIdx ?? new List<CLeaf>(),
+                _lowering.SlotRef(vWbSlot),
+                setterSite);
             return;
         }
 
@@ -305,11 +319,7 @@ internal sealed class LValueLowerer
             // BASE accessor — all three this-path cases below dispatch the chain-leaf override instead;
             // `base.P` keeps the static binding (its base-instance copy accessors).
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
-                when VirtualDispatch.FindAccessor(
-                    propRef.Property, getter: false) is { } autoSourceSetter
-                && _lowering.RequireBoundTarget(
-                    propRef, CallableSiteKind.PropertySet,
-                    autoSourceSetter).AssociatedSymbol
+                when setterSite.Target.AssociatedSymbol
                     is IPropertySymbol autoDispatchProp
                 && autoDispatchProp.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
                 && ExternResolver.IsUdonSharpBehaviour(autoDispatchProp.ContainingType)
@@ -322,11 +332,7 @@ internal sealed class LValueLowerer
             // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && VirtualDispatch.FindAccessor(
-                    idxRef.Property, getter: false) is { } idxSourceSetter
-                && _lowering.RequireBoundTarget(
-                    idxRef, CallableSiteKind.PropertySet,
-                    idxSourceSetter) is { } idxDispatchSetter
+                && setterSite.Target is { } idxDispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
                 // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
@@ -343,11 +349,7 @@ internal sealed class LValueLowerer
             // the indexer arms above/below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
                 when !TypeClassifier.IsObjectArrayEmulated(propRef.Property.ContainingType)
-                && VirtualDispatch.FindAccessor(
-                    propRef.Property, getter: false) is { } sourceSetter
-                && _lowering.RequireBoundTarget(
-                    propRef, CallableSiteKind.PropertySet,
-                    sourceSetter) is { } dispatchSetter
+                && setterSite.Target is { } dispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(dispatchSetter, out _):
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;
@@ -465,8 +467,7 @@ internal sealed class LValueLowerer
                         return;
                     }
                     var setter = _lowering.RequireBoundCallable(
-                        propRef, CallableSiteKind.PropertySet,
-                        propRef.Property.SetMethod);
+                        propRef, CallableSiteKind.PropertySet);
                     _lowering.EmitExprStmt(_lowering.EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
                     return;
                 }

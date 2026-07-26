@@ -72,33 +72,29 @@ internal sealed class LoweringServices
 
     internal BoundCallSite RequireBoundCallSite(
         IOperation operation,
-        CallableSiteKind kind,
-        IMethodSymbol target)
+        CallableSiteKind kind)
     {
         if (operation == null) throw new ArgumentNullException(nameof(operation));
-        if (target == null) throw new ArgumentNullException(nameof(target));
         var scope = _state.CurrentBindingScope
             ?? throw new InvalidOperationException(
                 $"Callable site '{operation.Syntax}' is being lowered "
                 + "outside a bound semantic scope.");
         return _state.Program.CallSites.Require(
-            operation.Syntax, kind, target, scope);
+            operation.Syntax, kind, scope);
     }
 
     internal IMethodSymbol RequireBoundCallable(
         IOperation operation,
-        CallableSiteKind kind,
-        IMethodSymbol target)
+        CallableSiteKind kind)
         => RequireRegisteredCallable(
             RequireBoundCallSite(
-                operation, kind, target).Target);
+                operation, kind).Target);
 
     internal IMethodSymbol RequireBoundTarget(
         IOperation operation,
-        CallableSiteKind kind,
-        IMethodSymbol target)
+        CallableSiteKind kind)
         => RequireBoundCallSite(
-            operation, kind, target).Target;
+            operation, kind).Target;
 
     internal IMethodSymbol RequireBoundDeconstruction(IOperation operation)
     {
@@ -1321,8 +1317,7 @@ internal sealed class LoweringServices
     void EmitInitializerSetterAssignment(CLeaf instance, IPropertyReferenceOperation propRef, IOperation valueOp)
     {
         var setter = RequireBoundCallable(
-            propRef, CallableSiteKind.PropertySet,
-            propRef.Property.SetMethod);
+            propRef, CallableSiteKind.PropertySet);
         var args = new List<CLeaf> { instance };
         if (propRef.Property.IsIndexer) args.AddRange(EvaluateIndexerArgs(propRef));
         args.Add(VisitExpression(valueOp));
@@ -1347,16 +1342,14 @@ internal sealed class LoweringServices
     {
         var boundSetter = RequireBoundCallSite(
             propRef,
-            CallableSiteKind.PropertySet,
-            VirtualDispatch.FindAccessor(propRef.Property, getter: false)
-            ?? throw new System.NotSupportedException(
-                $"Property '{propRef.Property.Name}' has no setter."));
+            CallableSiteKind.PropertySet);
+        var setter = boundSetter.Callable.Site.Target;
         // CW1 lift: a runtime-polymorphic property/indexer WRITE on a v1-class receiver dispatches the
         // setter through the typeobj machinery — legs staged NOW (C# order: receiver, index args), the
         // value staged inside the deferred store (it arrives later, and the chain consumes it once per
         // arm). The static arms below bind the receiver's STATIC setter; `base.P` keeps them.
-        if (VirtualDispatch.FindAccessor(propRef.Property, getter: false) is { } vsSetter
-            && IsAccessorDispatchSite(propRef, vsSetter, out var vsRecvTy))
+        if (IsAccessorDispatchSite(
+                boundSetter, out var vsRecvTy))
         {
             var (vsRecv, vsIdx) = StageAccessorDispatchLegs(propRef);
             return vsVal =>
@@ -1364,7 +1357,13 @@ internal sealed class LoweringServices
                 var vSlot = _state.Builder.AllocScratch(GetStorageType(propRef.Property.Type));
                 EmitAssign(vSlot, vsVal);
                 EmitAccessorDispatch(
-                    propRef, vsRecvTy, vsSetter, vsRecv, vsIdx, SlotRef(vSlot), boundSetter);
+                    propRef,
+                    vsRecvTy,
+                    setter,
+                    vsRecv,
+                    vsIdx,
+                    SlotRef(vSlot),
+                    boundSetter);
             };
         }
 
@@ -2492,24 +2491,15 @@ internal sealed class LoweringServices
             ClassAbiPolicy.AssertClosed(dispatchTarget.Concrete, $"virtual call '{target.Name}' target");
     }
 
-    /// <summary>The accessor-arm gate: true when <paramref name="accessor"/> at this property/indexer
-    /// reference is a runtime-polymorphic dispatch site on a v1 user-class receiver. The receiver's
-    /// type resolves through the monomorphization map, mirroring the method arm; the predicate itself
-    /// is VirtualDispatch.IsDispatchSite — shared with the recursion enumerator, so the two can never
-    /// drift (`base.P` and non-user-class receivers stay statically bound).</summary>
-    internal bool IsAccessorDispatchSite(IPropertyReferenceOperation op, IMethodSymbol accessor, out INamedTypeSymbol recvTy)
+    /// <summary>Consume the accessor dispatch gate and closed receiver type
+    /// materialized for this exact source specialization.</summary>
+    internal bool IsAccessorDispatchSite(
+        BoundCallSite site,
+        out INamedTypeSymbol recvTy)
     {
-        recvTy = null;
-        if (accessor == null || op.Instance == null) return false;
-        if (ResolveType(op.Instance.Type) is not INamedTypeSymbol rt) return false;
-        if (rt.TypeKind == TypeKind.Interface && _planner.InterfaceIsLocalUserClassOnly(rt))
-        {
-            recvTy = rt;
-            return true;
-        }
-        if (!VirtualDispatch.IsDispatchSite(accessor, op.Instance, rt)) return false;
-        recvTy = rt;
-        return true;
+        recvTy = site?.ReceiverType;
+        return site?.UsesRuntimeDispatch == true
+               && recvTy != null;
     }
 
     /// <summary>Stage the dispatch legs ONCE in the C# order — receiver, then ordinal-slotted index
@@ -2551,8 +2541,7 @@ internal sealed class LoweringServices
         var interfaceDispatch = recvTy.TypeKind == TypeKind.Interface;
         boundSite ??= RequireBoundCallSite(
             operation,
-            setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet,
-            accessor);
+            setValue == null ? CallableSiteKind.PropertyGet : CallableSiteKind.PropertySet);
         var targets = boundSite.RequireDispatch().RuntimeTargets;
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
@@ -3101,7 +3090,7 @@ internal sealed class LoweringServices
         if (_currentMethod == null) return false;
         var callableSite = CallableSites.Require(site, staticCallee);
         var landing = RequireBoundCallSite(
-            site, callableSite.Kind, staticCallee).RequireDispatch().Cross;
+            site, callableSite.Kind).RequireDispatch().Cross;
         var recursive = landing.HasLocalTarget
             && _state.Recursion.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
         var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,

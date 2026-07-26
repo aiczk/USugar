@@ -33,7 +33,7 @@ internal sealed class CompoundAssignmentHandler : IExpressionHandler
         var operatorMethod = op.OperatorMethod;
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+                op, CallableSiteKind.Operator).Callable.Site.Target;
 
         // Multicast design (2026-07-03 §1.4/§7 A-M1): `+=`/`-=` on ANY delegate-typed target (field,
         // local, param, property, array element, …) lowers to the sig's synthetic combine/remove helper
@@ -196,8 +196,7 @@ internal sealed class CompoundAssignmentHandler : IExpressionHandler
             throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
         var boundSite = _lowering.RequireBoundCallSite(
             op,
-            op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove,
-            accessor);
+            op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove);
         accessor = boundSite.Callable.Site.Target;
         var storageName = evt.IsStatic
             ? StaticOwnerAbi.EventName(evt,
@@ -339,7 +338,7 @@ internal sealed class CompoundAssignmentHandler : IExpressionHandler
         var operatorMethod = op.OperatorMethod;
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.Operator, operatorMethod).Callable.Site.Target;
+                op, CallableSiteKind.Operator).Callable.Site.Target;
 
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = _lvalues.PrepareLValue(op.Target);

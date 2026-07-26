@@ -96,4 +96,27 @@ class C : I { public int M() => 1; void Use(I value) { value.M(); } }");
         Assert.True(SymbolEqualityComparer.Default.Equals(runtime.Impl, plan.Cross.LocalTarget));
         Assert.Equal(DispatchPrecision.ClosedWorld, plan.Precision);
     }
+
+    [Fact]
+    public void InterfaceSite_RemainsRuntimeDispatchWhenNoTargetIsKnown()
+    {
+        var tree = CSharpSyntaxTree.ParseText(@"
+interface I { int M(); }
+class C { void Use(I value) { value.M(); } }");
+        var compilation = CSharpCompilation.Create("EmptyDispatchPlan", new[] { tree },
+            TestHelper.StandardRefs,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var model = compilation.GetSemanticModel(tree);
+        var root = tree.GetRoot();
+        var invocationSyntax = root.DescendantNodes()
+            .OfType<InvocationExpressionSyntax>().Single();
+        var invocation = (IInvocationOperation)model.GetOperation(invocationSyntax);
+        var site = CallableSites.FromOperation(invocation).Single();
+
+        var plan = new VirtualDispatch(new ClassTypeObjectContext())
+            .Resolve(site, site.Target.ContainingType);
+
+        Assert.Empty(plan.RuntimeTargets);
+        Assert.Equal(DispatchPrecision.ClosedWorld, plan.Precision);
+    }
 }

@@ -19,14 +19,13 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
     {
-        var boundGetter = VirtualDispatch.FindAccessor(op.Property, getter: true);
-        if (boundGetter != null && !op.Property.ContainingType.IsAnonymousType)
-            _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.PropertyGet, boundGetter);
+        var boundGetterSite = _lowering.RequireBoundCallSite(
+            op, CallableSiteKind.PropertyGet);
+        var boundGetter = boundGetterSite.Callable.Site.Target;
 
         // Indexer access: Type.__get_Item__IndexTypes__ReturnType
         if (op.Property.IsIndexer)
-            return VisitIndexerGet(op);
+            return VisitIndexerGet(op, boundGetterSite);
 
         // Nullable<T> (boxed-object emulation): HasValue → null check; Value → the boxed value itself
         // (Udon unboxes transparently when the result is used as the underlying type).
@@ -47,12 +46,13 @@ internal sealed class MemberInvocationLowerer
         // static auto-slot and computed-getter arms below, which bind the receiver's STATIC symbol.
         // Fires for base-typed variables AND `this` inside an inherited base body; `base.P` keeps the
         // static binding (IsDispatchSite excludes it).
-        if (VirtualDispatch.FindAccessor(op.Property, getter: true) is { } vpGetter
-            && _lowering.IsAccessorDispatchSite(op, vpGetter, out var vpRecvTy))
+        if (_lowering.IsAccessorDispatchSite(
+                boundGetterSite, out var vpRecvTy))
         {
             var (vpRecv, vpIdx) = _lowering.StageAccessorDispatchLegs(op);
             return _lowering.EmitAccessorDispatch(
-                op, vpRecvTy, vpGetter, vpRecv, vpIdx, null);
+                op, vpRecvTy, boundGetter, vpRecv, vpIdx, null,
+                boundGetterSite);
         }
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
@@ -76,7 +76,7 @@ internal sealed class MemberInvocationLowerer
         {
             var ret = _lowering.EmitCallToMethod(
                 _lowering.RequireBoundCallable(
-                    op, CallableSiteKind.PropertyGet, aggGetterRaw),
+                    op, CallableSiteKind.PropertyGet),
                 new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && TypeClassifier.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, getRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
@@ -87,11 +87,7 @@ internal sealed class MemberInvocationLowerer
         {
             // Virtual dispatch through `this` (round 7): a read inside an inherited base body binds the
             // BASE accessor — resolve to the chain-leaf override; `base.P` keeps the static binding.
-            var thisGetter = boundGetter == null
-                ? null
-                : _lowering.RequireBoundTarget(
-                    op, CallableSiteKind.PropertyGet,
-                    boundGetter);
+            var thisGetter = boundGetterSite.Target;
             var thisProp = thisGetter?.AssociatedSymbol
                                as IPropertySymbol
                            ?? op.Property;
@@ -157,7 +153,7 @@ internal sealed class MemberInvocationLowerer
                 // BoundProgram supplies the closed getter for this exact specialization.
                 var sgv = _lowering.EmitCallToMethod(
                     _lowering.RequireBoundCallable(
-                        op, CallableSiteKind.PropertyGet, sPropGetter),
+                        op, CallableSiteKind.PropertyGet),
                     new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, sgv, sgAgg, _lowering.State.Aggregates.GetLayout) : sgv;
@@ -278,17 +274,21 @@ internal sealed class MemberInvocationLowerer
 
     // ── Indexer Get ──
 
-    CLeaf VisitIndexerGet(IPropertyReferenceOperation op)
+    CLeaf VisitIndexerGet(
+        IPropertyReferenceOperation op,
+        BoundCallSite boundGetterSite)
     {
         // CW1 lift: a runtime-polymorphic indexer READ on a v1-class receiver dispatches through the
         // typeobj machinery (see the property-read twin above); the static arms below bind the
         // receiver's STATIC accessor. `base[i]` and struct receivers keep their static arms.
-        if (VirtualDispatch.FindAccessor(op.Property, getter: true) is { } viGetter
-            && _lowering.IsAccessorDispatchSite(op, viGetter, out var viRecvTy))
+        var boundGetter = boundGetterSite.Callable.Site.Target;
+        if (_lowering.IsAccessorDispatchSite(
+                boundGetterSite, out var viRecvTy))
         {
             var (viRecv, viIdx) = _lowering.StageAccessorDispatchLegs(op);
             return _lowering.EmitAccessorDispatch(
-                op, viRecvTy, viGetter, viRecv, viIdx, null);
+                op, viRecvTy, boundGetter, viRecv, viIdx, null,
+                boundGetterSite);
         }
 
         // User-defined indexer on this/base BEHAVIOUR → internal getter call (`this[i]` reads this-fields
@@ -302,11 +302,7 @@ internal sealed class MemberInvocationLowerer
         // mirroring how a struct's `this.Method()` self-call routes through EmitStructInstanceCall.
         if (op.Instance is IInstanceReferenceOperation
             && !TypeClassifier.IsObjectArrayEmulated(op.Property.ContainingType)
-            && VirtualDispatch.FindAccessor(
-                op.Property, getter: true) is { } idxSourceGetter
-            && _lowering.RequireBoundTarget(
-                op, CallableSiteKind.PropertyGet,
-                idxSourceGetter) is { } idxDispatchGetter
+            && boundGetterSite.Target is { } idxDispatchGetter
             && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter))
         {
             // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args
@@ -325,7 +321,7 @@ internal sealed class MemberInvocationLowerer
             sargs.AddRange(_lowering.EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
             var ret = _lowering.EmitCallToMethod(
                 _lowering.RequireBoundCallable(
-                    op, CallableSiteKind.PropertyGet, idxGetterRaw),
+                    op, CallableSiteKind.PropertyGet),
                 sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && TypeClassifier.IsAggregateValue(idxRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, idxRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
@@ -567,7 +563,7 @@ internal sealed class MemberInvocationLowerer
             {
                 // CW4: same by-ordinal + ref/out discipline as the mint arm (EmitClassInstanceMint).
                 var chainCtor = _lowering.RequireBoundCallable(
-                    init, CallableSiteKind.Constructor, target);
+                    init, CallableSiteKind.Constructor);
                 _owner.Externs.GuardRefOutArguments(
                     init.Arguments, chainCtor);
                 var chainArgs = new List<CLeaf> { inst };
@@ -729,7 +725,7 @@ internal sealed class MemberInvocationLowerer
         var constructor = op.Constructor;
         if (constructor != null)
             constructor = _lowering.RequireBoundCallSite(
-                op, CallableSiteKind.Constructor, constructor).Callable.Site.Target;
+                op, CallableSiteKind.Constructor).Callable.Site.Target;
 
         var resultType = _lowering.GetStorageTypeName(op.Type);
         var concreteType = _lowering.ResolveType(op.Type);
