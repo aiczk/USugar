@@ -63,26 +63,31 @@ static class USugarCompilationOrchestrator
         public uint HeapSize;
         public IReadOnlyList<EmitDiagnostic> EmitterDiagnostics;
         public List<(string file, int line, int character, string message, string severity)> ErrorDiagnostics;
+        public CompilationSession Session;
         public FrozenLayoutPlan Planner;
         public bool IsError;
 
         public EmitResult(INamedTypeSymbol symbol, SyntaxTree tree, string uasm,
             List<(string Id, string UdonType, object Value)> constants, uint heapSize,
-            IReadOnlyList<EmitDiagnostic> diagnostics, FrozenLayoutPlan planner)
+            IReadOnlyList<EmitDiagnostic> diagnostics, CompilationSession session,
+            FrozenLayoutPlan planner)
         {
             Symbol = symbol; Tree = tree; Uasm = uasm;
             Constants = constants; HeapSize = heapSize;
             EmitterDiagnostics = diagnostics;
+            Session = session;
             Planner = planner;
             ErrorDiagnostics = null; IsError = false;
         }
 
-        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree, FrozenLayoutPlan planner,
-            string file, int line, int character, string message)
+        public static EmitResult Error(INamedTypeSymbol symbol, SyntaxTree tree,
+            CompilationSession session, FrozenLayoutPlan planner, string file,
+            int line, int character, string message)
         {
             return new EmitResult
             {
-                Symbol = symbol, Tree = tree, Planner = planner, IsError = true,
+                Symbol = symbol, Tree = tree, Session = session,
+                Planner = planner, IsError = true,
                 ErrorDiagnostics = new() { (file, line, character, message, "Error") }
             };
         }
@@ -423,7 +428,8 @@ static class USugarCompilationOrchestrator
                     var emitter = new UasmEmitter(session, symbol, planner);
                     var uasm = emitter.Emit();
                     emitResults.Add(new EmitResult(symbol, tree, uasm,
-                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(), emitter.Diagnostics, planner));
+                        emitter.CodeGenResult.Constants, emitter.GetHeapSize(),
+                        emitter.Diagnostics, session, planner));
                 }
                 catch (Exception ex)
                 {
@@ -441,7 +447,8 @@ static class USugarCompilationOrchestrator
                         line = span.StartLinePosition.Line + 1;
                         character = span.StartLinePosition.Character + 1;
                     }
-                    emitResults.Add(EmitResult.Error(symbol, tree, planner, filePath, line, character,
+                    emitResults.Add(EmitResult.Error(
+                        symbol, tree, session, planner, filePath, line, character,
                         $"Failed to compile {symbol.Name}: {inner.Message}"));
                 }
                 finally
@@ -523,10 +530,11 @@ static class USugarCompilationOrchestrator
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         var fieldDefinitions =
                             USugarTypeCacheManager.BuildFieldDefinitions(
-                                result.Symbol, result.Planner.Session);
+                                result.Symbol, result.Session);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
                         // parameters (the runtime looks up the event + its param types via this metadata).
-                        var netMeta = BuildNetworkCallingMetadata(result.Symbol, result.Planner);
+                        var netMeta = BuildNetworkCallingMetadata(
+                            result.Symbol, result.Session, result.Planner);
                         var serializedAsset = programAsset.SerializedProgramAsset;
                         if (serializedAsset == null)
                             throw new InvalidOperationException(
@@ -771,7 +779,8 @@ static class USugarCompilationOrchestrator
     // export name + per-parameter (mangled export name, CLR type). The runtime/ClientSim uses this to resolve
     // a SendCustomNetworkEvent-with-parameters call to the receiver method and marshal its arguments.
     static NetworkCallingEntrypointMetadata[] BuildNetworkCallingMetadata(
-        INamedTypeSymbol classSymbol, FrozenLayoutPlan planner)
+        INamedTypeSymbol classSymbol, CompilationSession session,
+        FrozenLayoutPlan planner)
     {
         var layout = planner.GetLayout(classSymbol);
         if (layout == null) return Array.Empty<NetworkCallingEntrypointMetadata>();
@@ -800,7 +809,7 @@ static class USugarCompilationOrchestrator
             {
                 var sourceType = USugarTypeCacheManager.ResolveClrType(
                     method.Parameters[i].Type);
-                var lowering = planner.Session.Types.Describe(
+                var lowering = session.Types.Describe(
                     method.Parameters[i].Type);
                 var parameterType =
                     USugarTypeCacheManager.ResolveStorageClrType(

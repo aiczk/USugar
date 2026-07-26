@@ -68,6 +68,7 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
 
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.Plan), publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.Build), publicMethods);
+        Assert.DoesNotContain(nameof(LayoutPlanBuilder.ComputeBridges), publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterStructImplementedInterface), publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterClassImplementedInterface), publicMethods);
         Assert.DoesNotContain(
@@ -76,5 +77,11 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
                 | System.Reflection.BindingFlags.Public
                 | System.Reflection.BindingFlags.NonPublic),
             field => field.FieldType == typeof(LayoutPlanBuilder));
+        Assert.DoesNotContain(
+            typeof(FrozenLayoutPlan).GetFields(
+                System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.Public
+                | System.Reflection.BindingFlags.NonPublic),
+            field => field.FieldType == typeof(CompilationSession));
     }
 }

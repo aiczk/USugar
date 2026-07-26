@@ -398,7 +398,7 @@ public class B : UdonSharp.UdonSharpBehaviour { public void Bar() {} }
     }
 
     [Fact]
-    public void Build_InterfacesPrePlanned_AllowsComputeBridges()
+    public void Build_InterfacesPrePlanned_AllowsBridgeLookup()
     {
         var source = @"
 public interface IDoable { void Do(); }
@@ -417,7 +417,7 @@ public class Impl : UdonSharp.UdonSharpBehaviour, IDoable { public void Do() {} 
         var planner = new LayoutPlanBuilder(comp);
         var implType = comp.GetTypeByMetadataName("Impl");
         var frozen = planner.Build();
-        var bridges = frozen.ComputeBridges(implType);
+        var bridges = frozen.RequireBridges(implType);
         Assert.NotNull(bridges);
     }
 }

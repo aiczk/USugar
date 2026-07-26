@@ -61,11 +61,11 @@ public class AliasHost : UdonSharpBehaviour
         var marker = emitter.Compilation.GetTypeByMetadataName("ObjectMarker");
 
         Assert.Equal(StorageTypes.ObjectArray,
-            emitter.Planner.Session.Types.GetStorageType(alias));
+            emitter.Session.Types.GetStorageType(alias));
         Assert.Equal(StorageTypes.ObjectArray,
-            emitter.Planner.Session.Types.GetStorageType(marker));
+            emitter.Session.Types.GetStorageType(marker));
         Assert.Equal(StorageTypes.ObjectArray,
-            emitter.Planner.Session.Types.GetStorageType(
+            emitter.Session.Types.GetStorageType(
                 emitter.Compilation.CreateArrayTypeSymbol(alias)));
         Assert.Contains(emitter.Module.Fields,
             field => field.Name == "value" && field.Type == StorageTypes.ObjectArray);

@@ -13,21 +13,27 @@ public sealed class FrozenLayoutPlan
     readonly HashSet<INamedTypeSymbol> _interfacesWithStructImplementor;
     readonly HashSet<INamedTypeSymbol> _interfacesWithUserClassImplementor;
     readonly HashSet<INamedTypeSymbol> _interfacesWithBehaviourImplementor;
+    readonly IReadOnlyDictionary<INamedTypeSymbol, IReadOnlyList<(
+        IMethodSymbol method,
+        MethodLayout interfaceLayout,
+        IMethodSymbol implMethod,
+        MethodLayout classLayout)>> _bridges;
 
-    public CompilationSession Session { get; }
     public CompilationTypeCensus Census { get; }
-    public UdonTypeFactRegistry TypeFacts => Session.TypeFacts;
     public IReadOnlyDictionary<INamedTypeSymbol, TypeLayout> AllLayouts => _layouts;
 
     internal FrozenLayoutPlan(
-        CompilationSession session,
         CompilationTypeCensus census,
         IReadOnlyDictionary<INamedTypeSymbol, TypeLayout> layouts,
         IEnumerable<INamedTypeSymbol> interfacesWithStructImplementor,
         IEnumerable<INamedTypeSymbol> interfacesWithUserClassImplementor,
-        IEnumerable<INamedTypeSymbol> interfacesWithBehaviourImplementor)
+        IEnumerable<INamedTypeSymbol> interfacesWithBehaviourImplementor,
+        IReadOnlyDictionary<INamedTypeSymbol, IReadOnlyList<(
+            IMethodSymbol method,
+            MethodLayout interfaceLayout,
+            IMethodSymbol implMethod,
+            MethodLayout classLayout)>> bridges)
     {
-        Session = session ?? throw new ArgumentNullException(nameof(session));
         Census = census ?? throw new ArgumentNullException(nameof(census));
         _layouts = new ReadOnlyDictionary<INamedTypeSymbol, TypeLayout>(
             new Dictionary<INamedTypeSymbol, TypeLayout>(
@@ -38,6 +44,22 @@ public sealed class FrozenLayoutPlan
             interfacesWithUserClassImplementor, SymbolEqualityComparer.Default);
         _interfacesWithBehaviourImplementor = new HashSet<INamedTypeSymbol>(
             interfacesWithBehaviourImplementor, SymbolEqualityComparer.Default);
+        var bridgeCopies = new Dictionary<INamedTypeSymbol, IReadOnlyList<(
+            IMethodSymbol method,
+            MethodLayout interfaceLayout,
+            IMethodSymbol implMethod,
+            MethodLayout classLayout)>>(SymbolEqualityComparer.Default);
+        foreach (var pair in bridges)
+            bridgeCopies.Add(pair.Key, new List<(
+                IMethodSymbol method,
+                MethodLayout interfaceLayout,
+                IMethodSymbol implMethod,
+                MethodLayout classLayout)>(pair.Value).AsReadOnly());
+        _bridges = new ReadOnlyDictionary<INamedTypeSymbol, IReadOnlyList<(
+            IMethodSymbol method,
+            MethodLayout interfaceLayout,
+            IMethodSymbol implMethod,
+            MethodLayout classLayout)>>(bridgeCopies);
     }
 
     public TypeLayout GetLayout(INamedTypeSymbol type)
@@ -61,52 +83,14 @@ public sealed class FrozenLayoutPlan
             || _interfacesWithUserClassImplementor.Contains(iface)
                && _interfacesWithBehaviourImplementor.Contains(iface));
 
-    public List<(IMethodSymbol method, MethodLayout interfaceLayout,
-        IMethodSymbol implMethod, MethodLayout classLayout)> ComputeBridges(
+    public IReadOnlyList<(IMethodSymbol method, MethodLayout interfaceLayout,
+        IMethodSymbol implMethod, MethodLayout classLayout)> RequireBridges(
         INamedTypeSymbol classType)
     {
-        var bridges = new List<(IMethodSymbol, MethodLayout, IMethodSymbol, MethodLayout)>();
-        var classLayout = GetLayout(classType);
-
-        foreach (var iface in classType.AllInterfaces)
-        {
-            var ifaceLayout = GetLayout(iface);
-            foreach (var (ifaceMethod, ifaceMl) in ifaceLayout.Methods)
-            {
-                var impl = classType.FindImplementationForInterfaceMember(ifaceMethod) as IMethodSymbol;
-                if (impl != null && impl.ContainingType?.TypeKind == TypeKind.Interface)
-                {
-                    if (ifaceMl.Returns.Count <= 1)
-                        bridges.Add((ifaceMethod, ifaceMl, impl, ifaceMl));
-                    continue;
-                }
-                if (impl == null) continue;
-
-                var implOwner = impl;
-                if (!classLayout.Methods.TryGetValue(implOwner, out var classMl))
-                {
-                    implOwner = null;
-                    foreach (var (method, methodLayout) in classLayout.Methods)
-                    {
-                        for (var current = method.OverriddenMethod;
-                             current != null;
-                             current = current.OverriddenMethod)
-                        {
-                            if (!SymbolEqualityComparer.Default.Equals(current, impl)) continue;
-                            implOwner = method;
-                            classMl = methodLayout;
-                            break;
-                        }
-                        if (implOwner != null) break;
-                    }
-                    if (implOwner == null) continue;
-                }
-                if (ifaceMl.Returns.Count > 1) continue;
-                bridges.Add((ifaceMethod, ifaceMl, implOwner, classMl));
-            }
-        }
-
-        return bridges;
+        if (_bridges.TryGetValue(classType, out var bridges))
+            return bridges;
+        throw new InvalidOperationException(
+            $"Interface bridges for '{classType?.Name}' were not pre-planned.");
     }
 
     public DelegateBridgeLayout GetDelegateBridgeLayout(IMethodSymbol method)

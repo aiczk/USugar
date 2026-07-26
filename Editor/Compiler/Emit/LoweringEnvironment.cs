@@ -25,9 +25,6 @@ internal sealed class LoweringEnvironment
         Planner = planner ?? throw new ArgumentNullException(nameof(planner));
         Types = new MaterializingUdonTypeSystem(
             session.Types, Planner, Compilation);
-        if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
-            throw new InvalidOperationException(
-                "Frozen layout plan and lowering environment must share one compilation session's type facts.");
     }
 
     public string SourceStorageName(ISymbol member)

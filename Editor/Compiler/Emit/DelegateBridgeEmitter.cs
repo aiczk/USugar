@@ -35,7 +35,7 @@ public sealed class DelegateBridgeEmitter
         }
 
         foreach (var (interfaceMethod, interfaceLayout, implementationMethod, _)
-            in _context.Planner.ComputeBridges(_context.ClassSymbol))
+            in _context.Planner.RequireBridges(_context.ClassSymbol))
         {
             if (interfaceMethod.MethodKind != MethodKind.Ordinary
                 || implementationMethod == null

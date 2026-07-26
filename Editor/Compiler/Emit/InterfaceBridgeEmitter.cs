@@ -17,7 +17,7 @@ internal sealed class InterfaceBridgeEmitter
     {
         var builder = _context.Builder;
         foreach (var (interfaceMethod, interfaceLayout, implementationMethod, classLayout)
-            in _context.Planner.ComputeBridges(_context.ClassSymbol))
+            in _context.Planner.RequireBridges(_context.ClassSymbol))
         {
             for (int i = 0; i < interfaceMethod.Parameters.Length; i++)
             {

@@ -437,13 +437,20 @@ public sealed class LayoutPlanBuilder
         foreach (var type in Census.Structs)
             foreach (var iface in type.AllInterfaces)
                 RegisterStructImplementedInterface(iface);
+        var bridges = new Dictionary<INamedTypeSymbol, IReadOnlyList<(
+            IMethodSymbol method,
+            MethodLayout interfaceLayout,
+            IMethodSymbol implMethod,
+            MethodLayout classLayout)>>(SymbolEqualityComparer.Default);
+        foreach (var type in Census.Classes.Where(ExternResolver.IsUdonSharpBehaviour))
+            bridges.Add(type, ComputeBridges(type).AsReadOnly());
         return new FrozenLayoutPlan(
-            Session,
             Census,
             _cache,
             _interfacesWithStructImplementor,
             _interfacesWithUserClassImplementor,
-            _interfacesWithBehaviourImplementor);
+            _interfacesWithBehaviourImplementor,
+            bridges);
     }
 
     public TypeLayout Plan(INamedTypeSymbol type)

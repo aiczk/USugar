@@ -55,7 +55,7 @@ internal sealed class ProgramLoweringPipeline
     internal ProgramLoweringPipeline(Compilation compilation, INamedTypeSymbol classSymbol,
         FrozenLayoutPlan planner = null,
         UdonAbiCatalog externRegistry = null)
-        : this(CreateSession(compilation, planner, externRegistry), classSymbol, planner)
+        : this(CreateSession(compilation, externRegistry), classSymbol, planner)
     {
     }
 
@@ -72,17 +72,13 @@ internal sealed class ProgramLoweringPipeline
         _delegateConvention = new DelegateConventionStorage(_state);
     }
 
-    static CompilationSession CreateSession(Compilation compilation, FrozenLayoutPlan planner,
-        UdonAbiCatalog externRegistry)
+    static CompilationSession CreateSession(
+        Compilation compilation, UdonAbiCatalog externRegistry)
     {
         if (compilation == null) throw new ArgumentNullException(nameof(compilation));
         if (externRegistry == null)
             throw new ArgumentNullException(nameof(externRegistry),
                 "USugar compilation requires the installed SDK's Udon ABI catalog.");
-        if (planner != null)
-            return ReferenceEquals(planner.Session.AbiCatalog, externRegistry)
-                ? planner.Session
-                : new CompilationSession(compilation, externRegistry, planner.TypeFacts);
         return new CompilationSession(compilation, externRegistry);
     }
 
