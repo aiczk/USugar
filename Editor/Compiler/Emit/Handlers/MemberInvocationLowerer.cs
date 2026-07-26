@@ -126,7 +126,8 @@ internal sealed class MemberInvocationLowerer
             var cType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(op.Property.ContainingType, op.Instance?.Type, op.Property.Name));
             var rType = _lowering.GetStorageTypeName(op.Property.Type);
             return _lowering.ExternCall(
-                _lowering.State.BoundAbi.RequirePropertyGetter(cType, propName, rType),
+                _lowering.RequireBoundAbi(
+                    op, BoundAbiRole.PropertyGet),
                 new List<CLeaf> { thisVal },
                 new StorageType(rType));
         }
@@ -182,8 +183,8 @@ internal sealed class MemberInvocationLowerer
             _lowering.GuardUserStructMemberReachedExtern(op.Property.ContainingType, op.Property.Name);
 
             return _lowering.ExternCall(
-                _lowering.State.BoundAbi.RequirePropertyGetter(
-                    containingType, op.Property.Name, returnType, hasReceiver: false),
+                _lowering.RequireBoundAbi(
+                    op, BoundAbiRole.PropertyGet),
                 new List<CLeaf>(),
                 new StorageType(returnType));
         }
@@ -267,8 +268,8 @@ internal sealed class MemberInvocationLowerer
         // Array receivers keep the fixup above (SystemArray for .Length, element-typed otherwise).
         else if (op.Instance.Type is not IArrayTypeSymbol)
             containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(op.Property.ContainingType, op.Instance.Type, op.Property.Name));
-        var sig = _lowering.State.BoundAbi.RequirePropertyGetter(
-            containingType, op.Property.Name, returnType);
+        var sig = _lowering.RequireBoundAbi(
+            op, BoundAbiRole.PropertyGet);
         return _lowering.ExternCall(sig, new List<CLeaf> { instVal }, new StorageType(returnType));
     }
 
@@ -391,8 +392,8 @@ internal sealed class MemberInvocationLowerer
         // Use the indexer's metadata name, not a hardcoded "Item": most indexers are "Item", but a type with
         // [IndexerName(...)] differs (e.g. StringBuilder's indexer is "Chars" → __get_Chars__, not __get_Item__).
         return _lowering.ExternCall(
-            _lowering.State.BoundAbi.RequireIndexerGetter(
-                cType, op.Property.MetadataName, idxTypes, rType),
+            _lowering.RequireBoundAbi(
+                op, BoundAbiRole.IndexerGet),
             externArgs,
             new StorageType(rType));
     }
@@ -870,8 +871,8 @@ internal sealed class MemberInvocationLowerer
         {
             var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef.Field.ContainingType, fieldRef.Instance?.Type, fieldRef.Field.Name));
             var valueType = _lowering.GetStorageTypeName(fieldRef.Field.Type);
-            var sig = _lowering.State.BoundAbi.RequireFieldSetter(
-                containingType, fieldRef.Field.Name, valueType);
+            var sig = _lowering.RequireBoundAbi(
+                fieldRef, BoundAbiRole.FieldSetValue);
             _lowering.EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
         }
         else if (target is IPropertyReferenceOperation propRef)
@@ -890,15 +891,15 @@ internal sealed class MemberInvocationLowerer
                 }
                 externArgs.Add(valueVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
-                _lowering.EmitExternVoid(_lowering.State.BoundAbi.RequireIndexerSetter(
-                        containingType, propRef.Property.MetadataName, indexTypes, valueType),
+                _lowering.EmitExternVoid(_lowering.RequireBoundAbi(
+                        propRef, BoundAbiRole.IndexerSet),
                     externArgs);
             }
             else
             {
                 _lowering.EmitExternVoid(
-                    _lowering.State.BoundAbi.RequirePropertySetter(
-                        containingType, propRef.Property.Name, valueType),
+                    _lowering.RequireBoundAbi(
+                        propRef, BoundAbiRole.PropertySet),
                     new List<CLeaf> { instanceVal, valueVal });
             }
         }

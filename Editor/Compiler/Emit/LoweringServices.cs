@@ -118,6 +118,35 @@ internal sealed class LoweringServices
             operation, scope);
     }
 
+    internal BoundExtern RequireBoundAbi(
+        IOperation operation,
+        BoundAbiRole role)
+    {
+        if (operation == null)
+            throw new ArgumentNullException(nameof(operation));
+        var scope = _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                $"ABI role '{role}' for '{operation.Syntax}' is being "
+                + "lowered outside a bound semantic scope.");
+        return _state.BoundAbi.RequireOperation(
+            operation, scope, role);
+    }
+
+    internal bool TryGetBoundAbi(
+        IOperation operation,
+        BoundAbiRole role,
+        out BoundExtern bound)
+    {
+        if (operation == null)
+            throw new ArgumentNullException(nameof(operation));
+        var scope = _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                $"ABI role '{role}' for '{operation.Syntax}' is being "
+                + "lowered outside a bound semantic scope.");
+        return _state.BoundAbi.TryFindOperation(
+            operation, scope, role, out bound);
+    }
+
     /// <summary>
     /// Udon array constructors consume an Int32 length even though C# accepts every integral array
     /// dimension type. Normalize at the allocation choke so UInt32/Int64/etc. never reach the wrapper
@@ -596,13 +625,18 @@ internal sealed class LoweringServices
     /// values. Arithmetic yields T? (null unless both present); relational yields bool (false if either null);
     /// equality yields bool (both-null is equal). Shared by <c>OperatorHandler</c> and compound assignment.</summary>
     internal CLeaf EmitLiftedBinaryCore(
+        IOperation operation,
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
         Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
         => NullableAbi.EmitLiftedBinaryCore(_builder, _state.BoundAbi,
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
-            kind, operatorMethod, resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
+            kind, operatorMethod,
+            operatorMethod == null
+                ? null
+                : RequireBoundAbi(operation, BoundAbiRole.Operator),
+            resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
             GetStorageTypeName, ResolveType,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName),
@@ -1250,8 +1284,8 @@ internal sealed class LoweringServices
             var vtInstanceVal = plan.Value.Instance is IInstanceReferenceOperation
                 ? LoadField(_state.Storage.DeclareThisOnce(new StorageType(vtContainingType)), new StorageType(vtContainingType))
                 : VisitExpression(plan.Value.Instance);
-            var vtSig = _state.BoundAbi.RequireFieldSetter(
-                vtContainingType, fieldRef.Field.Name, GetStorageTypeName(fieldRef.Field.Type));
+            var vtSig = RequireBoundAbi(
+                fieldRef, BoundAbiRole.FieldSetValue);
             return value => EmitExternVoid(vtSig, new List<CLeaf> { vtInstanceVal, value });
         }
 
@@ -1259,9 +1293,8 @@ internal sealed class LoweringServices
         if (plan.Value.Kind == FieldSetKind.ExternReferenceType)
         {
             var refInstanceVal = VisitExpression(plan.Value.Instance);
-            var refSig = _state.BoundAbi.RequireFieldSetter(
-                GetStorageTypeName(fieldRef.Field.ContainingType), fieldRef.Field.Name,
-                GetStorageTypeName(fieldRef.Field.Type), isValueType: false);
+            var refSig = RequireBoundAbi(
+                fieldRef, BoundAbiRole.FieldSetReference);
             return value => EmitExternVoid(refSig, new List<CLeaf> { refInstanceVal, value });
         }
 
@@ -1456,9 +1489,8 @@ internal sealed class LoweringServices
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
             var staticValType = GetStorageTypeName(propRef.Property.Type);
-            var staticSetter = _state.BoundAbi.RequirePropertySetter(
-                propContainingUdon, propRef.Property.Name, staticValType,
-                hasReceiver: false);
+            var staticSetter = RequireBoundAbi(
+                propRef, BoundAbiRole.PropertySet);
             return staticVal => EmitExternVoid(
                 staticSetter,
                 new List<CLeaf> { staticVal });
@@ -1511,11 +1543,8 @@ internal sealed class LoweringServices
                 indexArgs.Add(externIdxVal);
                 // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
                 EmitExternVoid(
-                    _state.BoundAbi.RequireIndexerSetter(
-                        containingType,
-                        propRef.Property.MetadataName,
-                        indexTypes,
-                        valueType),
+                    RequireBoundAbi(
+                        propRef, BoundAbiRole.IndexerSet),
                     indexArgs);
             };
         }
@@ -1593,8 +1622,8 @@ internal sealed class LoweringServices
                 else
                 {
                     EmitExternVoid(
-                        _state.BoundAbi.RequirePropertySetter(
-                            containingType, propRef.Property.Name, valueType),
+                        RequireBoundAbi(
+                            propRef, BoundAbiRole.PropertySet),
                         new List<CLeaf> { instanceVal, srcVal });
                 }
 

@@ -1395,7 +1395,7 @@ public sealed class UasmEmitter
                     new TypeClassifierContext(typeMap),
                     _state.Captures,
                     body?.StableLocalInitializers)));
-            abiPlanner.Plan(operation);
+            ClosedConversionPlan? closedConversion = null;
             if (operation is IFieldReferenceOperation fieldReference)
             {
                 constantFields.Add(fieldReference.Field);
@@ -1421,12 +1421,16 @@ public sealed class UasmEmitter
             {
                 var conversionKey = new BoundConversionKey(
                     conversion, scope);
+                closedConversion =
+                    conversionPlanner.Plan(conversion);
                 if (!conversions.TryAdd(
                         conversionKey,
-                        conversionPlanner.Plan(conversion)))
+                        closedConversion.Value))
                     throw new InvalidOperationException(
                         $"Conversion '{operation.Syntax}' was bound twice.");
             }
+            abiPlanner.Plan(
+                operation, scope, closedConversion);
             if (operation is IDeconstructionAssignmentOperation
                 && operation.Syntax is AssignmentExpressionSyntax assignment)
             {

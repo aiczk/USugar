@@ -225,8 +225,8 @@ internal sealed class LValueLowerer
                 var instanceVal = _lowering.VisitExpression(fieldRef2.Instance);
                 var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _lowering.State.BoundAbi.RequirePropertyGetter(
-                    containingType, fieldRef2.Field.Name, valueType);
+                var sig = _lowering.RequireBoundAbi(
+                    fieldRef2, BoundAbiRole.FieldGet);
                 var valResult = _lowering.ExternCall(sig, new List<CLeaf> { instanceVal }, new StorageType(valueType));
                 return new LoweringServices.LValuePlan { Value = valResult, InstanceVal = instanceVal };
             }
@@ -490,9 +490,8 @@ internal sealed class LValueLowerer
                     // Static property: no instance
                     var valueType = _lowering.GetStorageTypeName(propRef.Property.Type);
                     _lowering.EmitExternVoid(
-                        _lowering.State.BoundAbi.RequirePropertySetter(
-                            containingType, propRef.Property.Name, valueType,
-                            hasReceiver: false),
+                        _lowering.RequireBoundAbi(
+                            propRef, BoundAbiRole.PropertySet),
                         new List<CLeaf> { valueVal });
                     return;
                 }
@@ -510,18 +509,15 @@ internal sealed class LValueLowerer
                     indexArgs.Add(valueVal);
                     // Indexer metadata name, not a hardcoded "Item" ([IndexerName] e.g. StringBuilder → "Chars").
                     _lowering.EmitExternVoid(
-                        _lowering.State.BoundAbi.RequireIndexerSetter(
-                            containingType,
-                            propRef.Property.MetadataName,
-                            indexTypes,
-                            propValueType),
+                        _lowering.RequireBoundAbi(
+                            propRef, BoundAbiRole.IndexerSet),
                         indexArgs);
                 }
                 else
                 {
                     _lowering.EmitExternVoid(
-                        _lowering.State.BoundAbi.RequirePropertySetter(
-                            containingType, propRef.Property.Name, propValueType),
+                        _lowering.RequireBoundAbi(
+                            propRef, BoundAbiRole.PropertySet),
                         new List<CLeaf> { wbInstanceVal, valueVal });
                 }
                 break;
@@ -533,8 +529,8 @@ internal sealed class LValueLowerer
                 var instanceVal = lv.InstanceVal ?? _lowering.VisitExpression(fieldRef2.Instance);
                 var containingType = _lowering.GetStorageTypeName(_lowering.ResolveExternOwnerType(fieldRef2.Field.ContainingType, fieldRef2.Instance?.Type, fieldRef2.Field.Name));
                 var valueType = _lowering.GetStorageTypeName(fieldRef2.Field.Type);
-                var sig = _lowering.State.BoundAbi.RequireFieldSetter(
-                    containingType, fieldRef2.Field.Name, valueType);
+                var sig = _lowering.RequireBoundAbi(
+                    fieldRef2, BoundAbiRole.FieldSetValue);
                 _lowering.EmitExternVoid(sig, new List<CLeaf> { instanceVal, valueVal });
                 break;
             }

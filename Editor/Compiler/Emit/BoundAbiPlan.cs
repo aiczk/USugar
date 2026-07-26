@@ -3,6 +3,59 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
+
+internal enum BoundAbiRole
+{
+    Invocation,
+    ExpandedParamsInvocation,
+    Conversion,
+    Operator,
+    FieldGet,
+    FieldSetValue,
+    FieldSetReference,
+    PropertyGet,
+    PropertySet,
+    IndexerGet,
+    IndexerSet,
+}
+
+internal readonly struct BoundAbiOperationKey
+    : IEquatable<BoundAbiOperationKey>
+{
+    readonly IOperation _operation;
+    readonly CallSiteBindingScope _scope;
+    readonly BoundAbiRole _role;
+
+    public BoundAbiOperationKey(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role)
+    {
+        _operation = operation
+            ?? throw new ArgumentNullException(nameof(operation));
+        _scope = scope;
+        _role = role;
+    }
+
+    public bool Equals(BoundAbiOperationKey other)
+        => ReferenceEquals(_operation, other._operation)
+           && _scope.Equals(other._scope)
+           && _role == other._role;
+
+    public override bool Equals(object obj)
+        => obj is BoundAbiOperationKey other && Equals(other);
+
+    public override int GetHashCode()
+    {
+        unchecked
+        {
+            var hash = _operation.GetHashCode();
+            hash = hash * 31 + _scope.GetHashCode();
+            return hash * 31 + (int)_role;
+        }
+    }
+}
 
 /// <summary>
 /// Frozen ABI input to body lowering. The immutable installed-SDK schema is
@@ -13,24 +66,28 @@ using Microsoft.CodeAnalysis;
 internal sealed class BoundAbiPlan
 {
     readonly IReadOnlyDictionary<string, UdonExternPrototype> _exact;
-    readonly IReadOnlyDictionary<string, BoundExtern> _decisions;
-    readonly IReadOnlyDictionary<string, string> _missingFeatures;
+    readonly IReadOnlyDictionary<BoundAbiOperationKey, BoundExtern>
+        _operations;
+    readonly IReadOnlyDictionary<BoundAbiOperationKey, string>
+        _missingOperations;
 
     internal BoundAbiPlan(
         IReadOnlyDictionary<string, UdonExternPrototype> exact,
-        IDictionary<string, BoundExtern> decisions,
-        IDictionary<string, string> missingFeatures)
+        IDictionary<BoundAbiOperationKey, BoundExtern> operations,
+        IDictionary<BoundAbiOperationKey, string> missingOperations)
     {
         _exact = exact ?? throw new ArgumentNullException(nameof(exact));
-        _decisions = new ReadOnlyDictionary<string, BoundExtern>(
-            new Dictionary<string, BoundExtern>(
-                decisions ?? throw new ArgumentNullException(nameof(decisions)),
-                StringComparer.Ordinal));
-        _missingFeatures = new ReadOnlyDictionary<string, string>(
-            new Dictionary<string, string>(
-                missingFeatures
-                ?? throw new ArgumentNullException(nameof(missingFeatures)),
-                StringComparer.Ordinal));
+        _operations = new ReadOnlyDictionary<
+            BoundAbiOperationKey, BoundExtern>(
+            new Dictionary<BoundAbiOperationKey, BoundExtern>(
+                operations
+                ?? throw new ArgumentNullException(nameof(operations))));
+        _missingOperations = new ReadOnlyDictionary<
+            BoundAbiOperationKey, string>(
+            new Dictionary<BoundAbiOperationKey, string>(
+                missingOperations
+                ?? throw new ArgumentNullException(
+                    nameof(missingOperations))));
     }
 
     internal static BoundAbiPlan ExactCatalog(UdonAbiCatalog catalog)
@@ -38,8 +95,8 @@ internal sealed class BoundAbiPlan
         if (catalog == null) throw new ArgumentNullException(nameof(catalog));
         return new BoundAbiPlan(
             catalog.ExactPrototypes,
-            new Dictionary<string, BoundExtern>(StringComparer.Ordinal),
-            new Dictionary<string, string>(StringComparer.Ordinal));
+            new Dictionary<BoundAbiOperationKey, BoundExtern>(),
+            new Dictionary<BoundAbiOperationKey, string>());
     }
 
     internal bool ContainsExact(UdonAbiKey key)
@@ -54,99 +111,40 @@ internal sealed class BoundAbiPlan
             $"Udon extern '{name}' is not registered by the installed SDK.");
     }
 
-    internal BoundExtern RequireConversion(
-        IMethodSymbol method,
-        ITypeSymbol expressionSource,
-        ITypeSymbol expressionDestination,
-        Func<ITypeSymbol, string> getUdonType)
-        => RequireDecision(AbiDecisionKey.Conversion(
-            method, expressionSource, expressionDestination, getUdonType));
+    internal BoundExtern RequireOperation(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role)
+    {
+        var key = new BoundAbiOperationKey(operation, scope, role);
+        if (_operations.TryGetValue(key, out var bound))
+            return bound;
+        if (_missingOperations.TryGetValue(key, out var message))
+            throw new NotSupportedException(message);
+        throw new InvalidOperationException(
+            $"ABI role '{role}' for '{operation?.Syntax}' "
+            + "was absent from the bound program.");
+    }
 
-    internal BoundExtern RequireOperator(
-        IMethodSymbol method,
-        Func<ITypeSymbol, string> getUdonType)
-        => RequireExact(AbiDecisionKey.Operator(method, getUdonType));
-
-    internal BoundExtern RequireMethod(
-        IMethodSymbol method,
-        string owner,
-        Func<ITypeSymbol, string> getUdonType,
-        string[] parameterOverride = null)
-        => RequireDecision(AbiDecisionKey.Method(
-            method, owner, getUdonType, parameterOverride));
-
-    internal bool TryGetMethod(
-        IMethodSymbol method,
-        string owner,
-        Func<ITypeSymbol, string> getUdonType,
-        string[] parameterOverride,
+    internal bool TryFindOperation(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role,
         out BoundExtern bound)
     {
-        var key = AbiDecisionKey.Method(
-            method, owner, getUdonType, parameterOverride);
-        if (_decisions.TryGetValue(key, out bound)) return true;
-        if (_missingFeatures.ContainsKey(key))
+        var key = new BoundAbiOperationKey(operation, scope, role);
+        if (_operations.TryGetValue(key, out bound))
+            return true;
+        if (_missingOperations.ContainsKey(key))
         {
             bound = null;
             return false;
         }
-        throw MissingDecision(key);
+        throw new InvalidOperationException(
+            $"ABI role '{role}' for '{operation?.Syntax}' "
+            + "was absent from the bound program.");
     }
 
-    internal BoundExtern RequireFieldSetter(
-        string owner,
-        string fieldName,
-        string valueType,
-        bool isValueType = true,
-        bool hasReceiver = true)
-        => RequireDecision(AbiDecisionKey.FieldSetter(
-            owner, fieldName, valueType, isValueType, hasReceiver));
-
-    internal BoundExtern RequirePropertySetter(
-        string owner,
-        string propertyName,
-        string valueType,
-        bool hasReceiver = true)
-        => RequireDecision(AbiDecisionKey.PropertySetter(
-            owner, propertyName, valueType, hasReceiver));
-
-    internal BoundExtern RequirePropertyGetter(
-        string owner,
-        string propertyName,
-        string returnType,
-        bool hasReceiver = true)
-        => RequireDecision(AbiDecisionKey.PropertyGetter(
-            owner, propertyName, returnType, hasReceiver));
-
-    internal BoundExtern RequireIndexerGetter(
-        string owner,
-        string propertyName,
-        IReadOnlyList<string> indexTypes,
-        string returnType,
-        bool hasReceiver = true)
-        => RequireDecision(AbiDecisionKey.IndexerGetter(
-            owner, propertyName, indexTypes, returnType, hasReceiver));
-
-    internal BoundExtern RequireIndexerSetter(
-        string owner,
-        string propertyName,
-        IReadOnlyList<string> indexTypes,
-        string valueType,
-        bool hasReceiver = true)
-        => RequireDecision(AbiDecisionKey.IndexerSetter(
-            owner, propertyName, indexTypes, valueType, hasReceiver));
-
-    BoundExtern RequireDecision(string key)
-    {
-        if (_decisions.TryGetValue(key, out var bound)) return bound;
-        if (_missingFeatures.TryGetValue(key, out var message))
-            throw new NotSupportedException(message);
-        throw MissingDecision(key);
-    }
-
-    static InvalidOperationException MissingDecision(string key)
-        => new InvalidOperationException(
-            $"ABI decision '{key}' was absent from the bound program.");
 }
 
 /// <summary>
@@ -161,6 +159,10 @@ internal sealed class BoundAbiPlanBuilder
         new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _missingFeatures =
         new(StringComparer.Ordinal);
+    readonly Dictionary<BoundAbiOperationKey, BoundExtern> _operations =
+        new();
+    readonly Dictionary<BoundAbiOperationKey, string> _missingOperations =
+        new();
     bool _published;
 
     public BoundAbiPlanBuilder(UdonAbiCatalog catalog)
@@ -179,6 +181,12 @@ internal sealed class BoundAbiPlanBuilder
                 method, expressionSource, expressionDestination, getUdonType),
             _binder.BindConversion(
                 method, expressionSource, expressionDestination, getUdonType));
+
+    public BoundExtern BindExact(UdonAbiKey key)
+    {
+        RequireMutable();
+        return _catalog.Require(key);
+    }
 
     public BoundExtern BindMethod(
         IMethodSymbol method,
@@ -285,14 +293,50 @@ internal sealed class BoundAbiPlanBuilder
         }
     }
 
+    public void RecordOperation(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role,
+        BoundExtern bound)
+    {
+        RequireMutable();
+        var key = new BoundAbiOperationKey(operation, scope, role);
+        if (_operations.TryGetValue(key, out var existing))
+        {
+            if (existing.Text == bound.Text) return;
+            throw new InvalidOperationException(
+                $"ABI role '{role}' for '{operation.Syntax}' resolved to "
+                + $"both '{existing.Text}' and '{bound.Text}'.");
+        }
+        _operations.Add(
+            key, bound ?? throw new ArgumentNullException(nameof(bound)));
+        _missingOperations.Remove(key);
+    }
+
+    public void RecordOperationFailure(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role,
+        string message)
+    {
+        RequireMutable();
+        var key = new BoundAbiOperationKey(operation, scope, role);
+        if (_operations.ContainsKey(key)) return;
+        _missingOperations[key] =
+            string.IsNullOrWhiteSpace(message)
+                ? $"No installed Udon extern implements ABI role '{role}' "
+                  + $"for '{operation.Syntax}'."
+                : message;
+    }
+
     public BoundAbiPlan Publish()
     {
         RequireMutable();
         _published = true;
         return new BoundAbiPlan(
             _catalog.ExactPrototypes,
-            _decisions,
-            _missingFeatures);
+            _operations,
+            _missingOperations);
     }
 
     BoundExtern Record(string key, BoundExtern bound)

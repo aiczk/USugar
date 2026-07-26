@@ -234,7 +234,8 @@ internal sealed class OperatorHandler
         }
 
         var sig = operatorMethod != null
-            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
+            ? _lowering.RequireBoundAbi(
+                op, BoundAbiRole.Operator)
             : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.LeftOperand.Type),
@@ -303,6 +304,7 @@ internal sealed class OperatorHandler
         var leftVal = _lowering.VisitExpression(op.LeftOperand);
         var rightVal = _lowering.VisitExpression(op.RightOperand);
         return _lowering.EmitLiftedBinaryCore(
+            op,
             leftVal, leftNullable, leftNullable ? lu : op.LeftOperand.Type,
             rightVal, rightNullable, rightNullable ? ru : op.RightOperand.Type,
             op.OperatorKind, operatorMethod, op.Type);
@@ -389,7 +391,8 @@ internal sealed class OperatorHandler
         var resultType = _lowering.GetStorageTypeName(op.Type);
 
         var sig = operatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
+            ? _lowering.RequireBoundAbi(
+                op, BoundAbiRole.Operator)
             : _lowering.State.BoundAbi.RequireExact(BuildBuiltinUnaryKey(op));
 
         return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
@@ -418,6 +421,7 @@ internal sealed class OperatorHandler
                 _ => throw new System.NotSupportedException($"Lifted bitwise NOT (~) is not supported on {resU}")
             };
             return _lowering.EmitLiftedBinaryCore(
+                op,
                 _lowering.VisitExpression(op.Operand), true, opUnderlying,
                 _lowering.Const(allBitsValue, new StorageType(resU)), false, resUnderlying,
                 BinaryOperatorKind.ExclusiveOr, null, op.Type);
@@ -771,8 +775,11 @@ internal sealed class OperatorHandler
                 var memberOwner = _lowering.GetStorageTypeName(
                     _lowering.ResolveExternOwnerType(memberContainingType, matchType, memberName));
                 memberVal = _lowering.ExternCall(
-                    _lowering.State.BoundAbi.RequirePropertyGetter(
-                        memberOwner, memberName, _lowering.GetStorageTypeName(memberType)),
+                    _lowering.RequireBoundAbi(
+                        sub.Member,
+                        sub.Member is IFieldReferenceOperation
+                            ? BoundAbiRole.FieldGet
+                            : BoundAbiRole.PropertyGet),
                     new List<CLeaf> { valueVal }, _lowering.GetStorageType(memberType));
             }
 

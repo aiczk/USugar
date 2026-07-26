@@ -23,52 +23,79 @@ internal sealed class AbiDemandPlanner
         _abi = abi ?? throw new ArgumentNullException(nameof(abi));
     }
 
-    public void Plan(IOperation operation)
+    public void Plan(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        ClosedConversionPlan? conversionPlan = null)
     {
         if (operation == null) return;
-        try
+        switch (operation)
         {
-            switch (operation)
-            {
-                case IInvocationOperation invocation:
-                    PlanInvocation(invocation);
-                    break;
-                case IConversionOperation conversion:
-                    PlanConversion(conversion);
-                    break;
-                case IFieldReferenceOperation field:
-                    PlanField(field);
-                    break;
-                case IPropertyReferenceOperation property:
-                    PlanProperty(property);
-                    break;
-            }
-        }
-        catch (NotSupportedException)
-        {
-            // The census deliberately visits internal/intrinsic shapes too.
-            // If body lowering selects one of them as an extern, the absent
-            // decision remains a loud compiler error.
+            case IInvocationOperation invocation:
+                PlanInvocation(invocation, scope);
+                break;
+            case IConversionOperation conversion:
+                PlanConversion(conversion, scope, conversionPlan);
+                break;
+            case IFieldReferenceOperation field:
+                PlanField(field, scope);
+                break;
+            case IPropertyReferenceOperation property:
+                PlanProperty(property, scope);
+                break;
+            case IBinaryOperation binary:
+                PlanOperator(
+                    binary, binary.OperatorMethod, scope);
+                break;
+            case IUnaryOperation unary:
+                PlanOperator(
+                    unary, unary.OperatorMethod, scope);
+                break;
+            case ICompoundAssignmentOperation compound:
+                PlanOperator(
+                    compound, compound.OperatorMethod, scope);
+                break;
         }
     }
 
-    void PlanInvocation(IInvocationOperation operation)
+    void PlanInvocation(
+        IInvocationOperation operation,
+        CallSiteBindingScope scope)
     {
         var method = _lowering.CloseMethodForPlanning(
             operation.TargetMethod);
-        if (_lowering.ResolveType(operation.Instance?.Type)
-                is INamedTypeSymbol receiver
-            && TypeClassifier.IsObjectArrayEmulated(receiver))
-            return;
         if (method.ContainingType is INamedTypeSymbol aggregate
             && TypeClassifier.IsObjectArrayEmulated(aggregate))
             return;
-
-        var request = _lowering.DescribeExternMethodAbi(
-            method, operation.Instance?.Type);
-        _abi.TryBindMethod(
-            request.Method, request.Owner, TypeName,
-            request.ParameterOverride, out _);
+        (
+            IMethodSymbol Method,
+            string Owner,
+            string[] ParameterOverride) request;
+        try
+        {
+            request = _lowering.DescribeExternMethodAbi(
+                method, operation.Instance?.Type);
+        }
+        catch (Exception ex) when (
+            ex is NotSupportedException
+            or InvalidOperationException)
+        {
+            _abi.RecordOperationFailure(
+                operation, scope, BoundAbiRole.Invocation,
+                ex.Message);
+            return;
+        }
+        if (_abi.TryBindMethod(
+                request.Method, request.Owner, TypeName,
+                request.ParameterOverride, out var standard))
+            _abi.RecordOperation(
+                operation, scope, BoundAbiRole.Invocation, standard);
+        else
+            _abi.RecordOperationFailure(
+                operation, scope, BoundAbiRole.Invocation,
+                $"No registered Udon extern implements method "
+                + $"'{request.Method.ToDisplayString()}' for ABI owner "
+                + $"'{request.Owner}'.");
 
         var last = method.Parameters.Length - 1;
         if (last < 0
@@ -91,113 +118,208 @@ internal sealed class AbiDemandPlanner
             parameters.Add("SystemObject");
         request = _lowering.DescribeExternMethodAbi(
             method, operation.Instance?.Type, parameters.ToArray());
-        _abi.TryBindMethod(
-            request.Method, request.Owner, TypeName,
-            request.ParameterOverride, out _);
+        if (_abi.TryBindMethod(
+                request.Method, request.Owner, TypeName,
+                request.ParameterOverride, out var expanded))
+            _abi.RecordOperation(
+                operation, scope,
+                BoundAbiRole.ExpandedParamsInvocation,
+                expanded);
+        else
+            _abi.RecordOperationFailure(
+                operation, scope,
+                BoundAbiRole.ExpandedParamsInvocation,
+                $"No expanded params extern is registered for "
+                + $"'{request.Method.ToDisplayString()}'.");
     }
 
-    void PlanConversion(IConversionOperation operation)
+    void PlanConversion(
+        IConversionOperation operation,
+        CallSiteBindingScope scope,
+        ClosedConversionPlan? conversionPlan)
     {
         if (operation.Operand.Type == null || operation.Type == null)
             return;
-        var source = _lowering.ResolveType(operation.Operand.Type);
+        var plan = conversionPlan;
+        var source = plan?.SourceType
+                     ?? _lowering.ResolveType(operation.Operand.Type);
         var destination = _lowering.ResolveType(operation.Type);
-        var rawMethod = operation.OperatorMethod;
-        if (rawMethod == null)
-        {
-            var carrier = operation.Operand;
-            while (carrier is IConversionOperation conversion
-                   && conversion.OperatorMethod == null)
-                carrier = conversion.Operand;
-            if (carrier.Type == null)
-                return;
-            source = _lowering.ResolveType(carrier.Type);
-            rawMethod = (_lowering.Compilation as
-                    Microsoft.CodeAnalysis.CSharp.CSharpCompilation)
-                ?.ClassifyConversion(source, destination)
-                .MethodSymbol;
-        }
+        var rawMethod = plan?.OperatorMethod
+                        ?? operation.OperatorMethod;
         if (rawMethod == null) return;
         var method = _lowering.CloseMethodForPlanning(rawMethod);
         if (method.ContainingType is INamedTypeSymbol aggregate
             && TypeClassifier.IsObjectArrayEmulated(aggregate))
             return;
-        _abi.TryBind(() => _abi.BindConversion(
-            method, source, destination, TypeName));
+        Bind(
+            operation,
+            scope,
+            BoundAbiRole.Conversion,
+            () => _abi.BindConversion(
+                method, source, destination, TypeName));
     }
 
-    void PlanField(IFieldReferenceOperation operation)
+    void PlanField(
+        IFieldReferenceOperation operation,
+        CallSiteBindingScope scope)
     {
         var field = operation.Field;
         var valueType = TypeName(field.Type);
-        foreach (var owner in Owners(
-                     field.ContainingType,
-                     operation.Instance?.Type,
-                     field.Name))
+        string owner;
+        try
         {
-            var hasReceiver = !field.IsStatic;
-            _abi.TryBind(() => _abi.BindPropertyGetter(
-                owner, field.Name, valueType, hasReceiver));
-            _abi.TryBind(() => _abi.BindFieldSetter(
-                owner, field.Name, valueType,
-                field.ContainingType.IsValueType, hasReceiver));
-            _abi.TryBind(() => _abi.BindFieldSetter(
-                owner, field.Name, valueType,
-                !field.ContainingType.IsValueType, hasReceiver));
+            owner = Owner(
+                field.ContainingType,
+                operation.Instance?.Type,
+                field.Name);
         }
+        catch (Exception ex) when (
+            ex is NotSupportedException
+            or InvalidOperationException)
+        {
+            foreach (var role in new[]
+                     {
+                         BoundAbiRole.FieldGet,
+                         BoundAbiRole.FieldSetValue,
+                         BoundAbiRole.FieldSetReference,
+                     })
+                _abi.RecordOperationFailure(
+                    operation, scope, role, ex.Message);
+            return;
+        }
+        var hasReceiver = !field.IsStatic;
+        Bind(
+            operation, scope, BoundAbiRole.FieldGet,
+            () => _abi.BindPropertyGetter(
+                owner, field.Name, valueType, hasReceiver));
+        Bind(
+            operation, scope, BoundAbiRole.FieldSetValue,
+            () => _abi.BindFieldSetter(
+                owner, field.Name, valueType,
+                isValueType: true, hasReceiver));
+        Bind(
+            operation, scope, BoundAbiRole.FieldSetReference,
+            () => _abi.BindFieldSetter(
+                owner, field.Name, valueType,
+                isValueType: false, hasReceiver));
     }
 
-    void PlanProperty(IPropertyReferenceOperation operation)
+    void PlanProperty(
+        IPropertyReferenceOperation operation,
+        CallSiteBindingScope scope)
     {
         var property = operation.Property;
         var valueType = TypeName(property.Type);
         var indexTypes = operation.Arguments
             .Select(argument => TypeName(argument.Value.Type))
             .ToArray();
-        foreach (var owner in Owners(
-                     property.ContainingType,
-                     operation.Instance?.Type,
-                     property.Name))
+        string owner;
+        try
         {
-            var hasReceiver = !property.IsStatic;
-            if (property.IsIndexer)
-            {
-                _abi.TryBind(() => _abi.BindIndexerGetter(
+            owner = PropertyOwner(operation);
+        }
+        catch (Exception ex) when (
+            ex is NotSupportedException
+            or InvalidOperationException)
+        {
+            foreach (var role in property.IsIndexer
+                         ? new[]
+                         {
+                             BoundAbiRole.IndexerGet,
+                             BoundAbiRole.IndexerSet,
+                         }
+                         : new[]
+                         {
+                             BoundAbiRole.PropertyGet,
+                             BoundAbiRole.PropertySet,
+                         })
+                _abi.RecordOperationFailure(
+                    operation, scope, role, ex.Message);
+            return;
+        }
+        var hasReceiver = !property.IsStatic;
+        if (property.IsIndexer)
+        {
+            Bind(
+                operation, scope, BoundAbiRole.IndexerGet,
+                () => _abi.BindIndexerGetter(
                     owner, property.MetadataName, indexTypes,
                     valueType, hasReceiver));
-                _abi.TryBind(() => _abi.BindIndexerSetter(
+            Bind(
+                operation, scope, BoundAbiRole.IndexerSet,
+                () => _abi.BindIndexerSetter(
                     owner, property.MetadataName, indexTypes,
                     valueType, hasReceiver));
-            }
-            else
-            {
-                _abi.TryBind(() => _abi.BindPropertyGetter(
+        }
+        else
+        {
+            Bind(
+                operation, scope, BoundAbiRole.PropertyGet,
+                () => _abi.BindPropertyGetter(
                     owner, property.Name, valueType, hasReceiver));
-                _abi.TryBind(() => _abi.BindPropertySetter(
+            Bind(
+                operation, scope, BoundAbiRole.PropertySet,
+                () => _abi.BindPropertySetter(
                     owner, property.Name, valueType, hasReceiver));
-            }
         }
     }
 
-    IEnumerable<string> Owners(
+    void PlanOperator(
+        IOperation operation,
+        IMethodSymbol rawMethod,
+        CallSiteBindingScope scope)
+    {
+        if (rawMethod == null) return;
+        var method = _lowering.CloseMethodForPlanning(rawMethod);
+        if (method.ContainingType is INamedTypeSymbol aggregate
+            && TypeClassifier.IsObjectArrayEmulated(aggregate))
+            return;
+        Bind(
+            operation, scope, BoundAbiRole.Operator,
+            () => _abi.BindExact(
+                AbiDecisionKey.Operator(method, TypeName)));
+    }
+
+    string Owner(
         ITypeSymbol declaringType,
         ITypeSymbol instanceType,
         string memberName)
-    {
-        var owners = new HashSet<string>(StringComparer.Ordinal);
-        void Add(ITypeSymbol type)
-        {
-            if (type != null) owners.Add(TypeName(type));
-        }
+        => TypeName(
+            instanceType == null
+                ? declaringType
+                : _lowering.ResolveExternOwnerType(
+                    declaringType, instanceType, memberName));
 
-        Add(declaringType);
-        Add(instanceType);
-        if (instanceType != null)
-            Add(_lowering.ResolveExternOwnerType(
-                declaringType, instanceType, memberName));
-        if (instanceType is IArrayTypeSymbol)
-            owners.Add("SystemArray");
-        return owners;
+    string PropertyOwner(IPropertyReferenceOperation operation)
+    {
+        var property = operation.Property;
+        if (operation.Instance?.Type is IArrayTypeSymbol array
+            && property.Name != "Length")
+            return TypeName(array);
+        return Owner(
+            property.ContainingType,
+            operation.Instance?.Type,
+            property.Name);
+    }
+
+    void Bind(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BoundAbiRole role,
+        Func<BoundExtern> bind)
+    {
+        try
+        {
+            _abi.RecordOperation(
+                operation, scope, role, bind());
+        }
+        catch (NotSupportedException ex)
+        {
+            // Internal/intrinsic shapes may never consume this role. If body
+            // lowering does select it, the captured SDK diagnosis stays loud.
+            _abi.RecordOperationFailure(
+                operation, scope, role, ex.Message);
+        }
     }
 
     string TypeName(ITypeSymbol type)

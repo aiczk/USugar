@@ -83,6 +83,7 @@ internal sealed class CompoundAssignmentHandler
         {
             var rNullable = EmitPolicy.IsNullableT(op.Value.Type, out var vUnderlying);
             var lifted = _lowering.EmitLiftedBinaryCore(
+                op,
                 leftVal, true, tUnderlying,
                 rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
                 op.OperatorKind, operatorMethod, op.Type);
@@ -117,7 +118,8 @@ internal sealed class CompoundAssignmentHandler
             rightVal = PromoteToInt32(rightVal, rightType);
 
         var sig = operatorMethod != null
-            ? _lowering.State.BoundAbi.RequireOperator(operatorMethod, type => _lowering.GetStorageTypeName(type))
+            ? _lowering.RequireBoundAbi(
+                op, BoundAbiRole.Operator)
             : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
                 op.OperatorKind,
                 _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
@@ -359,6 +361,7 @@ internal sealed class CompoundAssignmentHandler
         {
             var kind = op.Kind == OperationKind.Increment ? BinaryOperatorKind.Add : BinaryOperatorKind.Subtract;
             var lifted = _lowering.EmitLiftedBinaryCore(
+                op,
                 targetVal, true, incUnderlying,
                 _lowering.Const(1, _lowering.GetStorageType(incUnderlying)), false, incUnderlying,
                 kind, null, op.Type);

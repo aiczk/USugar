@@ -89,12 +89,10 @@ internal sealed class ExternInvocationLowerer
                 var elems = pac.Initializer != null
                     ? (System.Collections.Generic.IReadOnlyList<IOperation>)pac.Initializer.ElementValues
                     : System.Array.Empty<IOperation>();
-                var pts = new List<string>();
-                for (int i = 0; i < lastParamIdx; i++) pts.Add(_lowering.GetStorageTypeName(target.Parameters[i].Type));
-                for (int k = 0; k < elems.Count; k++) pts.Add("SystemObject");
-                var candidate = BindExternMethodCall(
-                    target, op.Instance?.Type, pts.ToArray(), allowMissing: true);
-                if (candidate != null)
+                if (_lowering.TryGetBoundAbi(
+                        op,
+                        BoundAbiRole.ExpandedParamsInvocation,
+                        out var candidate))
                 {
                     paramsElems = elems;
                     expandedParamsExtern = candidate;
@@ -185,7 +183,9 @@ internal sealed class ExternInvocationLowerer
         externArgs.AddRange(argVals);
 
         // Extern signature — the validated expanded form when trailing params were expanded, else the default.
-        var sig = expandedParamsExtern ?? BindExternMethodCall(target, op.Instance?.Type);
+        var sig = expandedParamsExtern
+                  ?? _lowering.RequireBoundAbi(
+                      op, BoundAbiRole.Invocation);
 
         CLeaf result;
         if (!target.ReturnsVoid)
@@ -1475,25 +1475,5 @@ internal sealed class ExternInvocationLowerer
     }
 
     // ── Extern Signature Helpers ──
-
-    BoundExtern BindExternMethodCall(
-        IMethodSymbol method,
-        ITypeSymbol instanceType = null,
-        string[] paramTypeOverride = null,
-        bool allowMissing = false)
-    {
-        var request = _lowering.DescribeExternMethodAbi(
-            method, instanceType, paramTypeOverride);
-        if (_lowering.State.BoundAbi.TryGetMethod(
-                request.Method, request.Owner,
-                type => _lowering.GetStorageTypeName(type),
-                request.ParameterOverride, out var bound))
-            return bound;
-        if (allowMissing) return null;
-        return _lowering.State.BoundAbi.RequireMethod(
-            request.Method, request.Owner,
-            type => _lowering.GetStorageTypeName(type),
-            request.ParameterOverride);
-    }
 
 }

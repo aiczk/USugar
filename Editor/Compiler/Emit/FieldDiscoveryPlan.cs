@@ -188,8 +188,11 @@ internal sealed class FieldDiscoveryPlanBuilder
                     existing.SyncMode, syncMode,
                     StringComparison.Ordinal))
                 return;
-            throw new InvalidOperationException(
-                $"Source field metadata '{name}' was bound twice.");
+            // Unity's source-facing table is name-keyed. Discovery visits the
+            // derived declaration first, so a legal non-serialized base
+            // shadow keeps the leaf metadata while its distinct internal Udon
+            // storage remains in Declarations.
+            return;
         }
         _sourceFieldsByName.Add(name, field);
         _sourceFields.Add(field);

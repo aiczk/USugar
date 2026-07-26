@@ -208,7 +208,9 @@ public static class NullableAbi
     internal static CLeaf EmitLiftedBinaryCore(CoreBuilder builder, BoundAbiPlan abi,
         CValue leftValue, bool leftNullable, ITypeSymbol leftUnderlying,
         CValue rightValue, bool rightNullable, ITypeSymbol rightUnderlying,
-        BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType, ITypeSymbol int32Type,
+        BinaryOperatorKind kind, IMethodSymbol operatorMethod,
+        BoundExtern operatorExtern,
+        ITypeSymbol resultType, ITypeSymbol int32Type,
         Func<ITypeSymbol, string> getUdonType, Func<ITypeSymbol, ITypeSymbol> resolveType,
         Func<CLeaf, ITypeSymbol, (CLeaf Value, ITypeSymbol EffectiveType)> promoteBoxed,
         Func<CLeaf, string, string, CLeaf> narrowConvert)
@@ -237,7 +239,9 @@ public static class NullableAbi
             bool resultPromotes = ExternResolver.IsSmallIntOrChar(getUdonType(resultUnder));
             var resultEffective = resultPromotes ? int32Type : resultUnder;
             var bound = operatorMethod != null
-                ? abi.RequireOperator(operatorMethod, getUdonType)
+                ? operatorExtern
+                  ?? throw new InvalidOperationException(
+                      $"Lifted operator '{operatorMethod}' has no bound extern.")
                 : abi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
                     resolveType(leftEffective), resolveType(rightEffective),
                     resolveType(resultEffective), getUdonType));
