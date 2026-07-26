@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Operations;
 
-public enum ClosedConversionKind
+internal enum ClosedConversionKind
 {
     None,
     Identity,
@@ -21,7 +21,7 @@ public enum ClosedConversionKind
 /// Body lowering consumes this value and never asks Roslyn to classify the
 /// closed pair again.
 /// </summary>
-public readonly struct ClosedConversionPlan
+internal readonly struct ClosedConversionPlan
 {
     public readonly ClosedConversionKind Kind;
     public readonly ITypeSymbol SourceType;

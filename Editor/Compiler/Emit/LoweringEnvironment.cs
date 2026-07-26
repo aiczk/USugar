@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis;
 /// Immutable services and source identity for one program compilation. This object contains no
 /// current method, control-flow stack, local binding, pending work, or output graph.
 /// </summary>
-public sealed class LoweringEnvironment
+internal sealed class LoweringEnvironment
 {
     public readonly CompilationSession Session;
     public readonly Compilation Compilation;

@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public sealed class NullableHandler : IExpressionHandler
+internal sealed class NullableHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
     readonly LValueLowerer _lvalues;

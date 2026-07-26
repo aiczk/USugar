@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `var (a, b) = ...` and `(a, b) = method()` tuple deconstruction.</summary>
-public sealed class DeconstructionAssignmentHandler : IOperationHandler
+internal sealed class DeconstructionAssignmentHandler : IOperationHandler
 {
     readonly LoweringServices _lowering;
 

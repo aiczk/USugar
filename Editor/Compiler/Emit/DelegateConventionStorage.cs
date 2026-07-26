@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Declares the complete signature-keyed delegate convention surface.</summary>
-public sealed class DelegateConventionStorage
+internal sealed class DelegateConventionStorage
 {
     readonly LoweringState _context;
     StorageContext Storage => _context.Storage;

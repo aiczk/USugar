@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class ArrayHandler : IExpressionHandler
+internal sealed class ArrayHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
     public ArrayHandler(LoweringServices lowering) => _lowering = lowering;

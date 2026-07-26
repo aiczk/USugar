@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>Core IR operations shared by synthetic delegate, receiver, and multicast bridges.</summary>
-public sealed class SyntheticBridgeBuilder
+internal sealed class SyntheticBridgeBuilder
 {
     readonly CoreBuilder _builder;
 

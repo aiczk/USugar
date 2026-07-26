@@ -13,7 +13,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// shared with LoweringServices's single-write path (PrepareArrayElementSet / TryPrepareFieldSet) so the
 /// two mechanisms can't drift on the emitted extern.
 /// </summary>
-public sealed class LValueLowerer
+internal sealed class LValueLowerer
 {
     readonly LoweringServices _lowering;
     public LValueLowerer(LoweringServices lowering)

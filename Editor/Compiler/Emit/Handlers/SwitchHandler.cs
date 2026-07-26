@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// 140-line lowering deserves its own home. Pattern matching (IPatternCaseClauseOperation)
 /// and enum-typed switch values (with EmitEnumToUnderlying conversion) are supported.
 /// </summary>
-public class SwitchHandler : IOperationHandler
+internal sealed class SwitchHandler : IOperationHandler
 {
     readonly LoweringServices _lowering;
     public SwitchHandler(LoweringServices lowering) => _lowering = lowering;

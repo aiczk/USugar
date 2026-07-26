@@ -19,7 +19,7 @@ public enum BoundarySite
 /// Emit-time boundary policy. Handlers should identify boundary sites and delegate the semantic decision
 /// here, instead of open-coding class/delegate/env escape checks per syntax shape.
 /// </summary>
-public sealed class BoundaryChecker
+internal sealed class BoundaryChecker
 {
     readonly LoweringState _ctx;
 

@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `a += b`, `a -= b`, `a++`, `++a`, etc.</summary>
-public sealed class CompoundAssignmentHandler : IExpressionHandler
+internal sealed class CompoundAssignmentHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
     readonly LValueLowerer _lvalues;

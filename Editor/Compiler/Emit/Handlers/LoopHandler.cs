@@ -3,7 +3,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class LoopHandler : IOperationHandler
+internal sealed class LoopHandler : IOperationHandler
 {
     readonly LoweringServices _lowering;
     public LoopHandler(LoweringServices lowering) => _lowering = lowering;

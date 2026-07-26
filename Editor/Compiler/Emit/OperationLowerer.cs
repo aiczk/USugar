@@ -8,7 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// Sole recursive dispatcher for Roslyn operations. Handlers recurse through this concrete owner;
 /// no callback registration or late dispatch initialization exists.
 /// </summary>
-public sealed class OperationLowerer
+internal sealed class OperationLowerer
 {
     readonly LoweringState _state;
     readonly Dictionary<OperationKind, IOperationHandler> _statements;

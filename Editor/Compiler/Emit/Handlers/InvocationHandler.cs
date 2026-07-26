@@ -3,7 +3,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public sealed class InvocationHandler : IExpressionHandler
+internal sealed class InvocationHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
     readonly DelegateInvocationLowerer _delegates;

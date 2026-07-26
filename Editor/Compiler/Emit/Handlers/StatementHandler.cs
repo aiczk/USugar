@@ -3,7 +3,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class StatementHandler : IOperationHandler
+internal sealed class StatementHandler : IOperationHandler
 {
     readonly LoweringServices _lowering;
     public StatementHandler(LoweringServices lowering) => _lowering = lowering;

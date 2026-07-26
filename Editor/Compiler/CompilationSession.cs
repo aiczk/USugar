@@ -11,7 +11,7 @@ public sealed class CompilationSession
     public Compilation Compilation { get; }
     public UdonAbiCatalog AbiCatalog { get; }
     public UdonTypeFactRegistry TypeFacts { get; }
-    public UdonTypeSystem Types { get; }
+    internal UdonTypeSystem Types { get; }
     internal ObjectArrayBehaviourAliasCensus ObjectArrayBehaviourAliases { get; }
 
     public CompilationSession(Compilation compilation, UdonAbiCatalog abiCatalog)

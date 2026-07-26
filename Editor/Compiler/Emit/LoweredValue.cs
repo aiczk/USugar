@@ -7,7 +7,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// as T -> object, so a later closed generic cast never has to reverse-walk
 /// syntax to rediscover the value actually being carried.
 /// </summary>
-public readonly struct LoweredValue
+internal readonly struct LoweredValue
 {
     public readonly CLeaf Leaf;
     public readonly ValueInfo Info;

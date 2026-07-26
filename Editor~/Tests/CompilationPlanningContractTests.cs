@@ -101,6 +101,28 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
+    public void LoweringImplementation_IsNotPublicApi()
+    {
+        var implementationTypes = new[]
+        {
+            typeof(LoweringEnvironment),
+            typeof(LoweringState),
+            typeof(LoweringServices),
+            typeof(OperationLowerer),
+            typeof(IUdonTypeSystem),
+            typeof(UdonTypeSystem),
+            typeof(UdonTypeLowering),
+            typeof(DelegateAbi),
+            typeof(ClosedConversionPlan),
+            typeof(InvocationHandler),
+        };
+
+        Assert.All(
+            implementationTypes,
+            type => Assert.False(type.IsPublic, type.FullName));
+    }
+
+    [Fact]
     public void FieldDiscoveryPlan_IsSemanticAndIrFree()
     {
         var planFields = typeof(FieldDiscoveryPlan).GetFields(

@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
 /// <summary>Emits the guarded self/cross-program delegate dispatch ladder.</summary>
-public sealed class DelegateDispatchEmitter
+internal sealed class DelegateDispatchEmitter
 {
     readonly LoweringState _ctx;
     readonly CoreBuilder _builder;

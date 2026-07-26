@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 
 /// <summary>Emits exports that adapt interface layout fields to class implementations.</summary>
-public sealed class InterfaceBridgeEmitter
+internal sealed class InterfaceBridgeEmitter
 {
     readonly LoweringState _context;
     readonly SyntheticBridgeBuilder _bridge;

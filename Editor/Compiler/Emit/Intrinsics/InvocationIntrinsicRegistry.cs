@@ -11,7 +11,7 @@ using Microsoft.CodeAnalysis.Operations;
 /// describes an overload family with optional SDK parameters such as
 /// includeInactive.
 /// </summary>
-public sealed class IntrinsicKey
+internal sealed class IntrinsicKey
 {
     readonly HashSet<string> _containingTypes;
     readonly HashSet<string> _methods;
@@ -81,14 +81,14 @@ public sealed class IntrinsicKey
     }
 }
 
-public delegate bool InvocationIntrinsicPredicate(
+internal delegate bool InvocationIntrinsicPredicate(
     InvocationHandler handler, IInvocationOperation operation, IMethodSymbol target);
 
-public delegate CLeaf InvocationIntrinsicLowerer(
+internal delegate CLeaf InvocationIntrinsicLowerer(
     InvocationHandler handler, IInvocationOperation operation, IMethodSymbol target);
 
 /// <summary>One declarative match key plus semantic applicability and lowering.</summary>
-public sealed class InvocationIntrinsicRule
+internal sealed class InvocationIntrinsicRule
 {
     public string Name { get; }
     public IntrinsicKey Key { get; }
@@ -120,7 +120,7 @@ public sealed class InvocationIntrinsicRule
 }
 
 /// <summary>Ordered, immutable invocation-intrinsic dispatch table.</summary>
-public sealed class InvocationIntrinsicRegistry
+internal sealed class InvocationIntrinsicRegistry
 {
     readonly IReadOnlyList<InvocationIntrinsicRule> _rules;
 

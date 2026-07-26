@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
-public sealed class LoweringState
+internal sealed class LoweringState
 {
     readonly LoweringEnvironment Environment;
     public Compilation Compilation => Environment.Compilation;

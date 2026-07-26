@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public class ExpressionHandler : IExpressionHandler
+internal sealed class ExpressionHandler : IExpressionHandler
 {
     readonly LoweringServices _lowering;
     public ExpressionHandler(LoweringServices lowering) => _lowering = lowering;

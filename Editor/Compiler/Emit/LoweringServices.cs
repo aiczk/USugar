@@ -5,7 +5,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-public sealed class LoweringServices
+internal sealed class LoweringServices
 {
     internal readonly LoweringState _state;
 

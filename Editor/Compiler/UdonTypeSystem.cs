@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis;
 /// How one source type is represented in Udon storage. This is semantic
 /// provenance, not a reconstruction from the emitted storage name.
 /// </summary>
-public enum UdonRepresentationKind
+internal enum UdonRepresentationKind
 {
     Exact,
     NativeArray,
@@ -19,7 +19,7 @@ public enum UdonRepresentationKind
 }
 
 /// <summary>Whether a SystemType runtime test can answer the source-level type question.</summary>
-public enum UdonRuntimeTypeTest
+internal enum UdonRuntimeTypeTest
 {
     Unsupported,
     Exact,
@@ -30,7 +30,7 @@ public enum UdonRuntimeTypeTest
 /// One authoritative source-to-Udon lowering decision. Heap layout, enum
 /// synthesis, runtime type tests, and ABI binding consume this same value.
 /// </summary>
-public readonly struct UdonTypeLowering
+internal readonly struct UdonTypeLowering
 {
     public UdonTypeId SourceType { get; }
     public StorageType Storage { get; }
@@ -62,7 +62,7 @@ public readonly struct UdonTypeLowering
     }
 }
 
-public interface IUdonTypeSystem
+internal interface IUdonTypeSystem
 {
     UdonTypeLowering Describe(
         ITypeSymbol type,
@@ -93,7 +93,7 @@ public interface IUdonTypeSystem
 /// ABI catalog, while ExternResolver itself remains pure for editor reflection
 /// utilities that do not produce IR.
 /// </summary>
-public sealed class UdonTypeSystem : IUdonTypeSystem
+internal sealed class UdonTypeSystem : IUdonTypeSystem
 {
     readonly UdonTypeFactRegistry _facts;
     readonly ObjectArrayBehaviourAliasCensus _objectArrayBehaviourAliases;

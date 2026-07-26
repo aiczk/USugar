@@ -9,7 +9,7 @@ using Microsoft.CodeAnalysis;
 /// explicit provenance tag so SystemObjectArray can be distinguished from class/aggregate/env bundles
 /// by convention instead of only by the static type at the producer.
 /// </summary>
-public static class DelegateAbi
+internal static class DelegateAbi
 {
     /// <summary>bundle[0]: SystemString ABI provenance tag.</summary>
     public const int Kind = 0;
