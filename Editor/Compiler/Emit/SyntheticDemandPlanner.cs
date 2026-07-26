@@ -85,12 +85,12 @@ internal sealed class SyntheticDemandPlanner
         if (operation is IConversionOperation conversion
             && DelegateDemandPolicy.TryGetVariantConversion(
                 lowering.Compilation, conversion, lowering.State.Types,
-                lowering.State.Generics.TypeParamMap,
+                lowering.State.TypeParamMap,
                 out var outerInvoke, out var innerInvoke))
         {
             lowering.PlanWrapperSig(
                 outerInvoke, innerInvoke,
-                lowering.State.Generics.TypeParamMap);
+                lowering.State.TypeParamMap);
             return;
         }
         if (operation is ICompoundAssignmentOperation compound
@@ -103,7 +103,7 @@ internal sealed class SyntheticDemandPlanner
         {
             var signature = DelegateAbi.BuildSigPart(
                 invoke, lowering.State.Types,
-                lowering.State.Generics.TypeParamMap);
+                lowering.State.TypeParamMap);
             lowering.PlanMulticastSig(
                 signature, invoke,
                 compound.OperatorKind == BinaryOperatorKind.Add
@@ -123,7 +123,7 @@ internal sealed class SyntheticDemandPlanner
             lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
                     binaryInvoke, lowering.State.Types,
-                    lowering.State.Generics.TypeParamMap),
+                    lowering.State.TypeParamMap),
                 binaryInvoke,
                 binary.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine
@@ -142,7 +142,7 @@ internal sealed class SyntheticDemandPlanner
             lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
                     eventInvoke, lowering.State.Types,
-                    lowering.State.Generics.TypeParamMap),
+                    lowering.State.TypeParamMap),
                 eventInvoke,
                 eventAssignment.Adds
                     ? MulticastOperations.Combine

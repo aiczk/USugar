@@ -28,11 +28,11 @@ internal readonly struct LoweredValue
         if (context == null) throw new System.ArgumentNullException(nameof(context));
         if (operation == null) throw new System.ArgumentNullException(nameof(operation));
         var semanticType = context.Program.Types.Resolve(
-            operation.Type, context.Generics.TypeParamMap);
+            operation.Type, context.TypeParamMap);
         var carrierOperation = FindCarrier(operation, context);
         var carrierType = context.Program.Types.Resolve(
             carrierOperation?.Type ?? operation.Type,
-            context.Generics.TypeParamMap);
+            context.TypeParamMap);
         return new LoweredValue(
             leaf, context.Boundary.ClassifyValue(operation),
             semanticType, carrierType);
@@ -44,7 +44,7 @@ internal readonly struct LoweredValue
                && conversion.OperatorMethod == null)
         {
             var destination = context.Program.Types.Resolve(
-                conversion.Type, context.Generics.TypeParamMap);
+                conversion.Type, context.TypeParamMap);
             var semantics = conversion.Conversion;
             var preservesCarrier =
                 destination?.SpecialType == SpecialType.System_Object

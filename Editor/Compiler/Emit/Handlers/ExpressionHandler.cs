@@ -559,7 +559,9 @@ internal sealed class ExpressionHandler : IExpressionHandler
         // `conv.Type is IArrayTypeSymbol` test would miss it (mirrors the scalar arm's ResolveType).
         var variantDst = _lowering.ResolveType(conv.Type);
         if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
-            && ContainsVariantDelegateConversion(conv.Operand.Type, conv.Type, _lowering.State.Generics.TypeParamMap))
+            && ContainsVariantDelegateConversion(
+                conv.Operand.Type, conv.Type,
+                _lowering.State.TypeParamMap))
             throw new System.NotSupportedException(
                 $"Variant delegate conversion from '{conv.Operand.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
                 + $"to '{conv.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
@@ -578,14 +580,19 @@ internal sealed class ExpressionHandler : IExpressionHandler
         // is a source carrying NO visible delegate — object / object[]). Keep the value typed as its
         // delegate-carrying type instead of routing it through object.
         if ((variantDst is IArrayTypeSymbol || (variantDst as INamedTypeSymbol)?.IsTupleType == true)
-            && StructurallyContainsDelegate(variantDst, _lowering.State.Generics.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+            && StructurallyContainsDelegate(
+                variantDst, _lowering.State.TypeParamMap,
+                new HashSet<ITypeSymbol>(
+                    SymbolEqualityComparer.Default)))
         {
             var stripped = conv.Operand;
             while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
             var isNull = stripped is IDefaultValueOperation
                 || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
             var srcCarriesDelegate = StructurallyContainsDelegate(_lowering.ResolveType(stripped?.Type),
-                _lowering.State.Generics.TypeParamMap, new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
+                _lowering.State.TypeParamMap,
+                new HashSet<ITypeSymbol>(
+                    SymbolEqualityComparer.Default));
             if (!isNull && !srcCarriesDelegate)
                 throw new System.NotSupportedException(
                     $"Cast from '{(_lowering.ResolveType(conv.Operand.Type) ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
@@ -623,13 +630,15 @@ internal sealed class ExpressionHandler : IExpressionHandler
             // fan-out, sidestepping the sig-filter question entirely for this arm).
             if (DelegateDemandPolicy.TryGetVariantConversion(
                     _lowering.Compilation, conv, _lowering.State.Types,
-                    _lowering.State.Generics.TypeParamMap,
+                    _lowering.State.TypeParamMap,
                     out var vDstInvoke, out var vSrcInvoke))
             {
                 // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
             // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under
                 // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
-                var wrapperName = _lowering.RequireWrapperSig(vDstInvoke, vSrcInvoke, _lowering.State.Generics.TypeParamMap);
+                var wrapperName = _lowering.RequireWrapperSig(
+                    vDstInvoke, vSrcInvoke,
+                    _lowering.State.TypeParamMap);
 
                 // A null delegate VALUE converts to null (C# semantics: converting null is null) — never
                 // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from
@@ -678,10 +687,10 @@ internal sealed class ExpressionHandler : IExpressionHandler
                 var safeRoundtrip = _lowering.ResolveType(stripped?.Type) is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
                     && DelegateAbi.BuildSigPart(
                            sInvoke, _lowering.State.Types,
-                           _lowering.State.Generics.TypeParamMap)
+                           _lowering.State.TypeParamMap)
                        == DelegateAbi.BuildSigPart(
                            lInvoke, _lowering.State.Types,
-                           _lowering.State.Generics.TypeParamMap);
+                           _lowering.State.TypeParamMap);
                 if (!isNull && !safeRoundtrip)
                     throw new System.NotSupportedException(
                         $"Cast from '{(convSrcType ?? conv.Operand.Type)?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat) ?? "object"}' "
@@ -921,7 +930,7 @@ internal sealed class ExpressionHandler : IExpressionHandler
             && arr.ElementType.SpecialType == SpecialType.System_Object;
         if (!stockObjectArray
             && !_lowering.State.Types.IsRuntimeDistinguishable(
-                operand, _lowering.State.Generics.TypeParamMap)
+                operand, _lowering.State.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(
                 $"typeof('{(_lowering.ResolveType(operand) ?? operand).ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') "
@@ -1062,13 +1071,13 @@ internal sealed class ExpressionHandler : IExpressionHandler
             && op.Type is INamedTypeSymbol vDelegateType && vDelegateType.DelegateInvokeMethod is { } vInvoke
             && DelegateAbi.BuildSigPart(
                    vInvoke, _lowering.State.Types,
-                   _lowering.State.Generics.TypeParamMap)
+                   _lowering.State.TypeParamMap)
                != DelegateAbi.BuildSigPart(
                    targetMethodForValidation, _lowering.State.Types,
-                   _lowering.State.Generics.TypeParamMap);
+                   _lowering.State.TypeParamMap);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
             targetMethodForValidation, _lowering.State.Types,
-            _lowering.State.Generics.TypeParamMap, varianceResolved);
+            _lowering.State.TypeParamMap, varianceResolved);
 
         var thisType = _lowering.GetStorageTypeName(_lowering.ClassSymbol);
         // Addr discipline (§1.3): the only sources for DelegateAbi.Addr are the back-patched funcaddr const

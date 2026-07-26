@@ -19,7 +19,7 @@ internal sealed class SpecializationRegistrar
             map = TypeEnvironment.ForMethod(candidate.OwnerSpecs[i], map);
         map = TypeEnvironment.ForMethod(candidate.Method, map);
         using var genericScope =
-            _lowering.State.Generics.EnterOverlayScope(map);
+            _lowering.State.EnterTypeParamOverlay(map);
         using var methodScope =
             _lowering.State.Methods.EnterCallableScope(
                 candidate.OwnerSpecs.Length > 0

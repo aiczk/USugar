@@ -107,7 +107,8 @@ internal sealed class OperatorHandler : IExpressionHandler
             var combineRightVal = _lowering.VisitExpression(op.RightOperand);
 
             var sigPart = DelegateAbi.BuildSigPart(
-                invoke, _lowering.State.Types, _lowering.State.Generics.TypeParamMap);
+                invoke, _lowering.State.Types,
+                _lowering.State.TypeParamMap);
             _lowering.RequireMulticastSig(sigPart, invoke,
                 op.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine

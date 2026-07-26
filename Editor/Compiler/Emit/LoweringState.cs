@@ -27,7 +27,8 @@ internal sealed class LoweringState
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
     internal OperationLowerer Operations { get; private set; }
-    public readonly GenericContext Generics = new GenericContext();
+    public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+        TypeParamMap { get; private set; }
     public readonly Dictionary<(object Func, int ScopeId), int>
         ScopeEnvSlots = new();
     internal AggregateLayoutTable Aggregates
@@ -193,12 +194,57 @@ internal sealed class LoweringState
     // rather than silently inheriting someone else's map. Dispose is the SOLE clear site, so the map
     // is cleared even if body emission throws.
     public IDisposable EnterTypeParamScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
-        => Generics.EnterScope(map, Methods.CurrentMethod);
+    {
+        if (TypeParamMap != null)
+            throw new InvalidOperationException(
+                "EnterTypeParamScope: a type-param map is already "
+                + "active on entry to "
+                + $"'{Methods.CurrentMethod?.ToDisplayString() ?? "(none)"}'; "
+                + "a prior scope was not disposed.");
+        TypeParamMap = map;
+        return new TypeParamScopeToken(this, null);
+    }
+
+    public IDisposable EnterTypeParamOverlay(
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+    {
+        var previous = TypeParamMap;
+        TypeParamMap = map;
+        return new TypeParamScopeToken(this, previous);
+    }
+
+    sealed class TypeParamScopeToken : IDisposable
+    {
+        readonly LoweringState _state;
+        readonly IReadOnlyDictionary<
+            ITypeParameterSymbol,
+            ITypeSymbol> _previous;
+        bool _disposed;
+
+        public TypeParamScopeToken(
+            LoweringState state,
+            IReadOnlyDictionary<
+                ITypeParameterSymbol,
+                ITypeSymbol> previous)
+        {
+            _state = state;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                throw new InvalidOperationException(
+                    "TypeParamScopeToken disposed twice.");
+            _disposed = true;
+            _state.TypeParamMap = _previous;
+        }
+    }
 
     public StorageType ResolveStorageType(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
     {
-        var map = typeParameterMap ?? Generics.TypeParamMap;
+        var map = typeParameterMap ?? TypeParamMap;
         return Types.GetStorageType(type, map);
     }
 
@@ -208,7 +254,7 @@ internal sealed class LoweringState
             typeParameterMap = null)
     {
         if (type == null) return null;
-        var map = typeParameterMap ?? Generics.TypeParamMap;
+        var map = typeParameterMap ?? TypeParamMap;
         return Types.Resolve(type, map);
     }
 

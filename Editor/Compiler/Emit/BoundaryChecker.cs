@@ -26,7 +26,7 @@ internal sealed class BoundaryChecker
     public BoundaryChecker(LoweringState ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
     RuntimeShape ShapeOf(ITypeSymbol type)
-        => _ctx.Types.Describe(type, _ctx.Generics.TypeParamMap).SourceShape
+        => _ctx.Types.Describe(type, _ctx.TypeParamMap).SourceShape
            ?? throw new InvalidOperationException(
                $"Source type '{type}' has no semantic runtime shape.");
 

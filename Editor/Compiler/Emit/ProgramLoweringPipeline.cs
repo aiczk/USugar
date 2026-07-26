@@ -33,7 +33,8 @@ internal sealed class ProgramLoweringPipeline
     IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
     List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
         => _state.Methods.PendingBodies;
-    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
+    IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap
+        => _state.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.FieldInitOps;
@@ -1425,7 +1426,7 @@ internal sealed class ProgramLoweringPipeline
             BoundMethodBody body)
         {
             using var genericScope =
-                _state.Generics.EnterOverlayScope(typeMap);
+                _state.EnterTypeParamOverlay(typeMap);
             BindTree(operation, typeMap, scope, body, true);
         }
 
@@ -1575,7 +1576,9 @@ internal sealed class ProgramLoweringPipeline
                     : null;
             using var methodScope = _state.Methods.EnterCallableScope(
                 method, body.Closure, receiverId, body.OwnerSpecs);
-            using var genericScope = _state.Generics.EnterOverlayScope(body.TypeParameterMap);
+            using var genericScope =
+                _state.EnterTypeParamOverlay(
+                    body.TypeParameterMap);
             PlanSyntheticDemands(
                 methodBodies.Require(method.OriginalDefinition).AnalysisRoot,
                 true,
@@ -2215,7 +2218,7 @@ internal sealed class ProgramLoweringPipeline
                 using var bindingScope = _state.EnterBindingScope(
                     initializer.Scope);
                 using var genericScope = initializer.TypeParameterMap != null
-                    ? _state.Generics.EnterOverlayScope(
+                    ? _state.EnterTypeParamOverlay(
                         initializer.TypeParameterMap)
                     : null;
                 // Bare array initializer { 1, 2, 3 } → synthesize array creation + element Set

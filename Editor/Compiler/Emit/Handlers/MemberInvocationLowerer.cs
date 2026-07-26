@@ -608,7 +608,7 @@ internal sealed class MemberInvocationLowerer
             initializer.Binding.Scope);
         using var genericScope =
             initializer.Binding.TypeParameterMap != null
-            ? _lowering.State.Generics.EnterOverlayScope(
+            ? _lowering.State.EnterTypeParamOverlay(
                 initializer.Binding.TypeParameterMap)
             : null;
         return _lowering.VisitExpression(initializer.Operation);

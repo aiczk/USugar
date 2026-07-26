@@ -51,7 +51,8 @@ internal sealed class LoweringServices
     internal IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
     internal List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
         => _state.Methods.PendingBodies;
-    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
+    internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+        _typeParamMap => _state.TypeParamMap;
     internal Dictionary<ILocalSymbol, LocalBinding> _localBindings => _state.Storage.LocalBindings;
     internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.FieldInitOps;
     internal Dictionary<string, string> _fieldChangeCallbacks => _state.FieldChangeCallbacks;
@@ -153,7 +154,8 @@ internal sealed class LoweringServices
     internal StorageType GetStorageType(ITypeSymbol type)
         => _state.ResolveStorageType(type);
     internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
-    internal TypeClassifierContext TypeCtx => new TypeClassifierContext(_state.Generics.TypeParamMap);
+    internal TypeClassifierContext TypeCtx
+        => new TypeClassifierContext(_state.TypeParamMap);
     internal ITypeSymbol ResolveType(ITypeSymbol type)
         => _state.ResolveSourceType(type);
     internal bool IsFoldedEnum(ITypeSymbol type)
@@ -238,7 +240,8 @@ internal sealed class LoweringServices
             return SlotRef(guarded);
         }
         ClassAbiPolicy.ValidateRuntimeTypeTest(
-            ResolveType(targetType), _state.Generics.TypeParamMap, _state.Types);
+            ResolveType(targetType), _state.TypeParamMap,
+            _state.Types);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
@@ -1685,7 +1688,7 @@ internal sealed class LoweringServices
         MulticastOperations operation)
     {
         _state.SyntheticDemandPlanner.RegisterMulticast(
-            sigPart, invoke, _state.Generics.TypeParamMap, operation);
+            sigPart, invoke, _state.TypeParamMap, operation);
     }
 
     internal void RequireMulticastSig(
@@ -2261,7 +2264,9 @@ internal sealed class LoweringServices
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
-            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(
+                targetMethod, bridgeExportName,
+                _state.TypeParamMap);
         }
         // For hoisted lambdas/local functions, create a pending bridge dynamically
         // since they aren't part of the TypeLayout's pre-computed bridges.
@@ -2298,7 +2303,9 @@ internal sealed class LoweringServices
                     bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
-            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(
+                targetMethod, bridgeExportName,
+                _state.TypeParamMap);
         }
         else if (targetMethod.IsGenericMethod)
         {
@@ -2342,7 +2349,9 @@ internal sealed class LoweringServices
                     + "(the specialization's bridge must live in this program).");
             RequireRegisteredCallable(constructed);
             bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
-            PlanDelegateDemand(constructed, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(
+                constructed, bridgeExportName,
+                _state.TypeParamMap);
             // B52: advance targetMethod to the registered specialization (mirroring the local-function
             // arm) so the variance/adapter block below enqueues the ADAPTER against the spec that is
             // actually emitted — otherwise the adapter names the raw generic definition, EmitPending-
@@ -2360,7 +2369,9 @@ internal sealed class LoweringServices
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
-            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(
+                targetMethod, bridgeExportName,
+                _state.TypeParamMap);
         }
         // R-M2 (design §2): a method-group binding of a THIS-CLASS private / private-internal method. The
         // planner no longer plans a speculative bridge for it (LayoutPlanBuilder.IsExcludedFromSpeculativeBridge),
@@ -2382,7 +2393,9 @@ internal sealed class LoweringServices
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
             bridgeExportName = DelegateAbi.BridgeName(privFunc.Name);
-            PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
+            PlanDelegateDemand(
+                targetMethod, bridgeExportName,
+                _state.TypeParamMap);
         }
         else
         {
@@ -2406,10 +2419,10 @@ internal sealed class LoweringServices
         {
             var sigS = DelegateAbi.BuildSigPart(
                 delegateInvoke, _state.Types,
-                _state.Generics.TypeParamMap);
+                _state.TypeParamMap);
             if (sigS != DelegateAbi.BuildSigPart(
                     targetMethod, _state.Types,
-                    _state.Generics.TypeParamMap))
+                    _state.TypeParamMap))
             {
                 if (targetInstance == null)
                 {
@@ -2435,7 +2448,8 @@ internal sealed class LoweringServices
                     var adapterBinding = new DelegateBindingPlan(
                         DelegateBindingKind.SignatureAdapter, adapterTarget, adapterName);
                     _state.SyntheticDemandPlanner.RegisterSigAdapter(
-                        adapterBinding, delegateInvoke, _state.Generics.TypeParamMap);
+                        adapterBinding, delegateInvoke,
+                        _state.TypeParamMap);
                     return new MaterializedDelegateBinding(
                         adapterBinding,
                         FuncRef(adapterName), targetInstance, envLeaf);
@@ -2448,7 +2462,9 @@ internal sealed class LoweringServices
                 // targetMethod's OWN plain bridge (bridgeExportName, planned unconditionally on the
                 // FOREIGN class per its speculative-bridge policy), which reads/writes sig-T's conv
                 // vars — staging under sig-S would silently drop values across the dispatch.
-                var wrapperName = PlanWrapperSig(delegateInvoke, targetMethod, _state.Generics.TypeParamMap);
+                var wrapperName = PlanWrapperSig(
+                    delegateInvoke, targetMethod,
+                    _state.TypeParamMap);
                 return new MaterializedDelegateBinding(
                     new DelegateBindingPlan(
                         DelegateBindingKind.Wrapper,
