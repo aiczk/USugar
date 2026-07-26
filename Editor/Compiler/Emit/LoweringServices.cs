@@ -2477,8 +2477,8 @@ public sealed class LoweringServices
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
                     // SS2B: a closure target's func was registered under the plain bridge name above;
                     // the adapter drain resolves by name, so alias it under the adapter name too.
-                    if (_state.Synthetics.TryGetClosureBridge(bridgeExportName, out var closureTargetFunc))
-                        _state.Synthetics.RegisterClosureBridge(adapterName, closureTargetFunc);
+                    _state.Synthetics.RegisterClosureBridgeAlias(
+                        bridgeExportName, adapterName);
                     // [X1] leaf mapping, adapter flavor (C3 stage 2): a this-receiver VIRTUAL method
                     // group statically binds the BASE declaration, but the adapter's InternalCall must
                     // run the most-derived override visible from the compiled class — exactly like the

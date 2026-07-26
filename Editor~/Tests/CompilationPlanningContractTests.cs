@@ -396,6 +396,13 @@ class C
         var plan = context.PublishPlan();
 
         Assert.Equal(planned, Assert.Single(plan.EnumToStringTypes));
+        Assert.All(
+            typeof(SyntheticContext).GetFields(
+                    BindingFlags.Instance | BindingFlags.Public
+                    | BindingFlags.NonPublic)
+                .Select(field => field.GetValue(context))
+                .OfType<System.Collections.ICollection>(),
+            collection => Assert.Empty(collection));
         Assert.Throws<InvalidOperationException>(() => context.RegisterEnumToString(late));
         context.VerifyEmissionComplete();
     }

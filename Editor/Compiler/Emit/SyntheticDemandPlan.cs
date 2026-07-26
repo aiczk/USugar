@@ -13,12 +13,14 @@ internal sealed class SyntheticDemandPlan
     readonly IReadOnlyDictionary<string, string> _closureBridgeTargets;
     readonly IReadOnlyDictionary<string, DelegateBindingPlan> _delegateBindings;
     readonly HashSet<INamedTypeSymbol> _enumToStringTypes;
+    readonly HashSet<INamedTypeSymbol> _classToStringTypes;
     readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _receiverBridges;
     readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _delegateBridges;
     readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _signatureAdapterBridges;
 
     public readonly IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges;
+    public readonly IReadOnlyCollection<string> DelegateSites;
     public readonly IReadOnlyDictionary<string, MulticastSigPlan> MulticastSignatures;
     public readonly IReadOnlyCollection<INamedTypeSymbol> EnumToStringTypes;
     public readonly IReadOnlyCollection<INamedTypeSymbol> ClassToStringTypes;
@@ -45,6 +47,8 @@ internal sealed class SyntheticDemandPlan
                         nameof(closureBridgeFunctions)),
                 StringComparer.Ordinal));
         _delegateBindings = CopyMap(delegateBindings);
+        DelegateSites = Array.AsReadOnly(
+            delegateBindings.Keys.ToArray());
         var receiverBridgeArray = receiverBridges.ToArray();
         var delegateBridgeArray = delegateBridges.ToArray();
         var signatureAdapterArray = signatureAdapterBridges.ToArray();
@@ -58,13 +62,30 @@ internal sealed class SyntheticDemandPlan
         _enumToStringTypes = new HashSet<INamedTypeSymbol>(
             enums, SymbolEqualityComparer.Default);
         EnumToStringTypes = Array.AsReadOnly(enums);
-        ClassToStringTypes = Array.AsReadOnly(classToStringTypes.ToArray());
+        var classes = classToStringTypes.ToArray();
+        _classToStringTypes = new HashSet<INamedTypeSymbol>(
+            classes, SymbolEqualityComparer.Default);
+        ClassToStringTypes = Array.AsReadOnly(classes);
         SignatureAdapterBridges = Array.AsReadOnly(signatureAdapterArray);
         WrapperSignatures = CopyMap(wrapperSignatures);
     }
 
     public bool TryGetClosureBridge(string name, out string functionName)
         => _closureBridgeTargets.TryGetValue(name, out functionName);
+
+    public void RequireClosureBridge(
+        string bridgeName,
+        string functionName)
+    {
+        if (_closureBridgeTargets.TryGetValue(
+                bridgeName, out var planned)
+            && string.Equals(
+                planned, functionName, StringComparison.Ordinal))
+            return;
+        throw new InvalidOperationException(
+            $"Closure bridge '{bridgeName}' targeting '{functionName}' "
+            + "was absent from the bound program.");
+    }
 
     public DelegateBindingPlan RequireDelegateBinding(string site)
         => _delegateBindings.TryGetValue(site, out var binding)
@@ -88,6 +109,16 @@ internal sealed class SyntheticDemandPlan
             $"Enum ToString helper for '{enumType}' was absent from the bound program.");
     }
 
+    public INamedTypeSymbol RequireClassToString(
+        INamedTypeSymbol classType)
+    {
+        if (_classToStringTypes.Contains(classType))
+            return classType;
+        throw new InvalidOperationException(
+            $"Class ToString dispatch for '{classType}' "
+            + "was absent from the bound program.");
+    }
+
     public string RequireWrapper(string wrapperName)
     {
         if (WrapperSignatures.ContainsKey(wrapperName)) return wrapperName;
@@ -95,21 +126,22 @@ internal sealed class SyntheticDemandPlan
             $"Delegate wrapper '{wrapperName}' was absent from the bound program.");
     }
 
-    public void RequireReceiverBridge(string bridgeName)
+    public DelegateBridgeDemand RequireReceiverBridge(string bridgeName)
         => RequireBridge(_receiverBridges, bridgeName, "receiver bridge");
 
-    public void RequireDelegateBridge(string bridgeName)
+    public DelegateBridgeDemand RequireDelegateBridge(string bridgeName)
         => RequireBridge(_delegateBridges, bridgeName, "delegate bridge");
 
-    public void RequireSignatureAdapter(string bridgeName)
+    public DelegateBridgeDemand RequireSignatureAdapter(string bridgeName)
         => RequireBridge(_signatureAdapterBridges, bridgeName, "signature adapter");
 
-    static void RequireBridge(
+    static DelegateBridgeDemand RequireBridge(
         IReadOnlyDictionary<string, DelegateBridgeDemand> bridges,
         string bridgeName,
         string category)
     {
-        if (bridges.ContainsKey(bridgeName)) return;
+        if (bridges.TryGetValue(bridgeName, out var demand))
+            return demand;
         throw new InvalidOperationException(
             $"Synthetic {category} '{bridgeName}' was absent from the bound program.");
     }

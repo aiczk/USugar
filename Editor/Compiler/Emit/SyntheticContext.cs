@@ -72,6 +72,7 @@ public sealed class SyntheticContext
 
     bool _emissionVerified;
     bool _demandsPublished;
+    SyntheticDemandPlan _publishedPlan;
     HashSet<string> _expectedDelegateSites;
     readonly Dictionary<string, DelegateBindingPlan> _plannedDelegateSites = new(StringComparer.Ordinal);
     readonly HashSet<string> _emittedDelegateSites = new(StringComparer.Ordinal);
@@ -88,6 +89,9 @@ public sealed class SyntheticContext
     public void PlanDelegateBinding(string key, DelegateBindingPlan binding)
     {
         RequireMutable();
+        if (_demandsPublished)
+            throw new InvalidOperationException(
+                $"Delegate binding at '{key}' was first planned during body emission.");
         if (string.IsNullOrEmpty(key)) throw new ArgumentException("Delegate site key is required.", nameof(key));
         if (_expectedDelegateSites == null || !_expectedDelegateSites.Contains(key))
             throw new InvalidOperationException(
@@ -105,9 +109,8 @@ public sealed class SyntheticContext
     public void RecordDelegateBinding(string key, DelegateBindingPlan binding)
     {
         RequireMutable();
-        if (!_plannedDelegateSites.TryGetValue(key, out var planned))
-            throw new InvalidOperationException(
-                $"Delegate binding at '{key}' was absent from the pre-emission binding plan.");
+        var planned = RequirePublishedPlan()
+            .RequireDelegateBinding(key);
         if (!SameBinding(planned, binding))
             throw new InvalidOperationException(
                 $"Delegate site '{key}' emitted binding '{binding.BridgeName}' but planned "
@@ -126,8 +129,7 @@ public sealed class SyntheticContext
             if (!_plannedDelegateSites.ContainsKey(site))
                 throw new InvalidOperationException(
                     $"Delegate site '{site}' was not bound during synthetic demand planning.");
-        _demandsPublished = true;
-        return new SyntheticDemandPlan(
+        var plan = new SyntheticDemandPlan(
             _closureBridgeFuncs,
             _plannedDelegateSites,
             _receiverBridges.Values,
@@ -137,6 +139,19 @@ public sealed class SyntheticContext
             _classToString,
             _sigAdapterBridges.Values,
             _wrapperSigs);
+        _demandsPublished = true;
+        _publishedPlan = plan;
+        _closureBridgeFuncs.Clear();
+        _plannedDelegateSites.Clear();
+        _receiverBridges.Clear();
+        _delegateBridges.Clear();
+        _multicastSigs.Clear();
+        _enumToString.Clear();
+        _classToString.Clear();
+        _sigAdapterBridges.Clear();
+        _wrapperSigs.Clear();
+        _expectedDelegateSites = null;
+        return plan;
     }
 
     void RequireMutable()
@@ -148,30 +163,75 @@ public sealed class SyntheticContext
     public void RegisterClosureBridge(string name, StructuredFunction function)
     {
         RequireMutable();
-        if (_demandsPublished && !_closureBridgeFuncs.ContainsKey(name))
-            throw new InvalidOperationException(
-                $"Closure bridge '{name}' was first discovered during body emission.");
+        if (function == null)
+            throw new ArgumentNullException(nameof(function));
+        if (_demandsPublished)
+        {
+            RequirePublishedPlan().RequireClosureBridge(
+                name, function.Name);
+            return;
+        }
         _closureBridgeFuncs[name] = function;
     }
 
-    public bool TryGetClosureBridge(string name, out StructuredFunction function)
-        => _closureBridgeFuncs.TryGetValue(name, out function);
+    public bool RegisterClosureBridgeAlias(
+        string sourceName,
+        string aliasName)
+    {
+        RequireMutable();
+        if (_demandsPublished)
+        {
+            var plan = RequirePublishedPlan();
+            if (!plan.TryGetClosureBridge(
+                    sourceName, out var functionName))
+                return false;
+            plan.RequireClosureBridge(aliasName, functionName);
+            return true;
+        }
+        if (!_closureBridgeFuncs.TryGetValue(
+                sourceName, out var function))
+            return false;
+        RegisterClosureBridge(aliasName, function);
+        return true;
+    }
 
     public void RegisterReceiverBridge(DelegateBindingPlan binding)
     {
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.Receiver)
             throw new ArgumentException("Receiver bridge demand requires a receiver binding.", nameof(binding));
-        RegisterUnique(_receiverBridges,
-            new DelegateBridgeDemand(binding, binding.TargetMethod, null), "receiver bridge");
+        var demand = new DelegateBridgeDemand(
+            binding, binding.TargetMethod, null);
+        if (_demandsPublished)
+        {
+            RequireSameDemand(
+                RequirePublishedPlan().RequireReceiverBridge(
+                    binding.BridgeName),
+                demand,
+                "receiver bridge");
+            return;
+        }
+        RegisterUnique(
+            _receiverBridges, demand, "receiver bridge");
     }
 
     public void RegisterDelegateBridge(DelegateBindingPlan binding,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
     {
         RequireMutable();
-        RegisterUnique(_delegateBridges,
-            new DelegateBridgeDemand(binding, binding.TargetMethod, typeParamMap), "delegate bridge");
+        var demand = new DelegateBridgeDemand(
+            binding, binding.TargetMethod, typeParamMap);
+        if (_demandsPublished)
+        {
+            RequireSameDemand(
+                RequirePublishedPlan().RequireDelegateBridge(
+                    binding.BridgeName),
+                demand,
+                "delegate bridge");
+            return;
+        }
+        RegisterUnique(
+            _delegateBridges, demand, "delegate bridge");
     }
 
     public void RegisterSigAdapter(DelegateBindingPlan binding, IMethodSymbol invoke,
@@ -180,8 +240,19 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.SignatureAdapter)
             throw new ArgumentException("Signature adapter demand requires an adapter binding.", nameof(binding));
-        RegisterUnique(_sigAdapterBridges,
-            new DelegateBridgeDemand(binding, invoke, typeParamMap), "signature adapter");
+        var demand = new DelegateBridgeDemand(
+            binding, invoke, typeParamMap);
+        if (_demandsPublished)
+        {
+            RequireSameDemand(
+                RequirePublishedPlan().RequireSignatureAdapter(
+                    binding.BridgeName),
+                demand,
+                "signature adapter");
+            return;
+        }
+        RegisterUnique(
+            _sigAdapterBridges, demand, "signature adapter");
     }
 
     public void RegisterMulticast(string signature, IMethodSymbol invoke,
@@ -189,11 +260,12 @@ public sealed class SyntheticContext
         MulticastOperations operation)
     {
         RequireMutable();
-        if (_demandsPublished
-            && (!_multicastSigs.TryGetValue(signature, out var planned)
-                || (planned.Operations & operation) != operation))
-            throw new InvalidOperationException(
-                $"Multicast demand '{signature}' ({operation}) was first discovered during body emission.");
+        if (_demandsPublished)
+        {
+            RequirePublishedPlan().RequireMulticast(
+                signature, operation);
+            return;
+        }
         _multicastSigs[signature] = _multicastSigs.TryGetValue(signature, out var existing)
             ? existing.With(operation)
             : new MulticastSigPlan(invoke, typeParamMap, operation);
@@ -202,18 +274,22 @@ public sealed class SyntheticContext
     public void RegisterEnumToString(INamedTypeSymbol enumType)
     {
         RequireMutable();
-        if (_demandsPublished && !_enumToString.Contains(enumType))
-            throw new InvalidOperationException(
-                $"Enum ToString helper for '{enumType}' was first discovered during body emission.");
+        if (_demandsPublished)
+        {
+            RequirePublishedPlan().RequireEnumToString(enumType);
+            return;
+        }
         _enumToString.Add(enumType);
     }
 
     public void RegisterClassToString(INamedTypeSymbol classType)
     {
         RequireMutable();
-        if (_demandsPublished && !_classToString.Contains(classType))
-            throw new InvalidOperationException(
-                $"Class ToString dispatch for '{classType}' was first discovered during body emission.");
+        if (_demandsPublished)
+        {
+            RequirePublishedPlan().RequireClassToString(classType);
+            return;
+        }
         _classToString.Add(classType);
     }
 
@@ -224,9 +300,12 @@ public sealed class SyntheticContext
         RequireMutable();
         if (binding.Kind != DelegateBindingKind.Wrapper)
             throw new ArgumentException("Wrapper demand requires a wrapper binding.", nameof(binding));
-        if (_demandsPublished && !_wrapperSigs.ContainsKey(binding.BridgeName))
-            throw new InvalidOperationException(
-                $"Delegate wrapper '{binding.BridgeName}' was first discovered during body emission.");
+        if (_demandsPublished)
+        {
+            RequirePublishedPlan().RequireWrapper(
+                binding.BridgeName);
+            return;
+        }
         if (!_wrapperSigs.ContainsKey(binding.BridgeName))
             _wrapperSigs.Add(binding.BridgeName, new DelegateWrapperDemand(
                 binding,
@@ -237,9 +316,9 @@ public sealed class SyntheticContext
     {
         if (_emissionVerified)
             throw new InvalidOperationException("Synthetic demand emission was verified twice.");
-        if (_expectedDelegateSites == null)
+        if (_publishedPlan == null)
             throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
-        foreach (var site in _expectedDelegateSites)
+        foreach (var site in _publishedPlan.DelegateSites)
             if (!_emittedDelegateSites.Contains(site))
                 throw new InvalidOperationException(
                     $"Planned delegate site '{site}' was not emitted during body emission.");
@@ -252,19 +331,34 @@ public sealed class SyntheticContext
         var name = demand.Binding.BridgeName;
         if (!demands.TryGetValue(name, out var existing))
         {
-            if (_demandsPublished)
-                throw new InvalidOperationException(
-                    $"Synthetic {category} '{name}' was first discovered during body emission.");
             demands.Add(name, demand);
             return;
         }
-        if (SameDemandMethod(existing.Binding.TargetMethod, demand.Binding.TargetMethod)
-            && SameDemandMethod(existing.SignatureMethod, demand.SignatureMethod))
+        RequireSameDemand(existing, demand, category);
+    }
+
+    static void RequireSameDemand(
+        DelegateBridgeDemand existing,
+        DelegateBridgeDemand demand,
+        string category)
+    {
+        if (SameDemandMethod(
+                existing.Binding.TargetMethod,
+                demand.Binding.TargetMethod)
+            && SameDemandMethod(
+                existing.SignatureMethod,
+                demand.SignatureMethod))
             return;
+        var name = demand.Binding.BridgeName;
         throw new InvalidOperationException(
             $"Synthetic {category} name '{name}' maps to both "
             + $"'{existing.Binding.TargetMethod}' and '{demand.Binding.TargetMethod}'.");
     }
+
+    SyntheticDemandPlan RequirePublishedPlan()
+        => _publishedPlan
+           ?? throw new InvalidOperationException(
+               "Synthetic demand plan was not published.");
 
     static bool SameDemandMethod(IMethodSymbol left, IMethodSymbol right)
         => SymbolEqualityComparer.Default.Equals(left, right)
