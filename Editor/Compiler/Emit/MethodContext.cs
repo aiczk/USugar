@@ -227,10 +227,10 @@ public sealed class MethodContext
     /// itself; an emitting closure = its record's chain; else empty).</summary>
     public ImmutableArray<IMethodSymbol> CurrentOwnerSpecs = ImmutableArray<IMethodSymbol>.Empty;
 
-    public IDisposable EnterEmission(IMethodSymbol method, ClosureSpec closureSpec,
+    public IDisposable EnterCallableScope(IMethodSymbol method, ClosureSpec closureSpec,
         string structReceiverParamId, ImmutableArray<IMethodSymbol> ownerSpecs)
     {
-        var scope = new EmissionScope(this);
+        var scope = new CallableScope(this);
         CurrentMethod = method;
         CurrentClosureSpec = closureSpec;
         CurrentStructReceiverParamId = structReceiverParamId;
@@ -238,7 +238,7 @@ public sealed class MethodContext
         return scope;
     }
 
-    sealed class EmissionScope : IDisposable
+    sealed class CallableScope : IDisposable
     {
         readonly MethodContext _context;
         readonly IMethodSymbol _method;
@@ -247,7 +247,7 @@ public sealed class MethodContext
         readonly ImmutableArray<IMethodSymbol> _ownerSpecs;
         bool _disposed;
 
-        public EmissionScope(MethodContext context)
+        public CallableScope(MethodContext context)
         {
             _context = context;
             _method = context.CurrentMethod;
@@ -259,7 +259,7 @@ public sealed class MethodContext
         public void Dispose()
         {
             if (_disposed)
-                throw new InvalidOperationException("Method emission scope disposed twice.");
+                throw new InvalidOperationException("Callable scope disposed twice.");
             _disposed = true;
             _context.CurrentMethod = _method;
             _context.CurrentClosureSpec = _closureSpec;

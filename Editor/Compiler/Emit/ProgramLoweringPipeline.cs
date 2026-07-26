@@ -1018,8 +1018,8 @@ internal sealed class ProgramLoweringPipeline
         CaptureScopeAnalysis captures)
     {
         RegisterProgram(discovery);
-        _state.Generics.SetPlannedSpecializations(discovery.Callables.Specializations);
-        var specializationRegistrar = new SpecializationRegistrar(_lowering);
+        var specializationRegistrar =
+            new SpecializationRegistrar(_lowering);
         foreach (var specialization in discovery.Callables.SpecializationsByKey.Values)
             specializationRegistrar.Register(specialization);
         foreach (var closure in discovery.Callables.ClosureSpecializations)
@@ -1073,7 +1073,6 @@ internal sealed class ProgramLoweringPipeline
             aggregates,
             classTypes);
         _state.PublishBoundProgram(program);
-        _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
         RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
@@ -1385,7 +1384,7 @@ internal sealed class ProgramLoweringPipeline
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
                     ? body.Callable.Function.ParamFieldNames[0]
                     : null;
-            using var methodScope = _state.Methods.EnterEmission(
+            using var methodScope = _state.Methods.EnterCallableScope(
                 method, body.Closure, receiverId, body.OwnerSpecs);
             using var genericScope = _state.Generics.EnterOverlayScope(body.TypeParameterMap);
             PlanSyntheticDemands(
@@ -1394,7 +1393,7 @@ internal sealed class ProgramLoweringPipeline
                 planner);
         }
 
-        using var fieldMethodScope = _state.Methods.EnterEmission(
+        using var fieldMethodScope = _state.Methods.EnterCallableScope(
             null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         foreach (var initializer in plan.FieldInitOps)
             PlanSyntheticDemands(initializer, true, planner);
@@ -1700,7 +1699,7 @@ internal sealed class ProgramLoweringPipeline
         // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted
         // lambda/local function declared INSIDE a struct method also reports ContainingType == the
         // struct (Roslyn resolves a closure's ContainingType up to the nearest named type), but it was
-        // registered via RegisterLocalFunction (envp-based, no receiver param0) — C# itself forbids a
+        // registered as a planned closure (envp-based, no receiver param0) — C# itself forbids a
         // struct closure from referencing `this`'s members (CS1673), so it never needs the receiver;
         // indexing ParamFieldNames[0] for it read past an empty list.
         // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
@@ -1720,7 +1719,7 @@ internal sealed class ProgramLoweringPipeline
         var ownerSpecs = closureSpec?.OwnerSpecs
             ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
                        : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
-        using var _methodScope = _state.Methods.EnterEmission(
+        using var _methodScope = _state.Methods.EnterCallableScope(
             method, closureSpec, receiverParamId, ownerSpecs);
         var bindingKey = closureSpec != null
             ? new SpecializationKey(method, closureSpec.KeyArgs)

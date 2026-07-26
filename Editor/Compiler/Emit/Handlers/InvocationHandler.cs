@@ -180,28 +180,8 @@ internal sealed class InvocationHandler : IExpressionHandler
             // Delegate invocation: a() where a is Action/Func
             case MethodKind.DelegateInvoke:
                 return _delegates.VisitDelegateInvocation(op);
-            // Local function call. Recursion (including captured-by-reference outer locals, which stay
-            // shared per C# closure semantics) is handled by EmitCallToMethod's software-stack spill/reload.
-            case MethodKind.LocalFunction
-                when _lowering.MethodFunctions.ContainsKey(target):
-                return _externs.EmitUserMethodCall(op, target);
-            // Round-9 [Y9]: non-generic local function called BEFORE its declaration statement
-            // (C# allows forward references within the enclosing body, but registration used to
-            // happen only when StatementHandler reached the ILocalFunctionOperation — the earlier
-            // call site then died with 'Method not found in layout'). Register on demand; the
-            // declaration-site registration above stays first so declaration-first shapes keep
-            // their index allocation order byte-identical.
-            case MethodKind.LocalFunction
-                when !target.IsGenericMethod:
-                _lowering.RegisterLocalFunction(target);
-                return _externs.EmitUserMethodCall(op, target);
-            // B68/B69: a GENERIC local function is monomorphized per call site regardless of its HOST —
-            // the compiled behaviour, a foreign static helper class, or a user struct. The generic
-            // monomorphization arm further below is gated on the container being _classSymbol (own members),
-            // so a foreign-hosted generic LF used to fall through to the extern path and mint a bogus
-            // `{Host}.__Lf__{T}` extern (B68) or hit the user-struct-member guard (B69). Register+jump here
-            // by MethodKind, before any container-gated arm; RegisterGenericSpecialization is container-
-            // agnostic and idempotent, so the behaviour-host path stays byte-identical.
+            // Local-function bodies and specializations are materialized before BoundProgram is
+            // published. Emission can consume that registration but cannot create one.
             case MethodKind.LocalFunction:
                 _lowering.RequireRegisteredCallable(target);
                 return _externs.EmitUserMethodCall(op, target);

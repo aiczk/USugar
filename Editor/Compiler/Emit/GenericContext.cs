@@ -2,27 +2,10 @@ using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
-/// <summary>Owns the active generic substitution map and specialization plan for one emitter.</summary>
+/// <summary>Owns the active generic substitution map for one emitted body.</summary>
 public sealed class GenericContext
 {
     public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap { get; private set; }
-
-    readonly HashSet<IMethodSymbol> _plannedSpecializations =
-        new(SymbolEqualityComparer.Default);
-    public bool BodyEmissionStarted { get; private set; }
-
-    public void SetPlannedSpecializations(IEnumerable<IMethodSymbol> methods)
-    {
-        if (BodyEmissionStarted)
-            throw new InvalidOperationException("Specialization plan cannot change after body emission starts.");
-        _plannedSpecializations.Clear();
-        foreach (var method in methods) _plannedSpecializations.Add(method);
-    }
-
-    public bool IsPlannedSpecialization(IMethodSymbol method)
-        => _plannedSpecializations.Contains(method);
-
-    internal void BeginBodyEmission() => BodyEmissionStarted = true;
 
     public IDisposable EnterScope(IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
         IMethodSymbol currentMethod)

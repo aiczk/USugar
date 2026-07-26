@@ -93,14 +93,6 @@ internal sealed class LoweringState
         ClassTypes = program.ClassTypes;
     }
 
-    internal void BeginBodyEmission()
-    {
-        if (Program == null)
-            throw new InvalidOperationException(
-                "Body emission cannot start before a BoundProgram is published.");
-        Generics.BeginBodyEmission();
-    }
-
     BoundProgram RequireProgram()
         => Program
            ?? throw new InvalidOperationException(

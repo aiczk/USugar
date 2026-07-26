@@ -54,15 +54,8 @@ internal sealed class StatementHandler : IOperationHandler
             case IConditionalOperation op: VisitConditional(op); break;
             case IReturnOperation op: VisitReturn(op); break;
             case IBranchOperation op: VisitBranch(op); break;
-            // Round-9 [Y8]: generic local functions are monomorphized per call site
-            // (RegisterGenericSpecialization), exactly like generic methods — registering the
-            // DEFINITION here declared 'T'-typed param/return heap vars, and the spec body
-            // emission bound THOSE instead of the spec's own (CReturn type-mismatch ICE on a
-            // single legal instantiation). Non-generic local functions still register at the
-            // declaration so declaration-first shapes keep their index allocation order.
-            case ILocalFunctionOperation op:
-                if (!op.Symbol.IsGenericMethod)
-                    _lowering.RegisterLocalFunction(op.Symbol);
+            // Local-function bodies are emitted separately from the enclosing operation tree.
+            case ILocalFunctionOperation:
                 break;
             case ILabeledOperation labeled:
                 _lowering.Builder.EmitLabel(labeled.Label.Name);

@@ -27,7 +27,7 @@ public class LanguageSurfaceTests
         OperationKind.Empty,                    // StatementHandler (labeled empty targets)
         OperationKind.MethodBody,               // EmitMethod roots
         OperationKind.ConstructorBody,          // EmitMethod roots (struct ctors)
-        OperationKind.AnonymousFunction,        // hoisted via HoistLambdaToMethod
+        OperationKind.AnonymousFunction,        // hoisted during callable planning
         OperationKind.DelegateCreation,         // ExpressionHandler VisitDelegateCreation
         OperationKind.FieldInitializer,         // EmitFieldInitializers
         OperationKind.VariableInitializer,      // within declarations

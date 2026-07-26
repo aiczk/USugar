@@ -1606,24 +1606,16 @@ internal sealed class LoweringServices
         };
     }
 
-    // ── Lambda / Local Function Helpers ──
-
-    internal void RegisterLocalFunction(IMethodSymbol localFunc)
+    /// <summary>Materialize one closure callable during BoundProgram planning.</summary>
+    internal void RegisterClosureForPlanning(IMethodSymbol localFunc)
     {
-        // Design 2026-07-10 v3 SS2B (B64/B70 root fix): hoisted closures register under a composite
-        // (definition, enclosing-spec type-args) key — the WRITE choke. All the definition-keyed maps
-        // (_methodFunctions/_methodSlots/_methodParamVarIds/_methodReturns/envp) are deliberately NOT
-        // written for closures: any stale bare-symbol read then fails loud instead of silently using
-        // another spec's function (the pre-fix failure mode).
+        if (_state.Program != null)
+            throw new InvalidOperationException(
+                "Closure registration is a planning-phase operation.");
         var identity = _state.ResolveClosureIdentity(localFunc);
         var keyArgs = identity.KeyArgs;
         if (_state.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
-        if (_state.Generics.BodyEmissionStarted)
-            throw new InvalidOperationException(
-                $"USugar internal error: closure '{localFunc}' was first discovered during body emission "
-                + $"(key: {string.Join(",", keyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
-                + $"owners: {string.Join(" > ", identity.OwnerSpecs.Select(m => m.ToDisplayString()))}).");
-        EmitPolicy.RejectInParameters(localFunc); // round-7 follow-up [Q3]
+        EmitPolicy.RejectInParameters(localFunc);
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
         var parameters = localFunc.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
@@ -1641,28 +1633,6 @@ internal sealed class LoweringServices
                 closureKeyArgs: keyArgs, closureOwnerSpecs: identity.OwnerSpecs,
                 environmentId: capturing ? index => $"__{index}_{funcName}__envp" : null));
         _pendingCallableBodies.Add((localFunc, record));
-    }
-
-    /// <summary>
-    /// Hoist a lambda expression to an internal method. A CAPTURING lambda's captured variables are
-    /// resolved PER-ACTIVATION through the Stage-2 closure environment records (design §3/§4): the
-    /// capture analysis (<see cref="CaptureScopeAnalysis"/>) assigns each captured symbol an env-record
-    /// slot and all access routes through <see cref="EnvEmit"/> __Get/__Set on the owning scope's env —
-    /// never the flat <see cref="LocalBindings"/> slot. This holds for closures hoisted from
-    /// user-STRUCT member bodies too (roadmap B45): CaptureScopeAnalysis.Build walks struct members
-    /// transitively, so a struct-method closure joins the same env chain rather than aliasing a shared
-    /// module field.
-    ///
-    /// (Pre-Stage-2 this method's captures aliased a single module-level LocalBindings field, correct
-    /// only for sequential non-escaping single-activation use — retired. VM-proven multi-activation
-    /// clobber for the struct-hosted case: roadmap B45 M0 shapes (c)/(d).)
-    /// </summary>
-    internal IMethodSymbol HoistLambdaToMethod(IAnonymousFunctionOperation lambda)
-    {
-        var symbol = lambda.Symbol;
-        if (_state.Methods.TryGetClosureSpec(symbol, _state.ComposeClosureKeyArgs(symbol), out _)) return symbol;
-        RegisterLocalFunction(symbol);
-        return symbol;
     }
 
     // ── Delegate convention helpers ──
@@ -1960,48 +1930,25 @@ internal sealed class LoweringServices
         return (method, owner, parameterOverride);
     }
 
-    /// <summary>Register a monomorphized generic specialization: StructuredFunction + ordinal param vars +
-    /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
-    /// constructed symbol. (Moved from InvocationHandler when [W7] gave the delegate-creation path a
-    /// second caller — one registration knowledge source.)</summary>
-    // Wave-9 round-5 [X6] / round-8 [Y2] gate — first-wins record of a generic definition's instantiation
-    // (drives the closure-compose that carries the enclosing generic's T into a nested closure/LF, and the
-    // multi-instantiation pin). Struct-hosted generic methods route through EmitStructInstanceCall, which
-    // registers the spec itself but NOT through RegisterGenericSpecialization — so this must run there too
-    // (B56), else a nested LF referencing the method's T finds no owner and CoreVerify ICEs on raw 'T'.
-    internal void MaterializeGenericSpecialization(IMethodSymbol constructed)
+    /// <summary>Materialize one closed generic callable during BoundProgram planning.</summary>
+    internal void RegisterSpecializationForPlanning(IMethodSymbol constructed)
     {
-        // SS2B (M2b): a GENERIC local function is a hoisted closure and registers in the per-spec
-        // registry under (own type args + ambient enclosing-spec args) — its constructed symbol is
-        // symbol-EQUAL across the enclosing generic's instantiations, so a bare-constructed key would
-        // share one body across enclosing specs (the B64 first-spec-T bake / capture aliasing, one
-        // level down). Named generic specs keep their constructed-symbol maps.
+        if (_state.Program != null)
+            throw new InvalidOperationException(
+                "Callable specialization registration is a planning-phase operation.");
         bool closureKind = constructed.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction;
         var closureIdentity = closureKind ? _state.ResolveClosureIdentity(constructed) : default;
         var closureKeyArgs = closureKind
             ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
         if (closureKind ? _state.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
                         : _methodFunctions.ContainsKey(constructed)) return;
-        if (closureKind && _state.Generics.BodyEmissionStarted)
-            throw new InvalidOperationException(
-                $"USugar internal error: closure specialization '{constructed}' was first discovered "
-                + $"during body emission (key: {string.Join(",", closureKeyArgs.Select(ClassTypeObjectContext.SpecKey))}; "
-                + $"owners: {string.Join(" > ", closureIdentity.OwnerSpecs.Select(m => m.ToDisplayString()))}).");
-        if (!closureKind && _state.Generics.BodyEmissionStarted
-            && !_state.Generics.IsPlannedSpecialization(constructed))
-            throw new InvalidOperationException(
-                $"USugar internal error: specialization '{constructed}' was first discovered during "
-                + "body emission and is absent from CallableDefinitionPlan.Specializations.");
-        EmitPolicy.RejectInParameters(constructed); // round-7 follow-up [Q3]
+        EmitPolicy.RejectInParameters(constructed);
 
         if (!closureKind)
         {
             RegisterNamedSpecialization(constructed);
             return;
         }
-
-        // First-wins spec record (feeds ComposeClosureKeyArgs' owner fallback). The former [X6]/[Y2]
-        // second-instantiation rejects are retired: closures duplicate per spec.
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(
             type => _state.Types.GetUdonTypeName(type)));
@@ -2233,7 +2180,7 @@ internal sealed class LoweringServices
         switch (op.Target)
         {
             case IAnonymousFunctionOperation lambda:
-                targetMethod = HoistLambdaToMethod(lambda);
+                targetMethod = RequireRegisteredCallable(lambda.Symbol);
                 break;
             case IMethodReferenceOperation methodRef:
                 targetMethod = methodRef.Method;

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -235,27 +236,38 @@ public class EditorSyntaxGuardTests
     }
 
     [Fact]
-    public void BodyHandlersCannotMaterializeCallableSpecializations()
+    public void CallableRegistrationIsOwnedBySpecializationRegistrar()
     {
         var packageRoot = FindPackageRoot();
-        var handlers = Path.Combine(
-            packageRoot, "Editor", "Compiler", "Emit", "Handlers");
+        var emitRoot = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit");
+        var allowed = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            Path.Combine(emitRoot, "LoweringServices.cs"),
+            Path.Combine(emitRoot, "SpecializationRegistrar.cs"),
+        };
+        var forbidden = new[]
+        {
+            "RegisterSpecializationForPlanning(",
+            "RegisterClosureForPlanning(",
+        };
         var failures = Directory.GetFiles(
-                handlers, "*.cs", SearchOption.AllDirectories)
+                emitRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !allowed.Contains(path))
             .OrderBy(path => path, StringComparer.Ordinal)
             .SelectMany(path => File.ReadLines(path)
                 .Select((line, index) => (line, index))
-                .Where(item => item.line.Contains(
-                    "MaterializeGenericSpecialization(",
-                    StringComparison.Ordinal))
+                .Where(item => forbidden.Any(token =>
+                    item.line.Contains(token, StringComparison.Ordinal)))
                 .Select(item =>
                     $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
                     + item.line.Trim()))
             .ToArray();
 
         Assert.True(failures.Length == 0,
-            "Body handlers may only require callable specializations already materialized "
-            + "in the bound program.\n"
+            "Only SpecializationRegistrar may invoke callable registration; "
+            + "emission must consume the bound callable set.\n"
             + string.Join("\n", failures));
     }
 
