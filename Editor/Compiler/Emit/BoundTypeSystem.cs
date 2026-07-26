@@ -19,6 +19,8 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         new(StringComparer.Ordinal);
     readonly Dictionary<string, ITypeSymbol> _resolutions =
         new(StringComparer.Ordinal);
+    readonly Dictionary<string, RuntimeShape> _sourceShapes =
+        new(StringComparer.Ordinal);
     bool _published;
 
     public MaterializingUdonTypeSystem(
@@ -43,6 +45,8 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         var key = BoundTypeKey.Create(type, typeParameterMap);
         var resolved = Resolve(type, typeParameterMap);
         var lowering = _source.Describe(type, typeParameterMap);
+        RecordSourceShape(key, lowering.SourceShape
+            ?? _source.SourceShape(type, typeParameterMap));
         if (resolved is INamedTypeSymbol
                 { TypeKind: TypeKind.Interface } iface
             && _layouts.InterfaceIsLocalUserClassOnly(iface))
@@ -65,6 +69,35 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         }
         _lowerings.Add(key, lowering);
         return lowering;
+    }
+
+    public RuntimeShape SourceShape(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        RequireMutable();
+        var key = BoundTypeKey.Create(type, typeParameterMap);
+        if (_sourceShapes.TryGetValue(key, out var shape))
+            return shape;
+        shape = _source.SourceShape(type, typeParameterMap);
+        RecordSourceShape(key, shape);
+        return shape;
+    }
+
+    void RecordSourceShape(string key, RuntimeShape shape)
+    {
+        if (_sourceShapes.TryGetValue(key, out var existing))
+        {
+            if (existing.Bundle != shape.Bundle
+                || existing.Transport != shape.Transport
+                || existing.Contents != shape.Contents)
+                throw new InvalidOperationException(
+                    $"Source-shape decision '{key}' changed while "
+                    + "materializing the bound program.");
+            return;
+        }
+        _sourceShapes.Add(key, shape);
     }
 
     internal void RecordResolution(
@@ -125,7 +158,7 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         RequireMutable();
         _published = true;
         return new BoundUdonTypeSystem(
-            _lowerings, _resolutions);
+            _lowerings, _resolutions, _sourceShapes);
     }
 
     void RequireMutable()
@@ -279,6 +312,7 @@ internal sealed class TypeDemandPlanner
         if (type == null) return;
         if (type.SpecialType == SpecialType.System_Void)
         {
+            _types.SourceShape(type, typeParameterMap);
             _types.RecordResolution(
                 type,
                 typeParameterMap,
@@ -304,8 +338,6 @@ internal sealed class TypeDemandPlanner
                 && !SymbolEqualityComparer.Default.Equals(
                     aggregate, type))
                 PlanAggregate(aggregate, typeParameterMap);
-            if (type is INamedTypeSymbol { IsAnonymousType: true })
-                return;
             _types.Describe(type, typeParameterMap);
             if (typeParameterMap != null
                 && type is INamedTypeSymbol openNamed
@@ -370,10 +402,12 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
 {
     readonly IReadOnlyDictionary<string, UdonTypeLowering> _lowerings;
     readonly IReadOnlyDictionary<string, ITypeSymbol> _resolutions;
+    readonly IReadOnlyDictionary<string, RuntimeShape> _sourceShapes;
 
     public BoundUdonTypeSystem(
         IDictionary<string, UdonTypeLowering> lowerings,
-        IDictionary<string, ITypeSymbol> resolutions = null)
+        IDictionary<string, ITypeSymbol> resolutions = null,
+        IDictionary<string, RuntimeShape> sourceShapes = null)
     {
         _lowerings =
             new ReadOnlyDictionary<string, UdonTypeLowering>(
@@ -387,6 +421,25 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
             StringComparer.Ordinal);
         _resolutions =
             new ReadOnlyDictionary<string, ITypeSymbol>(resolved);
+        _sourceShapes =
+            new ReadOnlyDictionary<string, RuntimeShape>(
+                new Dictionary<string, RuntimeShape>(
+                    sourceShapes
+                    ?? new Dictionary<string, RuntimeShape>(),
+                    StringComparer.Ordinal));
+    }
+
+    public RuntimeShape SourceShape(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        var key = BoundTypeKey.Create(type, typeParameterMap);
+        if (_sourceShapes.TryGetValue(key, out var shape))
+            return shape;
+        throw new InvalidOperationException(
+            $"Source-shape decision '{key}' was absent from the bound "
+            + "program.");
     }
 
     public UdonTypeLowering Describe(

@@ -108,7 +108,7 @@ internal sealed class InvocationHandler
             // nullable's storage — deep-clone it out (value semantics). default(T) for an aggregate is a fresh
             // zero-initialized struct, NOT null, so mint through AggregateAbi rather than using scalar default.
             var aggType = _lowering.ResolveType(govUnderlying) as INamedTypeSymbol;
-            bool aggResult = aggType != null && TypeClassifier.IsAggregateValue(aggType);
+            bool aggResult = aggType != null && _lowering.IsAggregateValue(aggType);
             var nv = _lowering.VisitExpression(op.Instance);
             var fallback = op.Arguments.Length > 0
                 ? _lowering.VisitExpression(op.Arguments[0].Value)
@@ -135,7 +135,7 @@ internal sealed class InvocationHandler
             // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
             // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
             // reject, mirroring the bare user-struct receiver's object-method polarity.
-            if (_lowering.ResolveType(nulUnder) is INamedTypeSymbol nulAgg && TypeClassifier.IsAggregateValue(nulAgg))
+            if (_lowering.ResolveType(nulUnder) is INamedTypeSymbol nulAgg && _lowering.IsAggregateValue(nulAgg))
                 throw new System.NotSupportedException(
                     $"'{target.Name}' on a nullable of struct/tuple type "
                     + $"'{nulUnder.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
@@ -198,7 +198,7 @@ internal sealed class InvocationHandler
                 { Syntax: Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax };
             var tsFamily = tsBase && op.Instance.Type?.SpecialType == SpecialType.System_Object
                 ? _lowering.CurrentMethod?.ContainingType : op.Instance.Type;
-            if (_lowering.ResolveType(tsFamily) is INamedTypeSymbol tsRecvTy && TypeClassifier.IsUserClass(tsRecvTy)
+            if (_lowering.ResolveType(tsFamily) is INamedTypeSymbol tsRecvTy && _lowering.IsUserClass(tsRecvTy)
                 && (!tsBase || target.ContainingType.SpecialType == SpecialType.System_Object))
                 return _lowering.EmitClassToStringDispatch(tsRecvTy, _lowering.LoadInstanceRaw(op.Instance),
                     nullIsError: true, useOverrides: !tsBase);
@@ -213,7 +213,7 @@ internal sealed class InvocationHandler
         // (CollectStructMethodsInOperation deliberately skips the open form); the binding phase
         // materializes the exact closed callable before emission.
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
-            && target.ContainingType is INamedTypeSymbol structRecv && TypeClassifier.IsObjectArrayEmulated(structRecv))
+            && target.ContainingType is INamedTypeSymbol structRecv && _lowering.IsObjectArrayEmulated(structRecv))
         {
             // CA-v2b-2: a runtime-polymorphic call on a user-class receiver lowers to an inline typeobj-
             // ReferenceEquals chain of direct calls (a sealed/singleton dispatch set devirtualizes to one
@@ -252,7 +252,9 @@ internal sealed class InvocationHandler
         // Equals(object) → reference compare on the two object[] bundles (unoverridden object.Equals IS
         // reference equality for a class). ToString never reaches here (the M4b slot intercept above).
         // GetHashCode / GetType → loud reject (no stable hash, no System.Type identity for a bundle).
-        if (ClassAbi.IsObjectMethodOnUserClass(target, op.Instance?.Type))
+        if (ClassAbi.IsObjectMethodOnUserClass(
+                target,
+                _lowering.IsUserClass(op.Instance?.Type)))
         {
             var clsRecv = (INamedTypeSymbol)op.Instance.Type;
             if (target.Name == "Equals" && op.Arguments.Length == 1)
@@ -537,7 +539,7 @@ internal sealed class InvocationHandler
         // readonly rs.Bump();rs.Bump() ref=0 vs the live-storage 20). Chains through array
         // elements keep live storage (the helper stops there, reference semantics, CLR-equal).
         if (!target.IsReadOnly && _lowering.ReceiverNeedsDefensiveCopy(op.Instance)
-            && op.Instance?.Type is INamedTypeSymbol recvAgg && TypeClassifier.IsAggregateValue(recvAgg))
+            && op.Instance?.Type is INamedTypeSymbol recvAgg && _lowering.IsAggregateValue(recvAgg))
             recv = AggregateAbi.DeepClone(_lowering.Builder, recv, recvAgg, _lowering.State.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
         var structPrepared = _externs.MarshalArguments(op, args);

@@ -58,7 +58,7 @@ internal sealed class NullableHandler
         // When op.Type is the aggregate, the right side has the non-nullable aggregate type → always non-null,
         // and the non-null left is cloned in the else branch, so AggregateAbi.DeepClone never sees null.
         var aggType = _lowering.ResolveType(op.Type) as INamedTypeSymbol;
-        bool aggResult = aggType != null && TypeClassifier.IsAggregateValue(aggType);
+        bool aggResult = aggType != null && _lowering.IsAggregateValue(aggType);
         var leftVal = _lowering.VisitExpression(op.Value);
         System.Func<CLeaf, CLeaf> presentValue = null;
         if (aggResult)

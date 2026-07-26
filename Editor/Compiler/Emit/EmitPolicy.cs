@@ -80,35 +80,33 @@ public static class EmitPolicy
     /// rejected here for the same bundle reason. Called from the class first-pass registration loop
     /// (own + inherited behaviour methods, before the generic skip), so every compile of a class
     /// hits it exactly once per method.</summary>
-    public static void RejectNetworkCallableDelegates(IMethodSymbol method)
+    internal static void RejectNetworkCallableDelegates(
+        IMethodSymbol method, IUdonTypeSystem types)
     {
+        if (types == null) throw new ArgumentNullException(nameof(types));
         if (!LayoutPlanBuilder.IsNetworkCallable(method)) return;
         foreach (var p in method.Parameters)
         {
-            if (TypeClassifier.ShapeOf(
-                    p.Type, new TypeClassifierContext(null)).ContainsDelegate)
+            if (types.SourceShape(p.Type).ContainsDelegate)
                 throw new System.NotSupportedException(
                     $"[NetworkCallable] method '{method.Name}' cannot take delegate-typed parameter "
                     + $"'{p.Name}': a delegate value is a program-local object[] bundle and cannot "
                     + "cross a network call. Pass plain data instead and re-create the delegate "
                     + "locally on the receiving side.");
             // CA-M1 §2-1: a v1 class parameter is the same program-local object[] bundle — cannot cross.
-            if (TypeClassifier.ShapeOf(
-                    p.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
+            if (types.SourceShape(p.Type).ContainsUserClassPayload)
                 throw new System.NotSupportedException(
                     $"[NetworkCallable] method '{method.Name}' cannot take v1-class-typed parameter "
                     + $"'{p.Name}': a class value is a program-local object[] bundle and cannot cross a "
                     + "network call. Pass plain data instead and rebuild the object on the receiving side.");
         }
-        if (TypeClassifier.ShapeOf(
-                method.ReturnType, new TypeClassifierContext(null)).ContainsDelegate)
+        if (types.SourceShape(method.ReturnType).ContainsDelegate)
             throw new System.NotSupportedException(
                 $"[NetworkCallable] method '{method.Name}' cannot return a delegate-typed value: "
                 + "a delegate value is a program-local object[] bundle and cannot cross a network "
                 + "call. Return plain data instead and re-create the delegate locally on the "
                 + "receiving side.");
-        if (TypeClassifier.ShapeOf(
-                method.ReturnType, new TypeClassifierContext(null)).ContainsUserClassPayload)
+        if (types.SourceShape(method.ReturnType).ContainsUserClassPayload)
             throw new System.NotSupportedException(
                 $"[NetworkCallable] method '{method.Name}' cannot return a v1-class-typed value: a class "
                 + "value is a program-local object[] bundle and cannot cross a network call.");
@@ -117,17 +115,19 @@ public static class EmitPolicy
     /// <summary>A public behaviour method is callable by another Udon program. A delegate whose
     /// signature carries a user class is deliberately self-dispatch-only, so exposing such a bundle
     /// as a parameter or return would create an unusable cross-program surface.</summary>
-    public static void RejectPublicProgramLocalDelegateSignature(IMethodSymbol method)
+    internal static void RejectPublicProgramLocalDelegateSignature(
+        IMethodSymbol method, IUdonTypeSystem types)
     {
+        if (types == null) throw new ArgumentNullException(nameof(types));
         if (method.DeclaredAccessibility != Accessibility.Public) return;
         foreach (var p in method.Parameters)
             if (p.Type is INamedTypeSymbol d && d.DelegateInvokeMethod is { } invoke
-                && DelegateAbi.IsProgramLocalSignature(invoke))
+                && DelegateAbi.IsProgramLocalSignature(invoke, types))
                 throw new NotSupportedException(
                     $"Public method '{method.Name}' cannot expose delegate parameter '{p.Name}' because "
                     + "its user-class signature is valid only inside this Udon program.");
         if (method.ReturnType is INamedTypeSymbol rd && rd.DelegateInvokeMethod is { } returnInvoke
-            && DelegateAbi.IsProgramLocalSignature(returnInvoke))
+            && DelegateAbi.IsProgramLocalSignature(returnInvoke, types))
             throw new NotSupportedException(
                 $"Public method '{method.Name}' cannot expose a delegate return with a user-class "
                 + "signature because it is valid only inside this Udon program.");

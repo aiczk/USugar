@@ -26,9 +26,9 @@ internal sealed class BoundaryChecker
     public BoundaryChecker(LoweringState ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
     RuntimeShape ShapeOf(ITypeSymbol type)
-        => _ctx.Types.Describe(type, _ctx.TypeParamMap).SourceShape
-           ?? throw new InvalidOperationException(
-               $"Source type '{type}' has no semantic runtime shape.");
+        => type == null
+            ? default
+            : _ctx.Types.SourceShape(type, _ctx.TypeParamMap);
 
     public ValueInfo ClassifyValue(IOperation value)
         => _ctx.Program.Values.Require(
@@ -157,7 +157,7 @@ internal sealed class BoundaryChecker
         if (destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } mixedInterface
             && _ctx.Planner.InterfaceHasMixedRuntimeRepresentations(mixedInterface))
             RequireInterfaceDispatchRepresentation(mixedInterface, "conversion");
-        if (TypeClassifier.IsUserClass(sourceType)
+        if (sourceShape.Bundle == RuntimeBundleKind.Class
             && destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _ctx.Planner.InterfaceIsLocalUserClassOnly(localInterface))
             return;
@@ -186,7 +186,9 @@ internal sealed class BoundaryChecker
         // static type still names the aggregate, not an erasure.
         if (sourceShape.Bundle == RuntimeBundleKind.Aggregate
             && !destinationShape.IsBundle
-            && !(EmitPolicy.IsNullableT(destinationType, out var wrapped) && TypeClassifier.IsObjectArrayEmulated(wrapped))
+            && !(EmitPolicy.IsNullableT(destinationType, out var wrapped)
+                 && ShapeOf(wrapped).Bundle is
+                     RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class)
             && !IsProgramLocalEqualityPosition(conversion))
             throw new NotSupportedException(
                 $"Erasing the value type '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -220,7 +222,10 @@ internal sealed class BoundaryChecker
 
     public void RequireCanDeclareDelegateSurface(ISymbol member, INamedTypeSymbol delegateType)
     {
-        if (!DelegateAbi.IsProgramLocalSignature(delegateType.DelegateInvokeMethod)) return;
+        if (!DelegateAbi.IsProgramLocalSignature(
+                delegateType.DelegateInvokeMethod,
+                _ctx.Types,
+                _ctx.TypeParamMap)) return;
         var externallyVisible = member.DeclaredAccessibility == Accessibility.Public
             || member.GetAttributes().Any(a => a.AttributeClass?.Name is
                 "SerializeField" or "SerializeFieldAttribute");
@@ -234,12 +239,12 @@ internal sealed class BoundaryChecker
     /// The erased value must be a single-declaration local and every reference must immediately perform
     /// a runtime class test/cast or reference equality. This is deliberately a whole-body proof: one
     /// opaque use makes the originating erasure loud again.</summary>
-    internal static bool IsProvablyLocalClassErasure(
+    internal bool IsProvablyLocalClassErasure(
         IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
         if (destinationType == null
-            || !TypeClassifier.IsUserClass(sourceType)
+            || ShapeOf(sourceType).Bundle != RuntimeBundleKind.Class
             || destinationType.SpecialType != SpecialType.System_Object)
             return false;
 
@@ -261,20 +266,21 @@ internal sealed class BoundaryChecker
         return true;
     }
 
-    static bool IsSafeErasedClassUse(ILocalReferenceOperation localRef)
+    bool IsSafeErasedClassUse(ILocalReferenceOperation localRef)
     {
         switch (localRef.Parent)
         {
             case IConversionOperation conversion
-                when TypeClassifier.IsUserClass(conversion.Type):
+                when ShapeOf(conversion.Type).Bundle == RuntimeBundleKind.Class:
                 return true;
-            case IIsTypeOperation isType when TypeClassifier.IsUserClass(isType.TypeOperand):
+            case IIsTypeOperation isType
+                when ShapeOf(isType.TypeOperand).Bundle == RuntimeBundleKind.Class:
                 return true;
             case IIsPatternOperation { Pattern: IDeclarationPatternOperation declaration }
-                when TypeClassifier.IsUserClass(declaration.MatchedType):
+                when ShapeOf(declaration.MatchedType).Bundle == RuntimeBundleKind.Class:
                 return true;
             case IIsPatternOperation { Pattern: ITypePatternOperation typePattern }
-                when TypeClassifier.IsUserClass(typePattern.MatchedType):
+                when ShapeOf(typePattern.MatchedType).Bundle == RuntimeBundleKind.Class:
                 return true;
             case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
                 return true;

@@ -100,7 +100,9 @@ internal sealed class DeconstructionAssignmentHandler
                 {
                     var raw = AggregateAbi.ReadSlot(_lowering.Builder, dlgResult, i, StorageTypes.Object);
                     dlgSnaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
-                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout));
+                        _lowering.ResolveType(targetTuple.Elements[i].Type),
+                        _lowering.State.Aggregates.GetLayout,
+                        _lowering.IsAggregateValue));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     _lowering.AssignToLValue(targetTuple.Elements[i], dlgSnaps[i], prepared);
@@ -112,7 +114,7 @@ internal sealed class DeconstructionAssignmentHandler
             // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
             // mutation of a target does not alias the source tuple.
             if (callValue is not IInvocationOperation
-                && callValue.Type is INamedTypeSymbol valAggType && TypeClassifier.IsAggregateValue(valAggType))
+                && callValue.Type is INamedTypeSymbol valAggType && _lowering.IsAggregateValue(valAggType))
             {
                 var arrVal = _lowering.LoadInstanceRaw(callValue);
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
@@ -120,7 +122,9 @@ internal sealed class DeconstructionAssignmentHandler
                 {
                     var raw = AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object);
                     snaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
-                        _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout));
+                        _lowering.ResolveType(targetTuple.Elements[i].Type),
+                        _lowering.State.Aggregates.GetLayout,
+                        _lowering.IsAggregateValue));
                 }
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                     _lowering.AssignToLValue(targetTuple.Elements[i], snaps[i], prepared);
@@ -199,7 +203,7 @@ internal sealed class DeconstructionAssignmentHandler
                 ReturnSlot[] callReturns = null;
                 if (_lowering.MethodReturns.TryGetValue(callTarget, out var localReturns))
                     callReturns = localReturns;
-                else if (callTarget.ReturnType.IsTupleType || TypeClassifier.IsAggregateValue(callTarget.ReturnType))
+                else if (callTarget.ReturnType.IsTupleType || _lowering.IsAggregateValue(callTarget.ReturnType))
                     callReturns = _lowering.GetCalleeReturns(callTarget);
 
                 if (callReturns == null || callReturns.Length == 0)
@@ -216,7 +220,9 @@ internal sealed class DeconstructionAssignmentHandler
                         // return-site materialization being fresh, an invariant enforced nowhere.
                         var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
                             AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, i, StorageTypes.Object),
-                            _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout);
+                            _lowering.ResolveType(targetTuple.Elements[i].Type),
+                            _lowering.State.Aggregates.GetLayout,
+                            _lowering.IsAggregateValue);
                         _lowering.AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
                     }
                 }
@@ -374,7 +380,9 @@ internal sealed class DeconstructionAssignmentHandler
                 // CW29: same clone rule as the sibling arms (see the same-class call arm).
                 var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
                     AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object),
-                    _lowering.ResolveType(targetTuple.Elements[i].Type), _lowering.State.Aggregates.GetLayout);
+                    _lowering.ResolveType(targetTuple.Elements[i].Type),
+                    _lowering.State.Aggregates.GetLayout,
+                    _lowering.IsAggregateValue);
                 _lowering.AssignToLValue(targetTuple.Elements[i], elemVal, prepared);
             }
         }

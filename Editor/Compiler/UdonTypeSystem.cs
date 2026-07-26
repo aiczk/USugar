@@ -64,6 +64,11 @@ internal readonly struct UdonTypeLowering
 
 internal interface IUdonTypeSystem
 {
+    RuntimeShape SourceShape(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
+
     UdonTypeLowering Describe(
         ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
@@ -114,6 +119,17 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         _abiCatalog = abiCatalog ?? throw new ArgumentNullException(nameof(abiCatalog));
     }
 
+    public RuntimeShape SourceShape(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (type == null) throw new ArgumentNullException(nameof(type));
+        return TypeClassifier.ShapeOf(
+            Resolve(type, typeParameterMap),
+            new TypeClassifierContext(typeParameterMap));
+    }
+
     public bool IsRegisteredUdonType(UdonTypeId type)
         => _abiCatalog.IsRegisteredType(type);
 
@@ -123,8 +139,20 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         if (type == null) throw new ArgumentNullException(nameof(type));
         var resolved = Resolve(type, typeParameterMap);
         var sourceType = UdonTypeIdentity.FromStorage(resolved);
-        var sourceShape = TypeClassifier.ShapeOf(
-            resolved, new TypeClassifierContext(typeParameterMap));
+        var sourceShape = SourceShape(type, typeParameterMap);
+
+        // Anonymous types are compiler-owned aggregate bundles. They have no
+        // CLR/SDK extern name to lower, so asking ExternResolver to mint one
+        // would misclassify them as unsupported user classes. Record their
+        // semantic representation directly in the same type decision that
+        // body lowering later consumes.
+        if (resolved is INamedTypeSymbol { IsAnonymousType: true })
+            return Create(
+                sourceType,
+                StorageTypes.ObjectArray,
+                UdonRepresentationKind.ObjectArrayBundle,
+                UdonRuntimeTypeTest.Unsupported,
+                sourceShape);
 
         if (_objectArrayBehaviourAliases.UsesObjectArrayStorage(
                 resolved, typeParameterMap))

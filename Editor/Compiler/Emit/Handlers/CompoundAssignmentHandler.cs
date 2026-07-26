@@ -52,9 +52,10 @@ internal sealed class CompoundAssignmentHandler
             var vOp = LoweringServices.UnwrapConcatOperand(op.Value);
             // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
-            ClassAbi.RejectImplicitToString(vOp.Type);
+            ClassAbi.RejectImplicitToString(
+                vOp.Type, _lowering.IsAggregateValue(vOp.Type));
             if (_lowering.ResolveType(vOp.Type) is INamedTypeSymbol vt
-                && (TypeClassifier.IsUserClass(vt) || _lowering.IsFoldedEnum(vt)))
+                && (_lowering.IsUserClass(vt) || _lowering.IsFoldedEnum(vt)))
             {
                 var converted = _lowering.ConvertConcatOperand(_lowering.VisitExpression(vOp), vOp);
                 var concat = _lowering.ExternCall(UdonAbi.StringConcatObjects,
@@ -69,7 +70,7 @@ internal sealed class CompoundAssignmentHandler
         // User-defined struct operator (s += t uses the struct's operator +): static method call, then write
         // back. The struct's Udon type is SystemObjectArray, so built-in ABI resolution would be invalid.
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } cuOpM
-            && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && TypeClassifier.IsObjectArrayEmulated(cuOpCt))
+            && cuOpM.ContainingType is INamedTypeSymbol cuOpCt && _lowering.IsObjectArrayEmulated(cuOpCt))
         {
             var res = _lowering.EmitCallToMethod(
                 _lowering.RequireRegisteredCallable(cuOpM),
@@ -238,7 +239,7 @@ internal sealed class CompoundAssignmentHandler
             || evt.RemoveMethod == null || !evt.RemoveMethod.IsImplicitlyDeclared)
         {
             var objectArrayOwner = evt.ContainingType is INamedTypeSymbol owner
-                && TypeClassifier.IsObjectArrayEmulated(owner);
+                && _lowering.IsObjectArrayEmulated(owner);
             var crossBehaviourCustom = !evt.IsStatic
                 && evtRef.Instance is not IInstanceReferenceOperation;
             CLeaf stagedReceiver = null;
@@ -347,7 +348,7 @@ internal sealed class CompoundAssignmentHandler
         // write back. Postfix returns the captured OLD value; the built-in op_Addition path below would build
         // a bogus extern on the struct's SystemObjectArray type and use the wrong (value, 1) shape.
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } iuOpM
-            && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && TypeClassifier.IsObjectArrayEmulated(iuOpCt))
+            && iuOpM.ContainingType is INamedTypeSymbol iuOpCt && _lowering.IsObjectArrayEmulated(iuOpCt))
         {
             var res = _lowering.EmitCallToMethod(
                 _lowering.RequireRegisteredCallable(iuOpM),

@@ -21,7 +21,7 @@ internal sealed class ArrayHandler
         var arrayType = _lowering.GetStorageTypeName(op.Type);
         var elementType = _lowering.GetArrayElemType((IArrayTypeSymbol)op.Type);
         var elemSym = ((IArrayTypeSymbol)op.Type).ElementType;
-        bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
+        bool aggElem = elemSym is INamedTypeSymbol && _lowering.IsAggregateValue(elemSym);
 
         var sizeVal = _lowering.EmitArrayDimension(op.DimensionSizes[0]);
         var arrSlot = _lowering.State.Builder.AllocScratch(new StorageType(arrayType));
@@ -80,7 +80,7 @@ internal sealed class ArrayHandler
         var resultVal = _lowering.ExternCall(UdonAbi.ArrayGet(arrayType, elementType), new List<CLeaf> { arrayVal, indexVal }, _lowering.GetStorageType(op.Type));
         // A struct/tuple element read AS A VALUE is copied (value semantics). Receiver access (arr[i].x =)
         // goes through LoadInstanceRaw → ReadArrayElementRaw, which does NOT clone.
-        return op.Type is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
+        return op.Type is INamedTypeSymbol elemAggT && _lowering.IsAggregateValue(elemAggT)
             ? AggregateAbi.DeepClone(_lowering.Builder, resultVal, elemAggT, _lowering.State.Aggregates.GetLayout) : resultVal;
     }
 
@@ -159,7 +159,7 @@ internal sealed class ArrayHandler
                 // CW25 (closed-world audit): a struct/tuple element crossing into the slice is a VALUE
                 // copy in C# (GetSubArray copies element values) — clone the bundle exactly like the
                 // single-element read above, or the slice's elements alias the source array's.
-                if (_lowering.ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && TypeClassifier.IsAggregateValue(sliceElemAggT))
+                if (_lowering.ResolveType(arrSymbol.ElementType) is INamedTypeSymbol sliceElemAggT && _lowering.IsAggregateValue(sliceElemAggT))
                     valVal = AggregateAbi.DeepClone(_lowering.Builder, valVal, sliceElemAggT, _lowering.State.Aggregates.GetLayout);
 
                 // result[i] = val

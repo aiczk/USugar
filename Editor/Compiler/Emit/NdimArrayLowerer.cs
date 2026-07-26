@@ -114,7 +114,7 @@ internal sealed class NdimArrayLowerer
         var elemUdonType = GetStorageTypeName(ndimType.ElementType);
         var plan = PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
         var resultLeaf = EmitNdimReadFromPlan(ae, plan, elemUdonType);
-        return ndimType.ElementType is INamedTypeSymbol elemAggT && TypeClassifier.IsAggregateValue(elemAggT)
+        return ndimType.ElementType is INamedTypeSymbol elemAggT && _lowering.IsAggregateValue(elemAggT)
             ? AggregateAbi.DeepClone(_builder, resultLeaf, elemAggT, _state.Aggregates.GetLayout) : resultLeaf;
     }
 
@@ -156,7 +156,7 @@ internal sealed class NdimArrayLowerer
         var backingUdonType = GetArrayType(backingType);
         var elemUdonType = GetArrayElemType(backingType);
         var elemSym = ndimType.ElementType;
-        bool aggElem = elemSym is INamedTypeSymbol && TypeClassifier.IsAggregateValue(elemSym);
+        bool aggElem = elemSym is INamedTypeSymbol && _lowering.IsAggregateValue(elemSym);
 
         var dimSlots = new int[rank];
         for (int d = 0; d < rank; d++)

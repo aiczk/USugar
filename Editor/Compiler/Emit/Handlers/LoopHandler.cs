@@ -203,7 +203,7 @@ internal sealed class LoopHandler
                 // foreach yields a by-value COPY of the element. For an aggregate (struct/tuple) element the
                 // raw __Get__ returns the LIVE backing object[]; deep-clone it so mutating the loop variable
                 // does not write through to the array (C# value-copy semantics; mirrors VisitArrayElementReference).
-                if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
+                if (arrayTypeSymbol.ElementType is INamedTypeSymbol elemAgg && _lowering.IsAggregateValue(elemAgg))
                     elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout);
                 if (loopVarCaptured)
                     EnvEmit.Write(_lowering.Builder, _lowering.State, loopLocal, elemVal);

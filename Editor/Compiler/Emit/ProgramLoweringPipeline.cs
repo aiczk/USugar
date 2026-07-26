@@ -54,6 +54,36 @@ public sealed class UasmEmitter
     internal IEnumerable<OperationKind> HandledOperationKinds
         => _operations.HandledOperationKinds;
 
+    internal RuntimeShape SourceShape(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+        => _state.Types.SourceShape(type, typeParameterMap);
+
+    internal bool IsUserClass(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+        => SourceShape(type, typeParameterMap).Bundle
+           == RuntimeBundleKind.Class;
+
+    internal bool IsAggregateValue(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+        => SourceShape(type, typeParameterMap).Bundle
+           == RuntimeBundleKind.Aggregate;
+
+    internal bool IsObjectArrayEmulated(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        var bundle = SourceShape(type, typeParameterMap).Bundle;
+        return bundle is RuntimeBundleKind.Class
+            or RuntimeBundleKind.Aggregate;
+    }
+
     static Dictionary<string, string> UdonEventNames => LayoutPlanBuilder.UdonEventNames;
 
     public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol,
@@ -336,7 +366,7 @@ public sealed class UasmEmitter
 
     IEnumerable<IMethodSymbol> EnumerateAdditionalCallableDefinitions()
         => _planner.Census.Classes
-            .Where(TypeClassifier.IsUserClass)
+            .Where(type => IsUserClass(type))
             .SelectMany(type => type.GetMembers().OfType<IMethodSymbol>());
 
     // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
@@ -400,8 +430,7 @@ public sealed class UasmEmitter
 
             // Class bundles have a stable cross-program ABI, but Udon network sync still cannot serialize
             // the object[] representation.
-            if (TypeClassifier.ShapeOf(
-                    member.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
+            if (SourceShape(member.Type).ContainsUserClassPayload)
             {
                 bool synced = member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
                 if (synced)
@@ -451,7 +480,8 @@ public sealed class UasmEmitter
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
             // var stays null and `f.x = …` faults (NRE on __Set__). Reference-type/array fields stay null (correct).
             if (syntaxRef?.GetSyntax() is not VariableDeclaratorSyntax { Initializer: not null }
-                && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
+                && member.Type is INamedTypeSymbol aggFieldType
+                && IsAggregateValue(aggFieldType))
             {
                 _fieldDiscovery.AggregateDefaults.Add((member.Name, aggFieldType));
             }
@@ -863,7 +893,8 @@ public sealed class UasmEmitter
         _fieldDiscovery.DeclareField(
             member.Name, new StorageType(udonType), FieldFlags.None, constValue);
 
-        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType && TypeClassifier.IsAggregateValue(aggFieldType))
+        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType
+            && IsAggregateValue(aggFieldType))
             _fieldDiscovery.AggregateDefaults.Add((member.Name, aggFieldType));
 
         return true;
@@ -939,7 +970,8 @@ public sealed class UasmEmitter
                 _fieldDiscovery.StaticInitializers.Add(
                     new FieldInitializerPlan(id, init, property.Type));
         }
-        else if (property.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
+        else if (property.Type is INamedTypeSymbol aggregate
+                 && IsAggregateValue(aggregate))
             _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
     }
 
@@ -965,7 +997,8 @@ public sealed class UasmEmitter
                 _fieldDiscovery.StaticInitializers.Add(
                     new FieldInitializerPlan(id, init, field.Type));
         }
-        else if (field.Type is INamedTypeSymbol aggregate && TypeClassifier.IsAggregateValue(aggregate))
+        else if (field.Type is INamedTypeSymbol aggregate
+                 && IsAggregateValue(aggregate))
             _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
     }
 
@@ -1167,7 +1200,7 @@ public sealed class UasmEmitter
 
         _userClassDefaultMethods = new HashSet<IMethodSymbol>(
             _planner.Census.Classes
-                .Where(type => TypeClassifier.IsUserClass(type))
+                .Where(type => IsUserClass(type))
                 .SelectMany(type => type.AllInterfaces.SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
                     .Where(method => !method.IsAbstract
                         && SymbolEqualityComparer.Default.Equals(
@@ -1509,13 +1542,11 @@ public sealed class UasmEmitter
             typePlanner.Plan(body.Method, body.TypeParameterMap);
             var boundBody =
                 methodBodies.Require(body.Method.OriginalDefinition);
-            var typeContext =
-                new TypeClassifierContext(body.TypeParameterMap);
             var mentionsPayload =
                 LambdaCaptureAnalyzer.ReceiverCaptureKey(body.Method) != null
                 || boundBody.ReferencedTypes.Any(type =>
                     type != null
-                    && TypeClassifier.ShapeOf(type, typeContext)
+                    && SourceShape(type, body.TypeParameterMap)
                         .ContainsUserClassPayload);
             if (!methodPayloads.TryAdd(scope, mentionsPayload))
                 throw new InvalidOperationException(
@@ -1595,7 +1626,7 @@ public sealed class UasmEmitter
         foreach (var mintedClass in reach.MintedClasses)
         {
             for (var owner = mintedClass;
-                 owner != null && TypeClassifier.IsUserClass(owner);
+                 owner != null && IsUserClass(owner);
                  owner = owner.BaseType)
             {
                 if (classInitializers.ContainsKey(owner))
@@ -1640,7 +1671,7 @@ public sealed class UasmEmitter
             var receiverId = body.Closure == null
                 && (_userClassDefaultMethods.Contains(method)
                     || method.ContainingType is INamedTypeSymbol aggregate
-                       && TypeClassifier.IsObjectArrayEmulated(aggregate) && !method.IsStatic)
+                       && IsObjectArrayEmulated(aggregate) && !method.IsStatic)
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
                     ? body.Callable.ReceiverFieldId
                     : null;
@@ -1688,8 +1719,10 @@ public sealed class UasmEmitter
         foreach (var method in methods)
         {
             EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
-            EmitPolicy.RejectNetworkCallableDelegates(method); // M4 [T1], declaration-side
-            EmitPolicy.RejectPublicProgramLocalDelegateSignature(method);
+            EmitPolicy.RejectNetworkCallableDelegates(
+                method, _state.Types); // M4 [T1], declaration-side
+            EmitPolicy.RejectPublicProgramLocalDelegateSignature(
+                method, _state.Types);
             if (method.IsGenericMethod) continue;
 
             var methodLayout = method.ContainingType.TypeKind == TypeKind.Interface
@@ -1956,7 +1989,8 @@ public sealed class UasmEmitter
         // (reference semantics — no clone; the bundle flows through by reference).
         var receiverParamId =
             (_userClassDefaultMethods.Contains(method)
-                || method.ContainingType is INamedTypeSymbol structCt && TypeClassifier.IsObjectArrayEmulated(structCt) && !method.IsStatic
+                || method.ContainingType is INamedTypeSymbol structCt
+                   && IsObjectArrayEmulated(structCt) && !method.IsStatic
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
                 ? func.ParamFieldNames[0] : null;
 
@@ -2145,7 +2179,8 @@ public sealed class UasmEmitter
                 // CA-v2 M1: a v1 CLASS ctor orchestrates its own chain (charter #6, field inits + base
                 // call, in InvocationHandler which owns EmitCallToMethod/ResolveStructMember). A STRUCT
                 // ctor has no base — just its body.
-                if (method.ContainingType is INamedTypeSymbol cctClass && TypeClassifier.IsUserClass(cctClass)
+                if (method.ContainingType is INamedTypeSymbol cctClass
+                    && IsUserClass(cctClass)
                     && _state.Methods.CurrentStructReceiverParamId != null)
                     new InvocationHandler(_lowering).EmitClassCtorPrologue(method, ctorBodyOp,
                         _state.Methods.CurrentStructReceiverParamId);

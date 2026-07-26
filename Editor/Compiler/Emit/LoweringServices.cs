@@ -118,6 +118,37 @@ internal sealed class LoweringServices
             operation, scope);
     }
 
+    internal RuntimeShape SourceShape(ITypeSymbol type)
+    {
+        if (type == null)
+            return default;
+        return _state.Types.SourceShape(
+            type, _state.TypeParamMap);
+    }
+
+    internal bool IsUserClass(ITypeSymbol type)
+        => SourceShape(type).Bundle == RuntimeBundleKind.Class;
+
+    internal bool IsAggregateValue(ITypeSymbol type)
+        => SourceShape(type).Bundle == RuntimeBundleKind.Aggregate;
+
+    internal bool IsObjectArrayEmulated(ITypeSymbol type)
+    {
+        var bundle = SourceShape(type).Bundle;
+        return bundle is
+            RuntimeBundleKind.Aggregate
+            or RuntimeBundleKind.Class;
+    }
+
+    internal bool ContainsUserClassPayload(ITypeSymbol type)
+        => SourceShape(type).ContainsUserClassPayload;
+
+    internal bool IsUserStruct(ITypeSymbol type)
+        => IsAggregateValue(type)
+           && ResolveType(type) is INamedTypeSymbol named
+           && named.TypeKind == TypeKind.Struct
+           && !named.IsTupleType;
+
     internal BoundExtern RequireBoundAbi(
         IOperation operation,
         BoundAbiRole role)
@@ -183,8 +214,6 @@ internal sealed class LoweringServices
     internal StorageType GetStorageType(ITypeSymbol type)
         => _state.ResolveStorageType(type);
     internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
-    internal TypeClassifierContext TypeCtx
-        => new TypeClassifierContext(_state.TypeParamMap);
     internal ITypeSymbol ResolveType(ITypeSymbol type)
         => _state.ResolveSourceType(type);
     internal bool IsFoldedEnum(ITypeSymbol type)
@@ -215,7 +244,7 @@ internal sealed class LoweringServices
         if (receiverType is not INamedTypeSymbol recv
             || SymbolEqualityComparer.Default.Equals(memberContainingType, recv))
             return memberContainingType;
-        if (TypeClassifier.IsAggregateValue(recv))
+        if (IsAggregateValue(recv))
             throw new NotSupportedException(
                 $"'{memberName}' on user-defined struct '{recv.Name}' is not supported: Udon has no extern "
                 + "for it and C#'s ValueType semantics (field-wise Equals, type-name ToString) cannot be "
@@ -237,7 +266,7 @@ internal sealed class LoweringServices
         // of every MINTED class that is-or-derives-from the target (closed-world). A laundered value's
         // slot 0 (delegate KindTag / env Kind / struct first field / tuple / Foo[] element) is never a
         // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
-        if (ResolveType(targetType) is INamedTypeSymbol targetClass && TypeClassifier.IsUserClass(targetClass))
+        if (ResolveType(targetType) is INamedTypeSymbol targetClass && IsUserClass(targetClass))
         {
             ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
             var vars = _state.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
@@ -745,12 +774,12 @@ internal sealed class LoweringServices
             // the env cell directly so mutation hits the live storage.
             ILocalReferenceOperation lr when _state.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _state, lr.Local,
-                       new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
+                       new StorageType(IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
-                => LoadField(b.Id, new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
+                => LoadField(b.Id, new StorageType(IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             IParameterReferenceOperation pr when _state.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _state, pr.Parameter,
-                       new StorageType(TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type))),
+                       new StorageType(IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type))),
             IParameterReferenceOperation pr
                 => LoadParam(pr.Parameter),
             // Inside a struct method/ctor, `this` is the receiver object[] param, not the Behaviour.
@@ -758,10 +787,10 @@ internal sealed class LoweringServices
                 => LoadField(_state.Methods.CurrentStructReceiverParamId, StorageTypes.ObjectArray),
             // Aggregate field as a RECEIVER (e.g. `o.inner.x`, `this.structField.x`) must NOT be cloned —
             // the access/mutation has to hit the live storage. (Value reads clone in VisitFieldReference.)
-            IFieldReferenceOperation fr when TypeClassifier.IsAggregateValue(fr.Type)
+            IFieldReferenceOperation fr when IsAggregateValue(fr.Type)
                 => ReadAggregateFieldRaw(fr),
             // Aggregate array element as a RECEIVER (`arr[i].x = …`) likewise hits live storage, no clone.
-            IArrayElementReferenceOperation ae when TypeClassifier.IsAggregateValue(ae.Type)
+            IArrayElementReferenceOperation ae when IsAggregateValue(ae.Type)
                 => ReadArrayElementRaw(ae),
             _ => VisitExpression(instance), // method return, field on this, etc. — fresh or already raw
         };
@@ -945,7 +974,7 @@ internal sealed class LoweringServices
     internal CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
         // Wave-14 ndimaccess lens: an N-dim aggregate-array element used as a RECEIVER (`arr[i,j].X += 1`,
-        // `arr[i,j].Item1`) reaches this method (TypeClassifier.IsAggregateValue(ae.Type) at the
+        // `arr[i,j].Item1`) reaches this method (the bound aggregate shape at the
         // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
         // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
         // (ArrayHandler.VisitArrayElementReference, LoweringServices.PrepareArrayElementSet,
@@ -1001,7 +1030,7 @@ internal sealed class LoweringServices
         // struct-field slot RAW yields the LIVE nested object[] stored in the class bundle (no clone), so a
         // chained write lands in the class's storage, not a discarded copy. Gated on IsObjectArrayEmulated
         // (Category-A: object[] slot resolution); the caller only asks for a raw receiver, never a value read.
-        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && TypeClassifier.IsObjectArrayEmulated(cont)
+        if (fr.Instance != null && fr.Instance.Type is INamedTypeSymbol cont && IsObjectArrayEmulated(cont)
             && _state.Aggregates.GetLayout(cont).TryGetIndex(fr.Field, out var idx))
             return AggregateAbi.ReadSlot(_builder, LoadInstanceRaw(fr.Instance), idx, StorageTypes.Object);
         if (fr.Instance is IInstanceReferenceOperation)
@@ -1135,7 +1164,8 @@ internal sealed class LoweringServices
         {
             var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, StorageTypes.Object);
             var toAssign = AggregateAbi.CloneIfAggregate(_builder, elemVal,
-                ResolveType(tuple.Elements[i].Type), _state.Aggregates.GetLayout);
+                ResolveType(tuple.Elements[i].Type),
+                _state.Aggregates.GetLayout, IsAggregateValue);
             AssignToLValue(tuple.Elements[i], toAssign, preparedStores);
         }
     }
@@ -1237,7 +1267,7 @@ internal sealed class LoweringServices
         if (fieldRef.Instance == null) return null;
         if (AggregateAbi.TryGetMemberTarget(fieldRef, out var instance, out var member)
             && ResolveType(instance.Type) is INamedTypeSymbol aggregateType
-            && TypeClassifier.IsObjectArrayEmulated(aggregateType)
+            && IsObjectArrayEmulated(aggregateType)
             && _state.Aggregates.GetLayout(aggregateType).TryGetIndex(member, out var fieldIndex))
             return new FieldSetPlan(FieldSetKind.AggregateSlot, instance, fieldIndex);
         if (fieldRef.Instance is IInstanceReferenceOperation)
@@ -1341,7 +1371,8 @@ internal sealed class LoweringServices
     internal void EmitAggregateObjectInitializer(CLeaf instance, AggregateLayout layout,
         IObjectOrCollectionInitializerOperation initializer)
         => AggregateAbi.EmitObjectInitializer(_builder, instance, layout, initializer, VisitExpression,
-            _state.Aggregates.GetLayout, EmitInitializerSetterAssignment);
+            _state.Aggregates.GetLayout, IsObjectArrayEmulated,
+            EmitInitializerSetterAssignment);
 
     /// <summary>CW27: computed-property / indexer member in an aggregate object initializer — call
     /// the user setter with the fresh instance as synthetic param0 (index args by ordinal, then the
@@ -1401,7 +1432,7 @@ internal sealed class LoweringServices
 
         // Aggregate (struct/tuple) OR v1-class auto-property → layout slot write on the backing object[].
         if (propRef.Instance is { Type: INamedTypeSymbol aggContaining } aggInst
-            && TypeClassifier.IsObjectArrayEmulated(aggContaining)
+            && IsObjectArrayEmulated(aggContaining)
             && _state.Aggregates.GetLayout(aggContaining).TryGetIndex(propRef.Property, out var aggSlotIndex))
         {
             var arrExpr = LoadInstanceRaw(aggInst);
@@ -1411,7 +1442,7 @@ internal sealed class LoweringServices
         // Computed (non-auto) struct property setter: p.Both = v → call the user setter with the receiver
         // object[] as synthetic param0 (mutates this-fields through the shared backing array).
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && TypeClassifier.IsObjectArrayEmulated(aggSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggSetType && IsObjectArrayEmulated(aggSetType))
         {
             var aggSetter = RequireRegisteredCallable(
                 boundSetter.Callable.Site.Target);
@@ -1424,7 +1455,7 @@ internal sealed class LoweringServices
         // receiver object[] as param0, the index args, then the value. Mirrors the GET routing in
         // VisitIndexerGet; without it this falls to a bogus SystemObjectArray.__set_Item extern. (diff-fuzz wave 4)
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
-            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && TypeClassifier.IsObjectArrayEmulated(aggIdxSetType))
+            && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && IsObjectArrayEmulated(aggIdxSetType))
         {
             var aggIdxSetter = RequireRegisteredCallable(
                 boundSetter.Callable.Site.Target);
@@ -1781,7 +1812,7 @@ internal sealed class LoweringServices
     internal INamedTypeSymbol PlanClassToStringDemand(ITypeSymbol type)
     {
         var resolved = ResolveType(type) as INamedTypeSymbol;
-        if (resolved == null || !TypeClassifier.IsUserClass(resolved))
+        if (resolved == null || !IsUserClass(resolved))
             return null;
         _state.SyntheticDemandPlanner.RegisterClassToString(resolved);
         return resolved;
@@ -1915,7 +1946,7 @@ internal sealed class LoweringServices
                 or SpecialType.System_Enum)
         {
             if (concreteValue is INamedTypeSymbol aggregate
-                && TypeClassifier.IsAggregateValue(aggregate))
+                && IsAggregateValue(aggregate))
                 throw new NotSupportedException(
                     $"'{method.Name}' on type parameter "
                     + $"'{valueParameter.Name}' instantiated with user-defined "
@@ -2011,7 +2042,7 @@ internal sealed class LoweringServices
             type => _state.Types.GetUdonTypeName(type)));
         var receiver = !method.IsStatic
             && method.ContainingType is INamedTypeSymbol receiverType
-            && TypeClassifier.IsObjectArrayEmulated(receiverType)
+            && IsObjectArrayEmulated(receiverType)
             ? MethodContext.ReceiverAbi.ObjectArray : MethodContext.ReceiverAbi.None;
         var parameters = method.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
@@ -2178,7 +2209,7 @@ internal sealed class LoweringServices
                     : throw new NotSupportedException(
                         $"Method group '{plan.TargetMethod.Name}' has no receiver in this context."));
             if (plan.TargetMethod.ContainingType is INamedTypeSymbol receiverType
-                && TypeClassifier.IsUserStruct(receiverType))
+                && IsUserStruct(receiverType))
                 receiver = AggregateAbi.DeepClone(
                     _builder, receiver, receiverType,
                     _state.Aggregates.GetLayout);
@@ -2253,7 +2284,7 @@ internal sealed class LoweringServices
         if (op.Target is IMethodReferenceOperation && !targetMethod.IsStatic
             && targetMethod.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
             && targetMethod.ContainingType is INamedTypeSymbol recvCt0
-            && TypeClassifier.IsObjectArrayEmulated(recvCt0))
+            && IsObjectArrayEmulated(recvCt0))
         {
             var member = RequireRegisteredCallable(
                 CloseMethodForPlanning(targetMethod));
@@ -2685,7 +2716,7 @@ internal sealed class LoweringServices
                 return null;
             }
             var slotVal = AggregateAbi.ReadSlot(_builder, recv, slotIdx, StorageTypes.Object);
-            return prop.Type is INamedTypeSymbol slotAgg && TypeClassifier.IsAggregateValue(slotAgg)
+            return prop.Type is INamedTypeSymbol slotAgg && IsAggregateValue(slotAgg)
                 ? AggregateAbi.DeepClone(_builder, slotVal, slotAgg, _state.Aggregates.GetLayout) : slotVal;
         }
         var args = new List<CLeaf> { recv };
@@ -2699,7 +2730,7 @@ internal sealed class LoweringServices
         }
         var ret = EmitCallToMethod(
             RequireRegisteredCallable(t.Impl), args);
-        return prop.Type is INamedTypeSymbol retAgg && TypeClassifier.IsAggregateValue(retAgg)
+        return prop.Type is INamedTypeSymbol retAgg && IsAggregateValue(retAgg)
             ? AggregateAbi.DeepClone(_builder, ret, retAgg, _state.Aggregates.GetLayout) : ret;
     }
 
@@ -2714,9 +2745,10 @@ internal sealed class LoweringServices
     /// sits beside a class operand (the pre-share class arm returned before the reject ran).</summary>
     internal CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
     {
-        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && TypeClassifier.IsUserClass(cls))
+        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && IsUserClass(cls))
             return EmitClassToStringDispatch(cls, value, nullIsError: false, useOverrides: true);
-        ClassAbi.RejectImplicitToString(unwrapped.Type);
+        ClassAbi.RejectImplicitToString(
+            unwrapped.Type, IsAggregateValue(unwrapped.Type));
         return TryEmitEnumToString(value, unwrapped.Type) ?? value;
     }
 
@@ -2811,7 +2843,7 @@ internal sealed class LoweringServices
     /// object.ToString impl — or any impl under a base-bound non-virtual form — is the concrete type's
     /// runtime-name constant.</summary>
     CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
-        => useOverrides && TypeClassifier.IsUserClass(t.Impl.ContainingType)
+        => useOverrides && IsUserClass(t.Impl.ContainingType)
             ? EmitCallToMethod(
                 RequireRegisteredCallable(t.Impl),
                 new List<CLeaf> { recvRef })
@@ -3134,7 +3166,7 @@ internal sealed class LoweringServices
     /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator
     /// or the VM caught, with a message that never named the root cause (this exact shape recurred as
     /// roadmap B41/B46/B47). Fail HERE, where the bogus extern would be born, with a diagnosis instead.
-    /// Sound: <see cref="TypeClassifier.IsUserStruct"/> is false for every SDK/native/BCL type, so this can
+    /// Sound: the bound user-struct shape is false for every SDK/native/BCL type, so this can
     /// never fire on a legitimate extern call. The source location and operation kind are appended
     /// automatically by UasmEmitter.TagLocation (the statement/expression dispatch wraps every handler).</summary>
     internal void GuardUserStructMemberReachedExtern(ITypeSymbol containingType, string memberName)
@@ -3142,7 +3174,7 @@ internal sealed class LoweringServices
         // CA-M1: the same armor covers a v1 class member (object[]-emulated) — a class instance member
         // that reached the extern path was not routed to its FlatFunction (collector-scope drift), which
         // would otherwise mint a bogus SystemObjectArray.__<Name>__ extern.
-        if (containingType is INamedTypeSymbol ct && TypeClassifier.IsObjectArrayEmulated(ct))
+        if (containingType is INamedTypeSymbol ct && IsObjectArrayEmulated(ct))
             throw new InvalidOperationException(
                 $"user struct/class member '{ct.Name}.{memberName}' reached emission without a registered "
                 + "FlatFunction — a Phase-1 collector or on-demand registration arm does not cover this "

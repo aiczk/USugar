@@ -67,7 +67,7 @@ internal sealed class LValueLowerer
             // take this behaviour-only no-receiver arm — its accessor expects the receiver object[] as
             // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                when !_lowering.IsObjectArrayEmulated(idxRef.Property.ContainingType)
                 && getterSite.Target is { } idxDispatchGetter
                 && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter):
             {
@@ -85,7 +85,7 @@ internal sealed class LValueLowerer
             // reused by the setter in EmitWriteBack. Mirrors VisitIndexerGet. WjR3: gate on
             // IsObjectArrayEmulated, not IsAggregateValue — the CW6 polarity of the property arm below.
             case IPropertyReferenceOperation { Property: { IsIndexer: true } } sIdxRef
-                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && TypeClassifier.IsObjectArrayEmulated(sIdxType)
+                when sIdxRef.Instance?.Type is INamedTypeSymbol sIdxType && _lowering.IsObjectArrayEmulated(sIdxType)
                 && sIdxRef.Property.GetMethod is { } sIdxGetterRaw:
             {
                 var recv = _lowering.LoadInstanceRaw(sIdxRef.Instance);
@@ -139,13 +139,13 @@ internal sealed class LValueLowerer
             // sub-conditions below gate on the PROPERTY type, so class reference semantics are kept).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggCapPropRef
                 when aggCapPropRef.Instance?.Type is INamedTypeSymbol aggCapPropType
-                && TypeClassifier.IsObjectArrayEmulated(aggCapPropType):
+                && _lowering.IsObjectArrayEmulated(aggCapPropType):
             {
                 if (_lowering.State.Aggregates.GetLayout(aggCapPropType).TryGetIndex(aggCapPropRef.Property, out var capSlotIdx))
                 {
                     var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
                     CLeaf slotVal = AggregateAbi.ReadSlot(_lowering.Builder, recv, capSlotIdx, StorageTypes.Object);
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && TypeClassifier.IsAggregateValue(capSlotAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capSlotAgg && _lowering.IsAggregateValue(capSlotAgg))
                         slotVal = AggregateAbi.DeepClone(_lowering.Builder, slotVal, capSlotAgg, _lowering.State.Aggregates.GetLayout);
                     return new LoweringServices.LValuePlan { Value = slotVal, ArrayVal = recv, IndexVal = _lowering.Const(capSlotIdx, StorageTypes.Int32) };
                 }
@@ -157,7 +157,7 @@ internal sealed class LValueLowerer
                             aggCapPropRef,
                             CallableSiteKind.PropertyGet),
                         new List<CLeaf> { recv });
-                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
+                    if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && _lowering.IsAggregateValue(capGetAgg))
                         getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.State.Aggregates.GetLayout);
                     return new LoweringServices.LValuePlan { Value = getVal, ArrayVal = recv };
                 }
@@ -166,7 +166,7 @@ internal sealed class LValueLowerer
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggCapType
-                && TypeClassifier.IsObjectArrayEmulated(aggCapType):
+                && _lowering.IsObjectArrayEmulated(aggCapType):
             {
                 var layout = _lowering.State.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -275,7 +275,7 @@ internal sealed class LValueLowerer
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
                 && _lowering.ResolveType(aggFieldRef.Instance.Type) is INamedTypeSymbol aggWbType
-                && TypeClassifier.IsObjectArrayEmulated(aggWbType):
+                && _lowering.IsObjectArrayEmulated(aggWbType):
             {
                 var layout = _lowering.State.Aggregates.GetLayout(aggWbType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
@@ -331,7 +331,7 @@ internal sealed class LValueLowerer
             // type must NOT take this no-receiver arm — it falls through to the receiver-as-param0
             // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
-                when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
+                when !_lowering.IsObjectArrayEmulated(idxRef.Property.ContainingType)
                 && setterSite.Target is { } idxDispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
@@ -348,7 +348,7 @@ internal sealed class LValueLowerer
             // INDEXER never belongs here either (the value-only call drops the index legs) — it rides
             // the indexer arms above/below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
-                when !TypeClassifier.IsObjectArrayEmulated(propRef.Property.ContainingType)
+                when !_lowering.IsObjectArrayEmulated(propRef.Property.ContainingType)
                 && setterSite.Target is { } dispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(dispatchSetter, out _):
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
@@ -417,7 +417,7 @@ internal sealed class LValueLowerer
             // IsAggregateValue gate dropped classes through to the generic extern arm below (bogus
             // SystemObjectArray.__set_P__ extern, loud validator crash on legal C#).
             case IPropertyReferenceOperation { Property: { IsIndexer: false } } aggPropRef
-                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && TypeClassifier.IsObjectArrayEmulated(aggPropType):
+                when aggPropRef.Instance?.Type is INamedTypeSymbol aggPropType && _lowering.IsObjectArrayEmulated(aggPropType):
             {
                 if (_lowering.State.Aggregates.GetLayout(aggPropType).TryGetIndex(aggPropRef.Property, out var propIdx))
                 {
@@ -442,7 +442,7 @@ internal sealed class LValueLowerer
             // receiver/args cached by CaptureLValue (compound assignment); without this it falls to a bogus
             // __set_Item extern. CW6: IsObjectArrayEmulated so class receivers ride the same arm.
             case IPropertyReferenceOperation { Property: { IsIndexer: true, SetMethod: { } aggIdxSetter } } aggIdxRef
-                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && TypeClassifier.IsObjectArrayEmulated(aggIdxType)
+                when aggIdxRef.Instance?.Type is INamedTypeSymbol aggIdxType && _lowering.IsObjectArrayEmulated(aggIdxType)
                 && _lowering.MethodFunctions.ContainsKey(aggIdxSetter):
             {
                 var setterArgs = new List<CLeaf> { lv.ArrayVal ?? _lowering.LoadInstanceRaw(aggIdxRef.Instance) };

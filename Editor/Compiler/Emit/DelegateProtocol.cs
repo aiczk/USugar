@@ -68,30 +68,49 @@ internal static class DelegateAbi
     /// return slot agree with zero adapter code. Variant method-group conversions are SUPPORTED too
     /// (Stage 1.75 §2): the caller (<see cref="LoweringServices.ResolveDelegateBridge"/>) mints a sig adapter
     /// (same-program target, §2.2) or a wrapper (third-party target, §2.2's hinge) BEFORE this runs, so
-    /// <paramref name="varianceResolved"/> tells this call the mismatch it's about to see was already
+    /// the finalized <see cref="DelegateBindingPlan"/> tells this call whether the mismatch was already
     /// handled — the throw below is armor for a mismatch reaching here UNRESOLVED (should be
     /// unreachable: C# only permits reference-conversion variance in a delegate binding, which the
     /// caller's resolution always handles).
-    /// <paramref name="targetMethod"/> is the bound method for method-group bindings, null for lambdas
-    /// (a lambda's signature is inferred from the delegate type, so it can never be variant).
+    /// The plan's target is the bound method; a lambda's inferred signature
+    /// therefore remains an exact, non-adapter binding.
     /// </summary>
     public static void ValidateDelegateBinding(INamedTypeSymbol delegateType,
-        IMethodSymbol targetMethod, IUdonTypeSystem types,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null,
-        bool varianceResolved = false)
+        DelegateBindingPlan binding, IUdonTypeSystem types,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
+        if (binding == null)
+            throw new ArgumentNullException(nameof(binding));
         if (types == null) throw new ArgumentNullException(nameof(types));
         var invoke = delegateType?.DelegateInvokeMethod;
         if (invoke == null) return;
 
         ValidateNoRefOutParams(invoke);
 
-        if (!varianceResolved && targetMethod != null
-            && BuildSigPart(invoke, types, typeParamMap)
-               != BuildSigPart(targetMethod, types, typeParamMap))
+        var signaturesDiffer =
+            BuildSigPart(invoke, types, typeParamMap)
+            != BuildSigPart(
+                binding.TargetMethod, types, typeParamMap);
+        var planAdaptsSignature =
+            binding.Kind is DelegateBindingKind.SignatureAdapter
+                or DelegateBindingKind.Wrapper;
+        if (signaturesDiffer && !planAdaptsSignature)
             throw new System.NotSupportedException(
                 "Variant method-group conversion to a delegate is not supported "
               + "(parameter/return types must match the delegate signature exactly under Udon type mapping).");
+        if (!signaturesDiffer && planAdaptsSignature)
+            throw new InvalidOperationException(
+                $"Delegate binding '{binding.BridgeName}' is classified "
+                + $"as {binding.Kind}, but its source and target signatures "
+                + "are already identical.");
+    }
+
+    public static void ValidateDelegateType(
+        INamedTypeSymbol delegateType)
+    {
+        var invoke = delegateType?.DelegateInvokeMethod;
+        if (invoke != null)
+            ValidateNoRefOutParams(invoke);
     }
 
     /// <summary>ref/out reject (§3.4-1) — shared by the creation path and the convention-var declaration path.</summary>
@@ -106,11 +125,20 @@ internal static class DelegateAbi
     /// <summary>True when the convention carries a program-local user-class bundle. Such a signature
     /// may use the convention globals inside one program, but must never take the SPV/SCE cross-program
     /// dispatch arm.</summary>
-    public static bool IsProgramLocalSignature(IMethodSymbol invoke)
-        => invoke.Parameters.Any(p => TypeClassifier.ShapeOf(
-               p.Type, new TypeClassifierContext(null)).ContainsUserClassPayload)
-           || TypeClassifier.ShapeOf(
-               invoke.ReturnType, new TypeClassifierContext(null)).ContainsUserClassPayload;
+    public static bool IsProgramLocalSignature(
+        IMethodSymbol invoke,
+        IUdonTypeSystem types,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (types == null) throw new ArgumentNullException(nameof(types));
+        return invoke.Parameters.Any(p =>
+                   types.SourceShape(p.Type, typeParameterMap)
+                       .ContainsUserClassPayload)
+               || types.SourceShape(
+                       invoke.ReturnType, typeParameterMap)
+                   .ContainsUserClassPayload;
+    }
 
     /// <summary>The bridge-name prefix owned by <see cref="BridgeName"/>/<see cref="BridgeTargetKey"/> —
     /// never re-spell it at a use site (census-pinned by NamingContractCensusTests).</summary>

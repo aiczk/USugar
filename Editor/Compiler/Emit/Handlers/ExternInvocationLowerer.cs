@@ -220,7 +220,7 @@ internal sealed class ExternInvocationLowerer
     /// their shallow externs stay untouched (shallow IS C# semantics for them).</summary>
     internal INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
         => type is IArrayTypeSymbol { Rank: 1 } arr
-           && _lowering.ResolveType(arr.ElementType) is INamedTypeSymbol elem && TypeClassifier.IsAggregateValue(elem)
+           && _lowering.ResolveType(arr.ElementType) is INamedTypeSymbol elem && _lowering.IsAggregateValue(elem)
             ? elem : null;
 
     void RejectUnsafeAggregateArrayExtern(IInvocationOperation op, IMethodSymbol target)
@@ -1208,7 +1208,7 @@ internal sealed class ExternInvocationLowerer
                 {
                     CLeaf elemVal = _lowering.ExternCall(UdonAbi.ArrayGet(arrayType, elementType),
                         new List<CLeaf> { arrayVal, indexVal }, _lowering.GetStorageType(arrayElem.Type));
-                    if (arrayElem.Type is INamedTypeSymbol elemAgg && TypeClassifier.IsAggregateValue(elemAgg))
+                    if (arrayElem.Type is INamedTypeSymbol elemAgg && _lowering.IsAggregateValue(elemAgg))
                         elemVal = AggregateAbi.DeepClone(_lowering.Builder, elemVal, elemAgg, _lowering.State.Aggregates.GetLayout);
                     return elemVal;
                 }, v => _lowering.EmitExternVoid(
@@ -1218,14 +1218,14 @@ internal sealed class ExternInvocationLowerer
             case IFieldReferenceOperation fieldRef
                 when AggregateAbi.TryGetMemberTarget(fieldRef, out var aggInstance, out var aggMember)
                      && aggInstance.Type is INamedTypeSymbol aggContaining
-                     && TypeClassifier.IsAggregateValue(aggContaining)
+                     && _lowering.IsAggregateValue(aggContaining)
                      && _lowering.State.Aggregates.GetLayout(aggContaining).TryGetIndex(aggMember, out var memberIndex):
             {
                 var arrExpr = _lowering.LoadInstanceRaw(aggInstance);
                 return (() =>
                 {
                     CLeaf memberVal = AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, memberIndex, StorageTypes.Object);
-                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && TypeClassifier.IsAggregateValue(memberAgg))
+                    if (fieldRef.Field.Type is INamedTypeSymbol memberAgg && _lowering.IsAggregateValue(memberAgg))
                         memberVal = AggregateAbi.DeepClone(_lowering.Builder, memberVal, memberAgg, _lowering.State.Aggregates.GetLayout);
                     return memberVal;
                 }, v => AggregateAbi.WriteSlot(_lowering.Builder, arrExpr, memberIndex, v));

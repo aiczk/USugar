@@ -68,7 +68,7 @@ internal sealed class SimpleAssignmentHandler
                 ? elr.Local
                 : ((IParameterReferenceOperation)assign.Target).Parameter;
             var envLoaded = EnvEmit.Read(_lowering.Builder, _lowering.State, envSym, _lowering.GetStorageType(assign.Target.Type));
-            return assign.Target.Type is INamedTypeSymbol eAgg && TypeClassifier.IsAggregateValue(eAgg)
+            return assign.Target.Type is INamedTypeSymbol eAgg && _lowering.IsAggregateValue(eAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, envLoaded, eAgg, _lowering.State.Aggregates.GetLayout) : envLoaded;
         }
         var targetFieldName = _lvalues.GetAssignTargetFieldName(assign.Target);
@@ -83,7 +83,7 @@ internal sealed class SimpleAssignmentHandler
         // When the assignment is USED AS A VALUE (e.g. chained `z = y = x`) and the target is an aggregate,
         // that value must be an independent COPY (struct value semantics) — otherwise z aliases y. (diff-fuzz w4)
         return assign.Parent is not IExpressionStatementOperation
-               && assign.Target.Type is INamedTypeSymbol tAgg && TypeClassifier.IsAggregateValue(tAgg)
+               && assign.Target.Type is INamedTypeSymbol tAgg && _lowering.IsAggregateValue(tAgg)
             ? AggregateAbi.DeepClone(_lowering.Builder, loaded, tAgg, _lowering.State.Aggregates.GetLayout) : loaded;
     }
 

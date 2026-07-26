@@ -36,7 +36,7 @@ internal sealed class MemberInvocationLowerer
             // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
             // A small-underlying box is re-tagged tolerantly (CW18 — see RetagSmallNullablePresent).
             if (op.Property.Name == "Value")
-                return nblUnder is INamedTypeSymbol nblAgg && TypeClassifier.IsAggregateValue(nblAgg)
+                return nblUnder is INamedTypeSymbol nblAgg && _lowering.IsAggregateValue(nblAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, nv, nblAgg, _lowering.State.Aggregates.GetLayout)
                     : _lowering.RetagSmallNullablePresent(nv, nblUnder);
         }
@@ -57,13 +57,13 @@ internal sealed class MemberInvocationLowerer
 
         // Auto-property on an aggregate (struct/tuple) OR v1 class → object[] element (the backing field's
         // slot). The clone at the return stays IsAggregateValue, so a class-typed property returns by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && TypeClassifier.IsObjectArrayEmulated(aggProp)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggProp && _lowering.IsObjectArrayEmulated(aggProp)
             && _lowering.State.Aggregates.GetLayout(aggProp).TryGetIndex(op.Property, out var aggPropIdx))
         {
             var arrExpr = _lowering.LoadInstanceRaw(op.Instance);
             var getVal = AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, aggPropIdx, StorageTypes.Object);
             // A struct-typed property returns a COPY (C# getters return by value; you cannot mutate through it).
-            return op.Property.Type is INamedTypeSymbol propAgg && TypeClassifier.IsAggregateValue(propAgg)
+            return op.Property.Type is INamedTypeSymbol propAgg && _lowering.IsAggregateValue(propAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, getVal, propAgg, _lowering.State.Aggregates.GetLayout) : getVal;
         }
 
@@ -71,14 +71,14 @@ internal sealed class MemberInvocationLowerer
         // inline-call the user getter with the receiver object[] as synthetic param0 (same convention as
         // EmitStructInstanceCall). The getter only reads, so the receiver is passed uncloned. The return
         // clone stays IsAggregateValue, so a class-typed getter result is returned by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && TypeClassifier.IsObjectArrayEmulated(aggGet)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && _lowering.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
             var ret = _lowering.EmitCallToMethod(
                 _lowering.RequireBoundCallable(
                     op, CallableSiteKind.PropertyGet),
                 new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) });
-            return op.Property.Type is INamedTypeSymbol getRetAgg && TypeClassifier.IsAggregateValue(getRetAgg)
+            return op.Property.Type is INamedTypeSymbol getRetAgg && _lowering.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, getRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
         }
 
@@ -99,7 +99,7 @@ internal sealed class MemberInvocationLowerer
             {
                 var gv = _lowering.EmitCallToMethod(
                     thisGetter, new List<CLeaf>());
-                return thisProp.Type is INamedTypeSymbol thisGetAgg && TypeClassifier.IsAggregateValue(thisGetAgg)
+                return thisProp.Type is INamedTypeSymbol thisGetAgg && _lowering.IsAggregateValue(thisGetAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, gv, thisGetAgg, _lowering.State.Aggregates.GetLayout) : gv;
             }
 
@@ -110,7 +110,7 @@ internal sealed class MemberInvocationLowerer
                 && thisProp.ContainingType.Name != "UdonSharpBehaviour")
             {
                 var bv = _lowering.LoadField(thisProp.Name, _lowering.GetStorageType(thisProp.Type));
-                return thisProp.Type is INamedTypeSymbol thisAutoAgg && TypeClassifier.IsAggregateValue(thisAutoAgg)
+                return thisProp.Type is INamedTypeSymbol thisAutoAgg && _lowering.IsAggregateValue(thisAutoAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, bv, thisAutoAgg, _lowering.State.Aggregates.GetLayout) : bv;
             }
 
@@ -156,7 +156,7 @@ internal sealed class MemberInvocationLowerer
                     _lowering.RequireBoundCallable(
                         op, CallableSiteKind.PropertyGet),
                     new List<CLeaf>());
-                return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
+                return op.Property.Type is INamedTypeSymbol sgAgg && _lowering.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, sgv, sgAgg, _lowering.State.Aggregates.GetLayout) : sgv;
             }
             if (op.Property.GetMethod?.DeclaringSyntaxReferences.Length > 0
@@ -302,7 +302,7 @@ internal sealed class MemberInvocationLowerer
         // object[]-emulated arm below, which passes LoadInstanceRaw(this/base) = the receiver param —
         // mirroring how a struct's `this.Method()` self-call routes through EmitStructInstanceCall.
         if (op.Instance is IInstanceReferenceOperation
-            && !TypeClassifier.IsObjectArrayEmulated(op.Property.ContainingType)
+            && !_lowering.IsObjectArrayEmulated(op.Property.ContainingType)
             && boundGetterSite.Target is { } idxDispatchGetter
             && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter))
         {
@@ -315,7 +315,7 @@ internal sealed class MemberInvocationLowerer
         // receiver (object[]) as param0 plus the index args, like a computed property. Without this it falls
         // to a bogus SystemObjectArray.__get_Item extern the validator rejects. (diff-fuzz wave 4) The return
         // clone stays IsAggregateValue, so a class-typed indexer result is returned by reference.
-        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && TypeClassifier.IsObjectArrayEmulated(aggIdx)
+        if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggIdx && _lowering.IsObjectArrayEmulated(aggIdx)
             && op.Property.GetMethod is { } idxGetterRaw)
         {
             var sargs = new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) };
@@ -324,7 +324,7 @@ internal sealed class MemberInvocationLowerer
                 _lowering.RequireBoundCallable(
                     op, CallableSiteKind.PropertyGet),
                 sargs);
-            return op.Property.Type is INamedTypeSymbol idxRetAgg && TypeClassifier.IsAggregateValue(idxRetAgg)
+            return op.Property.Type is INamedTypeSymbol idxRetAgg && _lowering.IsAggregateValue(idxRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, idxRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
         }
 
@@ -443,7 +443,7 @@ internal sealed class MemberInvocationLowerer
                     // null = "" (C# Format semantics). Replaces the M3 sealed-only fast path (a
                     // sealed/singleton set devirtualizes inside the dispatch helper).
                     if (_lowering.ResolveType(interpolation.Expression.Type) is INamedTypeSymbol interpCls
-                        && TypeClassifier.IsUserClass(interpCls))
+                        && _lowering.IsUserClass(interpCls))
                     {
                         var recv = _lowering.VisitExpression(interpolation.Expression);
                         argVals.Add(_lowering.EmitClassToStringDispatch(interpCls, recv,
@@ -453,7 +453,10 @@ internal sealed class MemberInvocationLowerer
                     }
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
-                    ClassAbi.RejectImplicitToString(interpolation.Expression.Type);
+                    ClassAbi.RejectImplicitToString(
+                        interpolation.Expression.Type,
+                        _lowering.IsAggregateValue(
+                            interpolation.Expression.Type));
                     var interpVal = _lowering.VisitExpression(interpolation.Expression);
                     argVals.Add(_lowering.TryEmitEnumToString(interpVal, interpolation.Expression.Type) ?? interpVal);
                     argIndex++;
@@ -538,7 +541,7 @@ internal sealed class MemberInvocationLowerer
 
         // Zero-work fast path (byte-identical to pre-M1 for a plain single class): nothing to do unless
         // this class has field initializers, a user-class base chain, or an EXPLICIT this/base call.
-        bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && TypeClassifier.IsUserClass(bt0);
+        bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && _lowering.IsUserClass(bt0);
         bool explicitChainCall = initInv != null && !initInv.TargetMethod.IsImplicitlyDeclared;
         if (_lowering.State.Program.RequireClassInitializers(classTy).Count == 0
             && !baseIsUserClass
@@ -554,11 +557,12 @@ internal sealed class MemberInvocationLowerer
                 EmitClassInitializers(inst, classTy);
             if (target.IsImplicitlyDeclared)
             {
-                if (target.ContainingType is INamedTypeSymbol implBase && TypeClassifier.IsUserClass(implBase))
+                if (target.ContainingType is INamedTypeSymbol implBase && _lowering.IsUserClass(implBase))
                     ClassAbi.EmitImplicitCtorChain(
                         _lowering.Builder, inst, implBase,
                         _lowering.State.Program.RequireClassInitializers,
-                        VisitClassInitializerExpression, CallBaseCtor);
+                        VisitClassInitializerExpression, CallBaseCtor,
+                        _lowering.IsUserClass);
             }
             else
             {
@@ -580,11 +584,12 @@ internal sealed class MemberInvocationLowerer
 
         // No initializer node = implicit `: base()`: own field inits then the implicit base chain.
         EmitClassInitializers(inst, classTy);
-        if (classTy.BaseType is INamedTypeSymbol cbt && TypeClassifier.IsUserClass(cbt))
+        if (classTy.BaseType is INamedTypeSymbol cbt && _lowering.IsUserClass(cbt))
             ClassAbi.EmitImplicitCtorChain(
                 _lowering.Builder, inst, cbt,
                 _lowering.State.Program.RequireClassInitializers,
-                VisitClassInitializerExpression, CallBaseCtor);
+                VisitClassInitializerExpression, CallBaseCtor,
+                _lowering.IsUserClass);
     }
 
     /// <summary>CA-v2b-2: emit a direct call to an explicit parameterless base ctor from an implicit derived
@@ -634,7 +639,8 @@ internal sealed class MemberInvocationLowerer
                     ClassAbi.EmitImplicitCtorChain(
                         _lowering.Builder, instance, classTy,
                         _lowering.State.Program.RequireClassInitializers,
-                        VisitClassInitializerExpression, CallBaseCtor);
+                        VisitClassInitializerExpression, CallBaseCtor,
+                        _lowering.IsUserClass);
                     return;
                 }
                 // CW4: ctor args were staged positionally (IObjectCreationOperation.Arguments arrives in
@@ -680,7 +686,7 @@ internal sealed class MemberInvocationLowerer
     {
         var concrete = _lowering.ResolveType(op.Type);
         var udon = _lowering.GetStorageTypeName(concrete);
-        if (concrete is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
+        if (concrete is INamedTypeSymbol classTy && _lowering.IsUserClass(classTy))
         {
             var layout = _lowering.State.Aggregates.GetLayout(classTy);
             return ClassAbi.EmitMint(_lowering.Builder, layout,
@@ -688,11 +694,12 @@ internal sealed class MemberInvocationLowerer
                 inst => ClassAbi.EmitImplicitCtorChain(
                     _lowering.Builder, inst, classTy,
                     _lowering.State.Program.RequireClassInitializers,
-                    VisitClassInitializerExpression, CallBaseCtor),
+                    VisitClassInitializerExpression, CallBaseCtor,
+                    _lowering.IsUserClass),
                 inst => _lowering.EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));
         }
-        if (concrete is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy))
+        if (concrete is INamedTypeSymbol structTy && _lowering.IsAggregateValue(structTy))
         {
             var inst = AggregateAbi.MintDefault(_lowering.Builder, _lowering.State.Aggregates.GetLayout(structTy),
                 _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
@@ -756,14 +763,14 @@ internal sealed class MemberInvocationLowerer
         // Class ABI v1 (CA-M1): a supported user class mints via the single ClassAbi bundle sequence. An
         // unsupported class (record / non-Object base / extern-backed foreign) already threw at the resultType
         // GetStorageTypeName above (B79); nothing unsupported lands here.
-        if (concreteType is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
+        if (concreteType is INamedTypeSymbol classTy && _lowering.IsUserClass(classTy))
             return EmitClassInstanceMint(op, classTy, constructor);
 
         // Parameterless struct ctor. A user struct used AS A VALUE (e.g. `_field = new V()`, `Foo(new V())`)
         // must allocate + default-init a fresh object[]; the local-declaration path already does this, but
         // other contexts reach here. SDK value types fall through to the null placeholder.
         if (op.Arguments.Length == 0 && concreteType.IsValueType && op.Initializer == null)
-            return concreteType is INamedTypeSymbol structTy && TypeClassifier.IsAggregateValue(structTy)
+            return concreteType is INamedTypeSymbol structTy && _lowering.IsAggregateValue(structTy)
                 ? AggregateAbi.MintDefault(_lowering.Builder, _lowering.State.Aggregates.GetLayout(structTy),
                     _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName)
                 : _lowering.Const(null, new StorageType(resultType));
@@ -783,7 +790,7 @@ internal sealed class MemberInvocationLowerer
         // path. The SDK extern-ctor path below is only for SDK value types (Vector3, …) — for a user struct it
         // would emit a bogus SystemObjectArray.__ctor__<args>__ extern that the validator rejects. (diff-fuzz w3)
         if (op.Type.IsValueType && op.Arguments.Length > 0
-            && op.Type is INamedTypeSymbol userStruct && TypeClassifier.IsUserStruct(userStruct)
+            && op.Type is INamedTypeSymbol userStruct && _lowering.IsUserStruct(userStruct)
             && constructor != null)
         {
             var layout = _lowering.State.Aggregates.GetLayout(userStruct);
@@ -810,7 +817,7 @@ internal sealed class MemberInvocationLowerer
         // layout-INDEX writes. The SDK extern initializer path below assumes a native per-field setter extern (SDK
         // value types like Vector3), which object[]-emulated aggregates don't have (roadmap B41).
         if (op.Arguments.Length == 0 && op.Type.IsValueType && op.Initializer != null
-            && op.Type is INamedTypeSymbol aggInitType && TypeClassifier.IsAggregateValue(aggInitType))
+            && op.Type is INamedTypeSymbol aggInitType && _lowering.IsAggregateValue(aggInitType))
         {
             var layout = _lowering.State.Aggregates.GetLayout(aggInitType);
             var aggVal = AggregateAbi.MintDefault(_lowering.Builder, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);

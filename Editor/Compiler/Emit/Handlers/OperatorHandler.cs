@@ -45,7 +45,7 @@ internal sealed class OperatorHandler
 
         // ── User-defined struct operator: v1 + v2 → static operator method call ──
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } binOpM
-            && binOpM.ContainingType is INamedTypeSymbol binOpCt && TypeClassifier.IsObjectArrayEmulated(binOpCt))
+            && binOpM.ContainingType is INamedTypeSymbol binOpCt && _lowering.IsObjectArrayEmulated(binOpCt))
         {
             var lhs = _lowering.VisitExpression(op.LeftOperand);
             var rhs = _lowering.VisitExpression(op.RightOperand);
@@ -57,7 +57,10 @@ internal sealed class OperatorHandler
 
         // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
         // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
-        if (ClassAbi.IsReferenceEquality(op.OperatorKind, op.LeftOperand.Type, op.RightOperand.Type))
+        if (ClassAbi.IsReferenceEquality(
+                op.OperatorKind,
+                _lowering.IsUserClass(op.LeftOperand.Type),
+                _lowering.IsUserClass(op.RightOperand.Type)))
             return ClassAbi.EmitReferenceEquality(_lowering.Builder, op.OperatorKind,
                 _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand));
 
@@ -146,7 +149,7 @@ internal sealed class OperatorHandler
 
         // ── Aggregate (tuple) structural equality ──
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
-            && TypeClassifier.IsAggregateValue(op.LeftOperand.Type)
+            && _lowering.IsAggregateValue(op.LeftOperand.Type)
             && op.LeftOperand.Type is INamedTypeSymbol aggType)
         {
             return EmitAggregateEquality(op, aggType);
@@ -176,8 +179,8 @@ internal sealed class OperatorHandler
             // are fully evaluated before either ToString runs — then each class operand dispatches.
             var lCls = _lowering.ResolveType(lOp.Type) as INamedTypeSymbol;
             var rCls = _lowering.ResolveType(rOp.Type) as INamedTypeSymbol;
-            bool lIsClass = lCls != null && TypeClassifier.IsUserClass(lCls);
-            bool rIsClass = rCls != null && TypeClassifier.IsUserClass(rCls);
+            bool lIsClass = lCls != null && _lowering.IsUserClass(lCls);
+            bool rIsClass = rCls != null && _lowering.IsUserClass(rCls);
             if (lIsClass || rIsClass)
             {
                 var l = _lowering.VisitExpression(lOp);
@@ -187,8 +190,10 @@ internal sealed class OperatorHandler
                 return _lowering.ExternCall(UdonAbi.StringConcatObjects,
                     new List<CLeaf> { l, r }, StorageTypes.String);
             }
-            ClassAbi.RejectImplicitToString(lOp.Type);
-            ClassAbi.RejectImplicitToString(rOp.Type);
+            ClassAbi.RejectImplicitToString(
+                lOp.Type, _lowering.IsAggregateValue(lOp.Type));
+            ClassAbi.RejectImplicitToString(
+                rOp.Type, _lowering.IsAggregateValue(rOp.Type));
             if (_lowering.IsFoldedEnum(_lowering.ResolveType(lOp.Type)) || _lowering.IsFoldedEnum(_lowering.ResolveType(rOp.Type)))
             {
                 var l = _lowering.VisitExpression(lOp);
@@ -357,7 +362,7 @@ internal sealed class OperatorHandler
         // type and throws "Bitwise NOT not supported on SystemObjectArray". Only fires for a user operator
         // (a built-in lifted ~ has OperatorMethod null → falls through to the BitwiseNegation handling). ──
         if (operatorMethod is { MethodKind: MethodKind.UserDefinedOperator } unOpM
-            && unOpM.ContainingType is INamedTypeSymbol unOpCt && TypeClassifier.IsObjectArrayEmulated(unOpCt))
+            && unOpM.ContainingType is INamedTypeSymbol unOpCt && _lowering.IsObjectArrayEmulated(unOpCt))
         {
             var operand = _lowering.VisitExpression(op.Operand);
             return _lowering.EmitCallToMethod(
@@ -657,7 +662,7 @@ internal sealed class OperatorHandler
 
         // Tuple/user-struct positional patterns read their aggregate slots directly. Other supported
         // types call the registered user Deconstruct(out ...) method.
-        if (matchType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(matchType))
+        if (matchType is not INamedTypeSymbol aggType || !_lowering.IsAggregateValue(matchType))
         {
             var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
                 ? null
@@ -714,7 +719,7 @@ internal sealed class OperatorHandler
         IRecursivePatternOperation rec, CLeaf acc)
     {
         var aggMatchType = matchType as INamedTypeSymbol;
-        bool isAgg = aggMatchType != null && TypeClassifier.IsObjectArrayEmulated(aggMatchType);
+        bool isAgg = aggMatchType != null && _lowering.IsObjectArrayEmulated(aggMatchType);
         foreach (var sub in rec.PropertySubpatterns)
         {
             ITypeSymbol memberType, memberContainingType;
@@ -738,7 +743,7 @@ internal sealed class OperatorHandler
                     property, CallableSiteKind.PropertyGet)
                 : null;
             CLeaf memberVal;
-            if (isAgg && TypeClassifier.IsUserClass(aggMatchType)
+            if (isAgg && _lowering.IsUserClass(aggMatchType)
                 && sub.Member is IPropertyReferenceOperation vSubRef
                 && propertySite.UsesRuntimeDispatch)
             {

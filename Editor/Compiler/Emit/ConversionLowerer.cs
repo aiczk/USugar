@@ -99,14 +99,14 @@ internal sealed class ConversionSemanticPlanner
         var semanticSource = _lowering.ResolveType(conversion.Operand.Type);
         var closedDestination = _lowering.ResolveType(conversion.Type);
         var allowsProgramLocalClassErasure =
-            BoundaryChecker.IsProvablyLocalClassErasure(
+            _lowering.State.Boundary.IsProvablyLocalClassErasure(
                 conversion, semanticSource, closedDestination);
         if (conversion.OperatorMethod != null
             || semanticSource?.SpecialType != SpecialType.System_Object
             || closedDestination == null
             || closedDestination is ITypeParameterSymbol
             || EmitPolicy.IsNullableT(closedDestination, out _)
-            || TypeClassifier.IsObjectArrayEmulated(closedDestination)
+            || _lowering.IsObjectArrayEmulated(closedDestination)
             || closedDestination
                 is INamedTypeSymbol { DelegateInvokeMethod: not null })
             return new ClosedConversionPlan(

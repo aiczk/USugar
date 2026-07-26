@@ -128,8 +128,8 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
     {
         var c = AbiCompile(AbiSrc);
         var ex = Assert.Throws<NotSupportedException>(
-            () => DelegateAbi.ValidateDelegateBinding(
-                DelegateOf(c, "R"), null, Types(c)));
+            () => DelegateAbi.ValidateDelegateType(
+                DelegateOf(c, "R")));
         Assert.Contains("ref/out", ex.Message);
     }
 
@@ -140,8 +140,8 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
         // aggregate slot (same representation as a user-struct return) — no adapter needed, so binding
         // a tuple-return delegate type is not rejected.
         var c = AbiCompile(AbiSrc);
-        DelegateAbi.ValidateDelegateBinding(
-            DelegateOf(c, "T"), null, Types(c));
+        DelegateAbi.ValidateDelegateType(
+            DelegateOf(c, "T"));
     }
 
     [Fact]
@@ -149,9 +149,15 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
     {
         // Func<object> bound to a string-returning method: legal C#, but the __dlgc_ names diverge.
         var c = AbiCompile(AbiSrc);
+        var target = MethodOf(c, "GetStr");
         var ex = Assert.Throws<NotSupportedException>(
             () => DelegateAbi.ValidateDelegateBinding(
-                DelegateOf(c, "O"), MethodOf(c, "GetStr"), Types(c)));
+                DelegateOf(c, "O"),
+                new DelegateBindingPlan(
+                    DelegateBindingKind.Direct,
+                    target,
+                    "__dlg_GetStr"),
+                Types(c)));
         Assert.Contains("Variant method-group", ex.Message);
     }
 
@@ -159,8 +165,42 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
     public void ValidateDelegateBinding_ExactMethodGroup_Passes()
     {
         var c = AbiCompile(AbiSrc);
+        var target = MethodOf(c, "M");
         DelegateAbi.ValidateDelegateBinding(
-            DelegateOf(c, "F"), MethodOf(c, "M"), Types(c));
+            DelegateOf(c, "F"),
+            new DelegateBindingPlan(
+                DelegateBindingKind.Direct,
+                target,
+                "__dlg_M"),
+            Types(c));
+    }
+
+    [Fact]
+    public void ValidateDelegateBinding_VariantAdapterPlan_Passes()
+    {
+        var c = AbiCompile(AbiSrc);
+        DelegateAbi.ValidateDelegateBinding(
+            DelegateOf(c, "O"),
+            new DelegateBindingPlan(
+                DelegateBindingKind.SignatureAdapter,
+                MethodOf(c, "GetStr"),
+                "__dlg_adapt_GetStr"),
+            Types(c));
+    }
+
+    [Fact]
+    public void ValidateDelegateBinding_ExactAdapterPlan_Throws()
+    {
+        var c = AbiCompile(AbiSrc);
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => DelegateAbi.ValidateDelegateBinding(
+                DelegateOf(c, "F"),
+                new DelegateBindingPlan(
+                    DelegateBindingKind.SignatureAdapter,
+                    MethodOf(c, "M"),
+                    "__dlg_adapt_M"),
+                Types(c)));
+        Assert.Contains("already identical", ex.Message);
     }
 
     // ── End-to-end reject pins ──

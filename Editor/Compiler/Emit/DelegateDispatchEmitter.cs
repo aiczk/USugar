@@ -43,7 +43,8 @@ internal sealed class DelegateDispatchEmitter
         StorageType? retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
         CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription)
     {
-        var localSignature = DelegateAbi.IsProgramLocalSignature(invoke);
+        var localSignature = DelegateAbi.IsProgramLocalSignature(
+            invoke, _ctx.Types, typeParamMap);
         // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
         int retSlot = -1;
         if (retType != null)

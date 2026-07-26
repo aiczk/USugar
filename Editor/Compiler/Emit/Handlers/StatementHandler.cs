@@ -441,7 +441,7 @@ internal sealed class StatementHandler
     void EmitDispose(CLeaf val, ITypeSymbol type)
     {
         var resolvedType = _lowering.ResolveType(type);
-        if (resolvedType is INamedTypeSymbol nt && TypeClassifier.IsUserStruct(nt)
+        if (resolvedType is INamedTypeSymbol nt && _lowering.IsUserStruct(nt)
             && EmitPolicy.FindStructDisposeMethod(nt) is { } dispose)
         {
             _lowering.EmitCallToMethod(
@@ -496,7 +496,7 @@ internal sealed class StatementHandler
                 {
                     EnvEmit.Write(_lowering.Builder, _lowering.State, local, _lowering.VisitExpression(envInit.Value));
                 }
-                else if (local.Type is INamedTypeSymbol envAggT && TypeClassifier.IsAggregateValue(envAggT))
+                else if (local.Type is INamedTypeSymbol envAggT && _lowering.IsAggregateValue(envAggT))
                 {
                     var envAggLayout = _lowering.State.Aggregates.GetLayout(envAggT);
                     EnvEmit.Write(_lowering.Builder, _lowering.State, local,
@@ -506,7 +506,7 @@ internal sealed class StatementHandler
             }
 
             // Aggregate-typed local (tuple / user-defined struct) → object[] emulation
-            if (local.Type is INamedTypeSymbol namedType && TypeClassifier.IsAggregateValue(namedType))
+            if (local.Type is INamedTypeSymbol namedType && _lowering.IsAggregateValue(namedType))
             {
                 VisitAggregateLocalDeclaration(local, namedType, declarator.Initializer);
                 continue;
@@ -574,7 +574,7 @@ internal sealed class StatementHandler
         // dropping the member writes; the generic arm's VisitObjectCreation applies it after the ctor.
         else if (value is IObjectCreationOperation ocCtor && ocCtor.Arguments.Length > 0
                  && ocCtor.Initializer == null
-                 && TypeClassifier.IsUserStruct(aggregateType) && ocCtor.Constructor != null
+                 && _lowering.IsUserStruct(aggregateType) && ocCtor.Constructor != null
                  && _lowering.MethodFunctions.ContainsKey(ocCtor.Constructor)
                  && CtorArgsArePositionalByValue(ocCtor))
         {
