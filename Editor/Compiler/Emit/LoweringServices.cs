@@ -49,8 +49,6 @@ internal sealed class LoweringServices
     internal IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
     internal IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
     internal IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
-    internal List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
-        => _state.Methods.PendingBodies;
     internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
         _typeParamMap => _state.TypeParamMap;
     internal Dictionary<ILocalSymbol, LocalBinding> _localBindings => _state.Storage.LocalBindings;
@@ -1629,13 +1627,15 @@ internal sealed class LoweringServices
         };
         var capturing = _state.Captures != null
             && _state.Captures.IsCapturingClosure(localFunc);
-        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
+        new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(localFunc, index => $"__{index}_{funcName}",
                 slotPrefix: index => $"__{index}_{funcName}",
                 parameters: parameters, returns: returns,
                 closureKeyArgs: keyArgs, closureOwnerSpecs: identity.OwnerSpecs,
-                environmentId: capturing ? index => $"__{index}_{funcName}__envp" : null));
-        _pendingCallableBodies.Add((localFunc, record));
+                environmentId: capturing
+                    ? index => $"__{index}_{funcName}__envp"
+                    : null),
+            deferredBody: true);
     }
 
     // ── Delegate convention helpers ──
@@ -1943,8 +1943,11 @@ internal sealed class LoweringServices
         var closureIdentity = closureKind ? _state.ResolveClosureIdentity(constructed) : default;
         var closureKeyArgs = closureKind
             ? closureIdentity.KeyArgs : System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty;
-        if (closureKind ? _state.Methods.TryGetClosureSpec(constructed, closureKeyArgs, out _)
-                        : _methodFunctions.ContainsKey(constructed)) return;
+        if (closureKind
+                ? _state.Methods.TryGetClosureSpec(
+                    constructed, closureKeyArgs, out _)
+                : _state.Methods.Callables.ContainsKey(constructed))
+            return;
         EmitPolicy.RejectInParameters(constructed);
 
         if (!closureKind)
@@ -1964,15 +1967,16 @@ internal sealed class LoweringServices
         };
         var capturing = _state.Captures != null
             && _state.Captures.IsCapturingClosure(constructed);
-        var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
+        new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(constructed,
                 index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
                 parameters: parameters, returns: returns,
                 closureKeyArgs: closureKeyArgs,
                 closureOwnerSpecs: closureIdentity.OwnerSpecs.Add(constructed),
                 environmentId: capturing
-                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp" : null));
-        _pendingCallableBodies.Add((constructed, record));
+                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp"
+                    : null),
+            deferredBody: true);
     }
 
     void RegisterNamedSpecialization(IMethodSymbol method)
@@ -1996,8 +2000,8 @@ internal sealed class LoweringServices
             receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
                 ? index => NameAllocator.ParamId("this", index) : null,
             parameters: parameters,
-            returns: returns));
-        _pendingCallableBodies.Add((method, null));
+            returns: returns),
+            deferredBody: true);
     }
 
     /// <summary>Feature G residual gap (wave-14): a struct-member reference (computed property/indexer
@@ -2021,6 +2025,24 @@ internal sealed class LoweringServices
         if (method == null) throw new ArgumentNullException(nameof(method));
         var closureKind = method.MethodKind is MethodKind.LambdaMethod
             or MethodKind.LocalFunction;
+        if (_state.Program != null)
+        {
+            if (closureKind)
+            {
+                var identity =
+                    _state.ResolveClosureIdentity(method);
+                if (_state.Program.TryGetClosure(
+                        method, identity.KeyArgs, out _))
+                    return method;
+            }
+            else if (_state.Program.ContainsCallable(method))
+            {
+                return method;
+            }
+            throw new InvalidOperationException(
+                $"Callable '{method.ToDisplayString()}' "
+                + "was absent from the bound program.");
+        }
         if (closureKind)
         {
             var identity = _state.ResolveClosureIdentity(method);
@@ -2028,7 +2050,7 @@ internal sealed class LoweringServices
                     method, identity.KeyArgs, out _))
                 return method;
         }
-        else if (_methodFunctions.ContainsKey(method))
+        else if (_state.Methods.Callables.ContainsKey(method))
         {
             return method;
         }
@@ -2209,9 +2231,10 @@ internal sealed class LoweringServices
         {
             var member = RequireRegisteredCallable(
                 CloseMethodForPlanning(targetMethod));
-            var memberFunc = _methodFunctions[member];
+            var memberPlan = _state.Methods.Callables[member];
             var recvLeaf = Const(null, StorageTypes.ObjectArray);
-            var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
+            var recvBridgeName =
+                DelegateAbi.BridgeName(memberPlan.Name) + "_rcv";
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
             _state.SyntheticDemandPlanner.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
@@ -2262,7 +2285,9 @@ internal sealed class LoweringServices
         // overrides M, the base symbol's registration IS the exported inherited function and the
         // planner path below stays correct (and byte-identical).
         string bridgeExportName;
-        if (baseReceiver && _methodFunctions.TryGetValue(targetMethod, out var baseCopy)
+        if (baseReceiver
+            && _state.Methods.Callables.TryGetValue(
+                targetMethod, out var baseCopy)
             && baseCopy.ExportName == null)
         {
             bridgeExportName = DelegateAbi.BridgeName(baseCopy.Name);
@@ -2350,7 +2375,8 @@ internal sealed class LoweringServices
                     + "as a static, and every type argument resolves to a concrete type at the creation site "
                     + "(the specialization's bridge must live in this program).");
             RequireRegisteredCallable(constructed);
-            bridgeExportName = DelegateAbi.BridgeName(_methodFunctions[constructed].Name);
+            bridgeExportName = DelegateAbi.BridgeName(
+                _state.Methods.Callables[constructed].Name);
             PlanDelegateDemand(
                 constructed, bridgeExportName,
                 _state.TypeParamMap);
@@ -2367,7 +2393,9 @@ internal sealed class LoweringServices
         // CollectForeignStaticCallsInOperation's per-program inlining into _methodFunctions; route
         // the delegate-bridge naming through that same registration instead, exactly like the
         // lambda/local-function/generic-method arms above.
-        else if (targetMethod.IsStatic && _methodFunctions.TryGetValue(targetMethod, out var foreignFunc)
+        else if (targetMethod.IsStatic
+            && _state.Methods.Callables.TryGetValue(
+                targetMethod, out var foreignFunc)
             && !ExternResolver.IsUdonSharpBehaviour(targetMethod.ContainingType))
         {
             bridgeExportName = DelegateAbi.BridgeName(foreignFunc.Name);
@@ -2390,7 +2418,8 @@ internal sealed class LoweringServices
         //     class it is compiled from the same source and exports the same name — the dispatch resolves.
         // A cross-CLASS private binding is not expressible in C# (CS0122), so the target is always this class.
         else if (!baseReceiver
-                 && _methodFunctions.TryGetValue(targetMethod, out var privFunc)
+                 && _state.Methods.Callables.TryGetValue(
+                     targetMethod, out var privFunc)
                  && LayoutPlanBuilder.IsExcludedFromSpeculativeBridge(targetMethod)
                  && SymbolEqualityComparer.Default.Equals(targetMethod.ContainingType, _classSymbol))
         {
@@ -2965,8 +2994,13 @@ internal sealed class LoweringServices
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _state.Methods.TryGetClosureSpec(target, _state.ComposeClosureKeyArgs(target), out var calleeClosure))
-            return (calleeClosure.Slot.VarPrefix, calleeClosure.ParamVarIds,
+            && _state.Program.TryGetClosure(
+                target,
+                _state.ComposeClosureKeyArgs(target),
+                out var calleeClosure))
+            return (
+                calleeClosure.Slot.VarPrefix,
+                calleeClosure.ParamVarIds.ToArray(),
                 calleeClosure.ReturnSlots is { Length: 1 } ? calleeClosure.ReturnSlots[0].Id : null);
         if (_methodParamVarIds.TryGetValue(target, out var localParamIds))
         {
@@ -3004,8 +3038,11 @@ internal sealed class LoweringServices
     {
         // SS2B: a hoisted closure callee (generic LF specs included) resolves through the registry.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-            && _state.Methods.TryGetClosureSpec(target, _state.ComposeClosureKeyArgs(target), out var retClosure))
-            return retClosure.ReturnSlots;
+            && _state.Program.TryGetClosure(
+                target,
+                _state.ComposeClosureKeyArgs(target),
+                out var retClosure))
+            return retClosure.ReturnSlots.ToArray();
         if (_methodReturns.TryGetValue(target, out var slots))
         {
             // Same non-exported-shadow rule as GetCalleeLayout: a base-instance copy's return var
@@ -3032,7 +3069,10 @@ internal sealed class LoweringServices
         // SS2B: non-generic hoisted closures resolve per-spec (ambient args) with throw-on-miss —
         // a bare-symbol fallback here would silently call another spec's copy.
         if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction)
-            func = _state.Methods.GetClosureSpec(target, _state.ComposeClosureKeyArgs(target)).Function;
+            func = _state.Methods.RequireFunction(
+                _state.Program.RequireClosure(
+                    target,
+                    _state.ComposeClosureKeyArgs(target)));
         else if (!_methodFunctions.TryGetValue(target, out func))
             throw new InvalidOperationException($"No StructuredFunction registered for method '{target.Name}'");
         var retType = func.ReturnType ?? StorageTypes.Void;
@@ -3154,7 +3194,8 @@ internal sealed class LoweringServices
             var t = _state.Storage.GetFieldType(id);
             if (t.HasValue) fields.Add((id, t.Value));
         }
-        var pids = _state.Methods.CurrentClosureSpec?.ParamVarIds;
+        var pids = _state.Methods.CurrentClosureSpec
+            ?.ParamVarIds.ToArray();
         if (pids == null && _currentMethod != null) _methodParamVarIds.TryGetValue(_currentMethod, out pids);
         if (_currentMethod != null && pids != null)
             for (int i = 0; i < pids.Length; i++)

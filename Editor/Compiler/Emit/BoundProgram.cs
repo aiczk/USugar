@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Collections.Immutable;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
@@ -12,6 +13,14 @@ using Microsoft.CodeAnalysis.Operations;
 internal sealed class BoundProgram
 {
     public readonly CallableDefinitionPlan Callables;
+    public readonly IReadOnlyList<
+        MethodContext.RegisteredCallableBody> CallableBodies;
+    readonly IReadOnlyDictionary<
+        IMethodSymbol,
+        MethodContext.RegisteredCallable> _callableRegistry;
+    readonly IReadOnlyDictionary<
+        SpecializationKey,
+        MethodContext.ClosureSpec> _closureRegistry;
     public readonly FieldDiscoveryPlan Fields;
     public readonly ClosureIdentityPlan ClosureIdentities;
     public readonly CaptureScopeAnalysis Captures;
@@ -44,6 +53,8 @@ internal sealed class BoundProgram
 
     public BoundProgram(
         CallableDefinitionPlan callables,
+        IEnumerable<
+            MethodContext.RegisteredCallableBody> callableBodies,
         FieldDiscoveryPlan fields,
         ClosureIdentityPlan closureIdentities,
         CaptureScopeAnalysis captures,
@@ -74,6 +85,40 @@ internal sealed class BoundProgram
     {
         Callables = callables
             ?? throw new ArgumentNullException(nameof(callables));
+        var bodyArray = (callableBodies
+            ?? throw new ArgumentNullException(nameof(callableBodies)))
+            .ToArray();
+        CallableBodies = Array.AsReadOnly(bodyArray);
+        var callableRegistry = new Dictionary<
+            IMethodSymbol,
+            MethodContext.RegisteredCallable>(
+            SymbolEqualityComparer.Default);
+        var closureRegistry = new Dictionary<
+            SpecializationKey,
+            MethodContext.ClosureSpec>();
+        foreach (var body in bodyArray)
+        {
+            if (body?.Callable == null)
+                throw new ArgumentException(
+                    "A bound callable body cannot be null.",
+                    nameof(callableBodies));
+            if (body.Closure == null)
+                callableRegistry.Add(
+                    body.Method, body.Callable);
+            else
+                closureRegistry.Add(
+                    new SpecializationKey(
+                        body.Method, body.Closure.KeyArgs),
+                    body.Closure);
+        }
+        _callableRegistry = new ReadOnlyDictionary<
+            IMethodSymbol,
+            MethodContext.RegisteredCallable>(
+            callableRegistry);
+        _closureRegistry = new ReadOnlyDictionary<
+            SpecializationKey,
+            MethodContext.ClosureSpec>(
+            closureRegistry);
         Fields = fields
             ?? throw new ArgumentNullException(nameof(fields));
         ClosureIdentities = closureIdentities
@@ -141,6 +186,63 @@ internal sealed class BoundProgram
         throw new InvalidOperationException(
             $"Source storage name for '{field?.ToDisplayString()}' was not bound.");
     }
+
+    public bool ContainsCallable(IMethodSymbol method)
+        => method != null
+           && _callableRegistry.ContainsKey(method);
+
+    public MethodContext.RegisteredCallable RequireCallable(
+        IMethodSymbol method)
+        => method != null
+           && _callableRegistry.TryGetValue(
+               method, out var callable)
+            ? callable
+            : throw new InvalidOperationException(
+                $"Callable '{method?.ToDisplayString()}' "
+                + "was absent from the bound program.");
+
+    public bool TryGetClosure(
+        IMethodSymbol definition,
+        ImmutableArray<ITypeSymbol> keyArgs,
+        out MethodContext.ClosureSpec closure)
+    {
+        closure = null;
+        if (definition == null) return false;
+        if (_closureRegistry.TryGetValue(
+                new SpecializationKey(
+                    definition, keyArgs),
+                out closure))
+            return true;
+        foreach (var pair in _closureRegistry)
+        {
+            if (!ClosureIdentityPlan.SameSourceDefinition(
+                    pair.Key.Definition, definition)
+                || pair.Key.Arguments.Length
+                != keyArgs.Length)
+                continue;
+            var sameArguments = true;
+            for (var i = 0; i < keyArgs.Length; i++)
+                if (!SymbolEqualityComparer.Default.Equals(
+                        pair.Key.Arguments[i], keyArgs[i]))
+                {
+                    sameArguments = false;
+                    break;
+                }
+            if (!sameArguments) continue;
+            closure = pair.Value;
+            return true;
+        }
+        return false;
+    }
+
+    public MethodContext.ClosureSpec RequireClosure(
+        IMethodSymbol definition,
+        ImmutableArray<ITypeSymbol> keyArgs)
+        => TryGetClosure(definition, keyArgs, out var closure)
+            ? closure
+            : throw new InvalidOperationException(
+                $"Hoisted closure '{definition?.Name}' has no registration "
+                + "for the bound specialization.");
 
     public BoundCallSite RequireCallSite(
         SyntaxNode syntax,

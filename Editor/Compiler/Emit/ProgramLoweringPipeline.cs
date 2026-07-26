@@ -31,8 +31,6 @@ public sealed class UasmEmitter
     IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
     IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
-    List<(IMethodSymbol Method, MethodContext.ClosureSpec Spec)> _pendingCallableBodies
-        => _state.Methods.PendingBodies;
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap
         => _state.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
@@ -204,8 +202,6 @@ public sealed class UasmEmitter
             fields.InitializerOperations.ToArray();
         var (callables, reach) =
             DiscoverCallablesAndReach(fieldInitializers);
-        FieldPlanEmitter.Emit(fields, _state);
-        SetReflectionValues();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (LoweringServices, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
@@ -219,7 +215,6 @@ public sealed class UasmEmitter
         _state.ClassTypes.Seed(reach.MintedClasses
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
-        DeclareTypeObjectConstants();
         _virtualDispatch = new VirtualDispatch(_state.ClassTypes);
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, reach, fieldInitializers,
@@ -1169,12 +1164,15 @@ public sealed class UasmEmitter
             specializationRegistrar.Register(
                 new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
         }
+        _state.Methods.FreezeCallableRegistry();
+        var callableBodies =
+            _state.Methods.RegisteredBodies.ToArray();
         var methodBodies = BoundMethodBodyTable.Materialize(
             _compilation,
-            _state.Methods.RegisteredBodies.Select(
+            callableBodies.Select(
                 body => body.Method.OriginalDefinition));
         _state.SyntheticDemandPlanner.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            _state.Methods.RegisteredBodies,
+            callableBodies,
             methodBodies,
             fieldInitializers));
         PlanSyntheticDemands(
@@ -1198,6 +1196,7 @@ public sealed class UasmEmitter
         var classTypes = _state.ClassTypes.Publish();
         var program = new BoundProgram(
             callables,
+            callableBodies,
             fields,
             closureIdentities,
             captures,
@@ -1221,6 +1220,10 @@ public sealed class UasmEmitter
             aggregates,
             classTypes);
         _state.PublishBoundProgram(program);
+        FieldPlanEmitter.Emit(program.Fields, _state);
+        SetReflectionValues();
+        DeclareTypeObjectConstants();
+        new CallableRegistrar(_state).Materialize(program);
         EmitRegisteredBodies(program);
         RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
@@ -1581,7 +1584,7 @@ public sealed class UasmEmitter
                     || method.ContainingType is INamedTypeSymbol aggregate
                        && TypeClassifier.IsObjectArrayEmulated(aggregate) && !method.IsStatic)
                 && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
-                    ? body.Callable.Function.ParamFieldNames[0]
+                    ? body.Callable.ReceiverFieldId
                     : null;
             using var methodScope = _state.Methods.EnterCallableScope(
                 method, body.Closure, receiverId, body.OwnerSpecs);
@@ -1803,28 +1806,9 @@ public sealed class UasmEmitter
     void EmitRegisteredBodies(BoundProgram plan)
     {
         var methods = plan.Callables.ProgramMethods;
-        var foreignStatics = plan.Callables.ForeignStatics;
-        var structMethods = plan.Callables.StructMethods;
-        var baseInstanceMethods = plan.Callables.BaseInstanceMethods;
-
-        // Second pass: emit bodies (skip generic definitions)
-        foreach (var method in methods)
-        {
-            if (method.IsGenericMethod) continue;
-            EmitMethod(method);
-        }
-
-        // Emit foreign static method bodies
-        foreach (var fm in foreignStatics)
-            EmitMethod(fm);
-
-        // Emit user-struct constructor + instance method bodies
-        foreach (var sm in structMethods)
-            EmitMethod(sm);
-
-        // Emit base class instance method bodies
-        foreach (var bm in baseInstanceMethods)
-            EmitMethod(bm);
+        foreach (var body in plan.CallableBodies)
+            if (!body.Callable.IsDeferredBody)
+                EmitMethod(body.Method, body.Closure);
 
         // A behaviour can receive an exported event before its Start event.  Build one construction
         // barrier and later prepend it to every export; tying these operations to _start leaves a
@@ -1853,16 +1837,9 @@ public sealed class UasmEmitter
         new DelegateBridgeEmitter(
             _state, _bridge, _delegateConvention, plan.SyntheticDemands).EmitLayoutBridges();
 
-        // Every additional body was registered by the closed-world plan before lowering began.
-        // Consume one fixed batch; body emission is forbidden from extending it.
-        var additionalBodies = _pendingCallableBodies.ToArray();
-        _pendingCallableBodies.Clear();
-        foreach (var (method, spec) in additionalBodies)
-            EmitMethod(method, spec);
-        if (_pendingCallableBodies.Count != 0)
-            throw new InvalidOperationException(
-                "Body lowering discovered callable bodies absent "
-                + "from the closed-world callable plan.");
+        foreach (var body in plan.CallableBodies)
+            if (body.Callable.IsDeferredBody)
+                EmitMethod(body.Method, body.Closure);
 
         _state.VerifySyntheticEmissionComplete();
 
@@ -1906,7 +1883,9 @@ public sealed class UasmEmitter
 
     void EmitMethod(IMethodSymbol method, MethodContext.ClosureSpec closureSpec = null)
     {
-        var func = closureSpec?.Function ?? _methodFunctions[method];
+        var func = closureSpec != null
+            ? _state.Methods.RequireFunction(closureSpec)
+            : _methodFunctions[method];
 
         // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
         // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted
@@ -2072,7 +2051,8 @@ public sealed class UasmEmitter
 
             // Consume every captured PARAMETER of this method out of its flat param field into its env
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
-            var entryParamIds = closureSpec?.ParamVarIds;
+            var entryParamIds =
+                closureSpec?.ParamVarIds.ToArray();
             if (entryParamIds == null) _methodParamVarIds.TryGetValue(method, out entryParamIds);
             if (_state.Captures != null && entryParamIds != null)
                 foreach (var p in method.Parameters)
@@ -2120,7 +2100,8 @@ public sealed class UasmEmitter
                     _operations.VisitOperation(anonBlock);
                 else if (anonFunc.Body != null)
                 {
-                    var lambdaRets = closureSpec?.ReturnSlots;
+                    var lambdaRets =
+                        closureSpec?.ReturnSlots.ToArray();
                     if (lambdaRets == null) _methodReturns.TryGetValue(method, out lambdaRets);
                     if (lambdaRets is { Length: 1 })
                     {

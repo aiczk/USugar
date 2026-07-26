@@ -27,51 +27,84 @@ public sealed class MethodContext
     public class RegisteredCallable
     {
         public readonly IMethodSymbol Definition;
-        public readonly StructuredFunction Function;
         public readonly MethodSlot Slot;
-        public readonly string[] ParamVarIds;
-        public readonly ReturnSlot[] ReturnSlots;
+        public readonly string ExportName;
+        public readonly string ReceiverFieldId;
+        public readonly ImmutableArray<string> ParamVarIds;
+        public readonly ImmutableArray<StorageType> ParamStorageTypes;
+        public readonly ImmutableArray<ReturnSlot> ReturnSlots;
         public readonly MethodLayout Layout;
         public readonly ReceiverAbi Receiver;
         public readonly CallableKind Kind;
         public readonly string Name;
         public readonly IMethodSymbol TargetDefinition;
+        public readonly bool IsDeferredBody;
 
-        public RegisteredCallable(IMethodSymbol definition, StructuredFunction function,
-            MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
-            ReceiverAbi receiver, CallableKind kind, string name,
-            MethodLayout layout = null, IMethodSymbol targetDefinition = null)
+        public RegisteredCallable(
+            IMethodSymbol definition,
+            MethodSlot slot,
+            string name,
+            string exportName,
+            string receiverFieldId,
+            IEnumerable<string> paramVarIds,
+            IEnumerable<StorageType> paramStorageTypes,
+            IEnumerable<ReturnSlot> returnSlots,
+            ReceiverAbi receiver,
+            CallableKind kind,
+            MethodLayout layout = null,
+            IMethodSymbol targetDefinition = null,
+            bool isDeferredBody = false)
         {
             Definition = definition;
-            Function = function;
             Slot = slot;
-            ParamVarIds = paramVarIds ?? throw new ArgumentNullException(nameof(paramVarIds));
-            ReturnSlots = returnSlots ?? throw new ArgumentNullException(nameof(returnSlots));
+            Name = name ?? throw new ArgumentNullException(nameof(name));
+            ExportName = exportName;
+            ReceiverFieldId = receiverFieldId;
+            ParamVarIds = (paramVarIds
+                ?? throw new ArgumentNullException(nameof(paramVarIds)))
+                .ToImmutableArray();
+            ParamStorageTypes = (paramStorageTypes
+                ?? throw new ArgumentNullException(nameof(paramStorageTypes)))
+                .ToImmutableArray();
+            ReturnSlots = (returnSlots
+                ?? throw new ArgumentNullException(nameof(returnSlots)))
+                .ToImmutableArray();
+            if (ParamVarIds.Length != ParamStorageTypes.Length)
+                throw new ArgumentException(
+                    "Callable parameter ids and storage types must have equal length.");
             Receiver = receiver;
             Kind = kind;
-            Name = name ?? throw new ArgumentNullException(nameof(name));
             Layout = layout;
             TargetDefinition = targetDefinition?.OriginalDefinition;
+            IsDeferredBody = isDeferredBody;
         }
     }
 
     readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
         new(SymbolEqualityComparer.Default);
+    readonly Dictionary<IMethodSymbol, StructuredFunction> _functions =
+        new(SymbolEqualityComparer.Default);
+    readonly Dictionary<RegisteredCallable, StructuredFunction>
+        _functionsByCallable = new();
     readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
+    readonly List<RegisteredCallableBody> _registeredBodies = new();
+    bool _callableRegistryFrozen;
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
-    public IReadOnlyDictionary<IMethodSymbol, StructuredFunction> Functions { get; }
+    public IReadOnlyDictionary<IMethodSymbol, StructuredFunction> Functions
+        => _functions;
     public IReadOnlyDictionary<IMethodSymbol, MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
     public IReadOnlyDictionary<IMethodSymbol, string[]> ParamVarIds { get; }
 
     public MethodContext()
     {
-        Functions = new CallableProjection<StructuredFunction>(_callables, c => c.Function);
         Slots = new CallableProjection<MethodSlot>(_callables, c => c.Slot);
-        Returns = new CallableProjection<ReturnSlot[]>(_callables, c => c.ReturnSlots,
+        Returns = new CallableProjection<ReturnSlot[]>(
+            _callables, c => c.ReturnSlots.ToArray(),
             c => c.ReturnSlots.Length > 0);
-        ParamVarIds = new CallableProjection<string[]>(_callables, c => c.ParamVarIds);
+        ParamVarIds = new CallableProjection<string[]>(
+            _callables, c => c.ParamVarIds.ToArray());
     }
 
     public IMethodSymbol CurrentMethod;
@@ -84,19 +117,35 @@ public sealed class MethodContext
 
     public MethodSlot Reserve(Func<int, string> prefixFactory)
     {
+        RequireMutableRegistry();
         var idx = NextMethodIndex++;
         return new MethodSlot(idx, prefixFactory(idx));
     }
 
-    public RegisteredCallable AddCallable(IMethodSymbol method, StructuredFunction function,
-        MethodSlot slot, string[] paramVarIds, ReturnSlot[] returnSlots,
-        ReceiverAbi receiver = ReceiverAbi.None, MethodLayout layout = null)
+    public RegisteredCallable AddCallable(
+        IMethodSymbol method,
+        MethodSlot slot,
+        string name,
+        string exportName,
+        string receiverFieldId,
+        IEnumerable<string> paramVarIds,
+        IEnumerable<StorageType> paramStorageTypes,
+        IEnumerable<ReturnSlot> returnSlots,
+        ReceiverAbi receiver = ReceiverAbi.None,
+        MethodLayout layout = null,
+        bool isDeferredBody = false)
     {
-        if (method == null || function == null || paramVarIds == null || returnSlots == null)
-            throw new ArgumentNullException("A registered callable requires method, function, params, and returns.");
-        var callable = new RegisteredCallable(method, function, slot, paramVarIds, returnSlots,
-            receiver, CallableKind.Method, function.Name, layout);
+        RequireMutableRegistry();
+        if (method == null)
+            throw new ArgumentNullException(nameof(method));
+        var callable = new RegisteredCallable(
+            method, slot, name, exportName, receiverFieldId,
+            paramVarIds, paramStorageTypes, returnSlots,
+            receiver, CallableKind.Method, layout,
+            isDeferredBody: isDeferredBody);
         _callables.Add(method, callable);
+        _registeredBodies.Add(
+            new RegisteredCallableBody(callable, null));
         return callable;
     }
 
@@ -158,7 +207,7 @@ public sealed class MethodContext
     // A closure in a non-generic context has an EMPTY args vector — the key degenerates 1:1 to the
     // definition and behavior is byte-identical to the old symbol keying.
 
-    /// <summary>Everything a per-spec hoisted closure owns: its StructuredFunction, flat param/return field
+    /// <summary>Everything a per-spec hoisted closure owns: its exact function ABI, flat param/return field
     /// ids, its hidden __envp field id (null for capture-free), the enclosing constructed specs it
     /// was registered under (drives the type-param compose at its own emission — replacing the
     /// fallback lookup), and the composite key args.</summary>
@@ -168,11 +217,22 @@ public sealed class MethodContext
         public readonly ImmutableArray<IMethodSymbol> OwnerSpecs;
         public readonly string EnvpFieldId;
 
-        public ClosureSpec(IMethodSymbol definition, StructuredFunction function, MethodSlot slot,
-            string[] paramVarIds, ReturnSlot[] returnSlots, ImmutableArray<ITypeSymbol> keyArgs,
-            ImmutableArray<IMethodSymbol> ownerSpecs, string envpFieldId)
-            : base(definition, function, slot, paramVarIds, returnSlots, ReceiverAbi.None,
-                CallableKind.Closure, function.Name)
+        public ClosureSpec(
+            IMethodSymbol definition,
+            MethodSlot slot,
+            string name,
+            IEnumerable<string> paramVarIds,
+            IEnumerable<StorageType> paramStorageTypes,
+            IEnumerable<ReturnSlot> returnSlots,
+            ImmutableArray<ITypeSymbol> keyArgs,
+            ImmutableArray<IMethodSymbol> ownerSpecs,
+            string envpFieldId,
+            bool isDeferredBody)
+            : base(
+                definition, slot, name, null, null,
+                paramVarIds, paramStorageTypes, returnSlots,
+                ReceiverAbi.None, CallableKind.Closure,
+                isDeferredBody: isDeferredBody)
         {
             KeyArgs = keyArgs;
             OwnerSpecs = ownerSpecs;
@@ -214,8 +274,6 @@ public sealed class MethodContext
     /// by CLR symbol identity (absorbs the former ArgsEqual; Udon type-name strings stay banned,
     /// B66/B76).</summary>
     readonly Dictionary<SpecializationKey, ClosureSpec> _closureSpecs = new();
-
-    public readonly List<(IMethodSymbol Method, ClosureSpec Spec)> PendingBodies = new();
 
     /// <summary>The closure spec currently being emitted (set by EmitMethod for pending-closure
     /// drains), or null when emitting a named method. Consumers that used to read the bare
@@ -307,17 +365,28 @@ public sealed class MethodContext
                 + $"args [{string.Join(", ", keyArgs.Select(a => a?.ToDisplayString() ?? "?"))}] — a "
                 + "per-spec closure lookup fell outside its registration context (per-spec keying bug).");
 
-    public ClosureSpec AddClosureCallable(IMethodSymbol definition,
-        ImmutableArray<ITypeSymbol> keyArgs, ImmutableArray<IMethodSymbol> ownerSpecs,
-        StructuredFunction function, MethodSlot slot, string[] paramVarIds,
-        ReturnSlot[] returnSlots, string envpFieldId)
+    public ClosureSpec AddClosureCallable(
+        IMethodSymbol definition,
+        ImmutableArray<ITypeSymbol> keyArgs,
+        ImmutableArray<IMethodSymbol> ownerSpecs,
+        MethodSlot slot,
+        string name,
+        IEnumerable<string> paramVarIds,
+        IEnumerable<StorageType> paramStorageTypes,
+        IEnumerable<ReturnSlot> returnSlots,
+        string envpFieldId,
+        bool isDeferredBody)
     {
-        if (definition == null || function == null || paramVarIds == null || returnSlots == null)
-            throw new ArgumentNullException(
-                "A registered closure requires method, function, params, and returns.");
-        var spec = new ClosureSpec(definition, function, slot, paramVarIds, returnSlots,
-            keyArgs, ownerSpecs, envpFieldId);
+        RequireMutableRegistry();
+        if (definition == null)
+            throw new ArgumentNullException(nameof(definition));
+        var spec = new ClosureSpec(
+            definition, slot, name,
+            paramVarIds, paramStorageTypes, returnSlots,
+            keyArgs, ownerSpecs, envpFieldId, isDeferredBody);
         _closureSpecs.Add(new SpecializationKey(definition, keyArgs), spec);
+        _registeredBodies.Add(
+            new RegisteredCallableBody(spec, spec));
         return spec;
     }
 
@@ -327,10 +396,16 @@ public sealed class MethodContext
     {
         if (string.IsNullOrEmpty(name) || function == null)
             throw new ArgumentException("A synthetic callable requires a name and function.");
-        var callable = new RegisteredCallable(signatureMethod, function, default,
-            paramVarIds ?? Array.Empty<string>(), returnSlots ?? Array.Empty<ReturnSlot>(),
-            ReceiverAbi.None, kind, name, targetDefinition: targetMethod);
+        var callable = new RegisteredCallable(
+            signatureMethod, default, name, function.ExportName, null,
+            paramVarIds ?? Array.Empty<string>(),
+            (paramVarIds ?? Array.Empty<string>())
+                .Select(_ => StorageTypes.Object),
+            returnSlots ?? Array.Empty<ReturnSlot>(),
+            ReceiverAbi.None, kind,
+            targetDefinition: targetMethod);
         _syntheticCallables.Add(name, callable);
+        _functionsByCallable.Add(callable, function);
         return callable;
     }
 
@@ -340,15 +415,50 @@ public sealed class MethodContext
     /// <summary>Read-only callable records used to validate the frozen pre-emission definition set.</summary>
     public IEnumerable<ClosureSpec> ClosureSpecs => _closureSpecs.Values;
 
-    /// <summary>Frozen-body census input. Synthetic callables have no source body and are excluded.</summary>
-    public IEnumerable<RegisteredCallableBody> RegisteredBodies
+    /// <summary>Frozen-body census input in exact registration order.
+    /// Synthetic callables have no source body and are excluded.</summary>
+    public IReadOnlyList<RegisteredCallableBody> RegisteredBodies
+        => _registeredBodies;
+
+    public void FreezeCallableRegistry()
     {
-        get
-        {
-            foreach (var callable in _callables.Values)
-                yield return new RegisteredCallableBody(callable, null);
-            foreach (var closure in _closureSpecs.Values)
-                yield return new RegisteredCallableBody(closure, closure);
-        }
+        if (_callableRegistryFrozen)
+            throw new InvalidOperationException(
+                "Callable registry was frozen twice.");
+        _callableRegistryFrozen = true;
+    }
+
+    public void AddMaterializedFunction(
+        RegisteredCallable callable,
+        StructuredFunction function)
+    {
+        if (!_callableRegistryFrozen)
+            throw new InvalidOperationException(
+                "Callable functions cannot be materialized before "
+                + "the callable registry is frozen.");
+        if (callable == null || function == null)
+            throw new ArgumentNullException(
+                callable == null
+                    ? nameof(callable)
+                    : nameof(function));
+        _functionsByCallable.Add(callable, function);
+        if (callable.Kind == CallableKind.Method)
+            _functions.Add(callable.Definition, function);
+    }
+
+    public StructuredFunction RequireFunction(
+        RegisteredCallable callable)
+        => callable != null
+           && _functionsByCallable.TryGetValue(
+               callable, out var function)
+            ? function
+            : throw new InvalidOperationException(
+                $"Callable '{callable?.Name}' has no materialized function.");
+
+    void RequireMutableRegistry()
+    {
+        if (_callableRegistryFrozen)
+            throw new InvalidOperationException(
+                "Callable registry cannot change after publication.");
     }
 }

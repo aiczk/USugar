@@ -1137,8 +1137,11 @@ internal sealed class ExternInvocationLowerer
             // GetCalleeLayout/EmitCallToMethod — the definition-keyed map no longer holds closures).
             string[] paramIds;
             if (target.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
-                && _lowering.State.Methods.TryGetClosureSpec(target, _lowering.State.ComposeClosureKeyArgs(target), out var refClosure))
-                paramIds = refClosure.ParamVarIds;
+                && _lowering.State.Program.TryGetClosure(
+                    target,
+                    _lowering.State.ComposeClosureKeyArgs(target),
+                    out var refClosure))
+                paramIds = refClosure.ParamVarIds.ToArray();
             else
                 paramIds = _lowering.MethodParamVarIds[target]; // loud (KeyNotFound) if unregistered
             var argTarget = arguments[i].Value;

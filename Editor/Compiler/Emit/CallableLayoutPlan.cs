@@ -70,44 +70,46 @@ internal sealed class CallableLayoutPlan
     public bool IsClosure => !ClosureKeyArgs.IsDefault;
 }
 
-/// <summary>Single authority for slot allocation, storage declaration, function ABI, and record creation.</summary>
+/// <summary>
+/// Single authority for exact callable ABI planning and post-publication
+/// materialization.
+/// </summary>
 internal sealed class CallableRegistrar
 {
     readonly LoweringState _context;
 
     public CallableRegistrar(LoweringState context) => _context = context;
 
-    public MethodContext.RegisteredCallable Register(CallableLayoutPlan plan)
+    public MethodContext.RegisteredCallable Register(
+        CallableLayoutPlan plan,
+        bool deferredBody = false)
     {
         if (plan?.Method == null || plan.FunctionName == null)
             throw new ArgumentException("A callable layout requires a method and function name.");
         var slot = _context.Methods.Reserve(plan.SlotPrefix);
         var index = slot.Index;
-        var function = _context.Module.AddFunction(plan.FunctionName(index), plan.ExportName);
+        var name = plan.FunctionName(index);
 
+        string receiverId = null;
         if (plan.ReceiverId != null)
-        {
-            var receiverId = plan.ReceiverId(index);
-            _context.Storage.DeclareVar(receiverId, StorageTypes.ObjectArray);
-            function.ParamFieldNames.Add(receiverId);
-        }
+            receiverId = plan.ReceiverId(index);
 
         var parameterIds = new string[plan.Parameters.Count + (plan.EnvironmentId != null ? 1 : 0)];
+        var parameterTypes = new StorageType[parameterIds.Length];
         for (var i = 0; i < plan.Parameters.Count; i++)
         {
             var parameter = plan.Parameters[i];
             var id = parameter.Id(index);
-            _context.Storage.DeclareVar(id, parameter.Type);
-            function.ParamFieldNames.Add(id);
             parameterIds[i] = id;
+            parameterTypes[i] = parameter.Type;
         }
         string environmentId = null;
         if (plan.EnvironmentId != null)
         {
             environmentId = plan.EnvironmentId(index);
-            _context.Storage.DeclareVar(environmentId, new StorageType(EnvEmit.EnvType));
-            function.ParamFieldNames.Add(environmentId);
             parameterIds[parameterIds.Length - 1] = environmentId;
+            parameterTypes[parameterTypes.Length - 1] =
+                new StorageType(EnvEmit.EnvType);
         }
 
         var returns = new ReturnSlot[plan.Returns.Count];
@@ -115,17 +117,68 @@ internal sealed class CallableRegistrar
         {
             var result = plan.Returns[i];
             var slotId = result.Id(index);
-            _context.Storage.DeclareVar(slotId, result.Type);
             returns[i] = new ReturnSlot(slotId, result.Type);
-            function.ReturnSlots.Add(returns[i]);
         }
-        function.ReturnType = returns.Length == 1 ? returns[0].StorageType
-            : returns.Length > 1 ? StorageTypes.Void : function.ReturnType;
 
         if (plan.IsClosure)
-            return _context.Methods.AddClosureCallable(plan.Method, plan.ClosureKeyArgs,
-                plan.ClosureOwnerSpecs, function, slot, parameterIds, returns, environmentId);
-        return _context.Methods.AddCallable(plan.Method, function, slot, parameterIds,
-            returns, plan.Receiver, plan.Layout);
+            return _context.Methods.AddClosureCallable(
+                plan.Method, plan.ClosureKeyArgs,
+                plan.ClosureOwnerSpecs, slot, name,
+                parameterIds, parameterTypes, returns,
+                environmentId, deferredBody);
+        return _context.Methods.AddCallable(
+            plan.Method, slot, name, plan.ExportName,
+            receiverId, parameterIds, parameterTypes,
+            returns, plan.Receiver, plan.Layout,
+            deferredBody);
+    }
+
+    public void Materialize(BoundProgram program)
+    {
+        if (program == null)
+            throw new ArgumentNullException(nameof(program));
+        if (!ReferenceEquals(_context.Program, program))
+            throw new InvalidOperationException(
+                "Callable materialization requires the published "
+                + "bound program.");
+
+        foreach (var body in program.CallableBodies)
+        {
+            var callable = body.Callable;
+            var function = _context.Module.AddFunction(
+                callable.Name, callable.ExportName);
+            if (callable.ReceiverFieldId != null)
+            {
+                _context.Storage.DeclareVar(
+                    callable.ReceiverFieldId,
+                    StorageTypes.ObjectArray);
+                function.ParamFieldNames.Add(
+                    callable.ReceiverFieldId);
+            }
+            for (var i = 0;
+                 i < callable.ParamVarIds.Length;
+                 i++)
+            {
+                _context.Storage.DeclareVar(
+                    callable.ParamVarIds[i],
+                    callable.ParamStorageTypes[i]);
+                function.ParamFieldNames.Add(
+                    callable.ParamVarIds[i]);
+            }
+            foreach (var result in callable.ReturnSlots)
+            {
+                _context.Storage.DeclareVar(
+                    result.Id, result.StorageType);
+                function.ReturnSlots.Add(result);
+            }
+            function.ReturnType =
+                callable.ReturnSlots.Length == 1
+                    ? callable.ReturnSlots[0].StorageType
+                    : callable.ReturnSlots.Length > 1
+                        ? StorageTypes.Void
+                        : function.ReturnType;
+            _context.Methods.AddMaterializedFunction(
+                callable, function);
+        }
     }
 }

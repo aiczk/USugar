@@ -172,7 +172,8 @@ internal sealed class StatementHandler
             return;
         }
 
-        var curRets = _lowering.State.Methods.CurrentClosureSpec?.ReturnSlots;
+        var curRets = _lowering.State.Methods.CurrentClosureSpec
+            ?.ReturnSlots.ToArray();
         if (curRets == null && _lowering.CurrentMethod != null) _lowering.MethodReturns.TryGetValue(_lowering.CurrentMethod, out curRets);
         if (op.ReturnedValue != null && curRets is { Length: > 0 })
         {
@@ -213,7 +214,10 @@ internal sealed class StatementHandler
 
     void EmitTailCall(IInvocationOperation tailCall)
     {
-        var paramIds = _lowering.State.Methods.CurrentClosureSpec?.ParamVarIds ?? _lowering.MethodParamVarIds[_lowering.CurrentMethod];
+        var paramIds = _lowering.State.Methods.CurrentClosureSpec
+            ?.ParamVarIds.ToArray()
+            ?? _lowering.MethodParamVarIds[
+                _lowering.CurrentMethod];
 
         // Snapshot every arg into a temp BEFORE overwriting any param. VisitExpression returns a lazy expr
         // that reads its operand slots when lowered, not a materialized value — so storing param i first
@@ -241,7 +245,9 @@ internal sealed class StatementHandler
             _lowering.EmitStoreField(tcoEnvp, _lowering.LoadField(tcoEnvp, new StorageType(EnvEmit.EnvType)));
 
         // Jump back to method entry via goto label
-        var func = _lowering.State.Methods.CurrentClosureSpec?.Function ?? _lowering.MethodFunctions[_lowering.CurrentMethod];
+        var func = _lowering.State.Methods.CurrentClosureSpec is { } closure
+            ? _lowering.State.Methods.RequireFunction(closure)
+            : _lowering.MethodFunctions[_lowering.CurrentMethod];
         _lowering.Builder.EmitGoto($"__tco_{func.Name}");
     }
 

@@ -113,13 +113,17 @@ public class TpCls : UdonSharpBehaviour {
             .Add(comp.GetSpecialType(SpecialType.System_Int32));
         mc.AddClosureCallable(lfSym, args,
             System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty,
-            new StructuredFunction("lf1"), new MethodSlot(0, "__0_lf"),
-            System.Array.Empty<string>(), System.Array.Empty<ReturnSlot>(), null);
+            new MethodSlot(0, "__0_lf"), "lf1",
+            System.Array.Empty<string>(),
+            System.Array.Empty<StorageType>(),
+            System.Array.Empty<ReturnSlot>(), null, true);
         Assert.ThrowsAny<System.ArgumentException>(() =>
             mc.AddClosureCallable(lfSym, args,
                 System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty,
-                new StructuredFunction("lf2"), new MethodSlot(1, "__1_lf"),
-                System.Array.Empty<string>(), System.Array.Empty<ReturnSlot>(), null));
+                new MethodSlot(1, "__1_lf"), "lf2",
+                System.Array.Empty<string>(),
+                System.Array.Empty<StorageType>(),
+                System.Array.Empty<ReturnSlot>(), null, true));
     }
 
     // TypeParamScope.Compose unit pins (2026-07-11 audit coverage hole): the identity-binding skip is

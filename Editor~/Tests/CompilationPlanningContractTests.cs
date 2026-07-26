@@ -178,6 +178,10 @@ public class CompilationPlanningContractTests
             field => field.FieldType == typeof(CallableDefinitionPlan));
         Assert.Contains(fields,
             field => field.FieldType == typeof(FieldDiscoveryPlan));
+        Assert.Contains(fields,
+            field => ContainsType(
+                field.FieldType,
+                typeof(MethodContext.RegisteredCallableBody)));
         Assert.DoesNotContain(fields,
             field => field.FieldType == typeof(ReachabilityPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
@@ -200,6 +204,12 @@ public class CompilationPlanningContractTests
                 ContainsType(field.FieldType, forbidden)));
         Assert.DoesNotContain(
             typeof(SyntheticDemandPlan).GetFields(
+                BindingFlags.Instance | BindingFlags.Public
+                | BindingFlags.NonPublic),
+            field => ContainsType(
+                field.FieldType, typeof(StructuredFunction)));
+        Assert.DoesNotContain(
+            typeof(MethodContext.RegisteredCallable).GetFields(
                 BindingFlags.Instance | BindingFlags.Public
                 | BindingFlags.NonPublic),
             field => ContainsType(

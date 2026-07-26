@@ -573,11 +573,11 @@ internal sealed class RecursionAnalysisPass
 
     internal void VerifyRegisteredCallablesAreNodes(CallableBodyGraph graph)
     {
-        foreach (var callable in _state.Methods.Callables.Values.Concat<MethodContext.RegisteredCallable>(
-                     _state.Methods.ClosureSpecs))
-            if (!graph.CallableDefinitions.Contains(callable.Definition.OriginalDefinition))
+        foreach (var body in _state.Program.CallableBodies)
+            if (!graph.CallableDefinitions.Contains(
+                    body.Method.OriginalDefinition))
                 throw new InvalidOperationException(
-                    $"USugar internal error: callable '{callable.Definition}' was registered during "
-                    + "emission but was absent from the pre-emission callable body graph.");
+                    $"USugar internal error: bound callable '{body.Method}' "
+                    + "was absent from the callable body graph.");
     }
 }

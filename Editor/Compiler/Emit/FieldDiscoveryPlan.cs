@@ -64,6 +64,10 @@ internal static class FieldPlanEmitter
     {
         if (plan == null) throw new ArgumentNullException(nameof(plan));
         if (state == null) throw new ArgumentNullException(nameof(state));
+        if (!ReferenceEquals(state.Program?.Fields, plan))
+            throw new InvalidOperationException(
+                "Field materialization requires the published "
+                + "bound program.");
         if (state.FieldInitOps.Count != 0
             || state.StaticFieldInitOps.Count != 0
             || state.FieldChangeCallbacks.Count != 0)

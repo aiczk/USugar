@@ -10,7 +10,7 @@ namespace USugar.Tests;
 public class RegisteredCallableTests
 {
     [Fact]
-    public void AddCallable_ExposesRecordBackedReadOnlyViews()
+    public void AddCallable_PlansAbiBeforeFunctionMaterialization()
     {
         var tree = CSharpSyntaxTree.ParseText("class C { int M(int value) => value; }");
         var compilation = CSharpCompilation.Create("RegisteredCallable", new[] { tree },
@@ -25,17 +25,29 @@ public class RegisteredCallableTests
         var parameters = new[] { "value" };
         var returns = new[] { new ReturnSlot("result", StorageTypes.Int32) };
 
-        var callable = context.AddCallable(method, function, slot, parameters, returns,
+        var callable = context.AddCallable(
+            method, slot, "M", null, "this",
+            parameters, new[] { StorageTypes.Int32 }, returns,
             MethodContext.ReceiverAbi.ObjectArray);
 
         Assert.Same(callable, context.Callables[method]);
-        Assert.Same(function, context.Functions[method]);
+        Assert.Empty(context.Functions);
         Assert.Equal(slot, context.Slots[method]);
-        Assert.Same(parameters, context.ParamVarIds[method]);
-        Assert.Same(returns, context.Returns[method]);
+        Assert.Equal(parameters, context.ParamVarIds[method]);
+        Assert.Equal(returns, context.Returns[method]);
         Assert.Equal(MethodContext.ReceiverAbi.ObjectArray, callable.Receiver);
         Assert.Throws<ArgumentException>(() =>
-            context.AddCallable(method, function, slot, parameters, returns));
+            context.AddCallable(
+                method, slot, "M2", null, "this",
+                parameters, new[] { StorageTypes.Int32 }, returns));
+
+        context.FreezeCallableRegistry();
+        Assert.Throws<InvalidOperationException>(() =>
+            context.AddCallable(
+                method, slot, "Late", null, "this",
+                parameters, new[] { StorageTypes.Int32 }, returns));
+        context.AddMaterializedFunction(callable, function);
+        Assert.Same(function, context.Functions[method]);
     }
 
     [Fact]
@@ -48,7 +60,7 @@ public class RegisteredCallableTests
             MethodContext.CallableKind.Bridge);
 
         Assert.Same(callable, context.SyntheticCallables["__bridge_M"]);
-        Assert.Same(function, callable.Function);
+        Assert.Same(function, context.RequireFunction(callable));
         Assert.Equal(MethodContext.CallableKind.Bridge, callable.Kind);
         Assert.Equal("__bridge_M", callable.Name);
         Assert.Throws<ArgumentException>(() => context.AddSyntheticCallable(
