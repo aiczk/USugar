@@ -203,7 +203,7 @@ public sealed class CaptureScopeAnalysis
     /// <param name="reachBodies">F1/C2: the ReachableBodies body map (definition → body, fetched once).
     /// When injected it is AUTHORITATIVE — a root absent from it throws (invariant violation); only the
     /// analysis-only null path (no reach fixpoint, unit tests) self-fetches root bodies.</param>
-    /// <param name="fieldInits">C1: the field-initializer operations this class emits (own + BASE +
+    /// <param name="initializerRoots">All field-initializer operations emitted by this program (behaviour +
     /// auto-property + static, as collected + base-first spliced by field discovery). REQUIRED — there is no
     /// null fallback: the former own-class-instance-only re-collection silently dropped base and
     /// auto-property initializer closures (B50), so any caller that omitted the list would silently
@@ -212,10 +212,10 @@ public sealed class CaptureScopeAnalysis
     /// roots, yielding identical bodies), an incomplete field-init list changes CONTENT, not just provenance.</param>
     public static CaptureScopeAnalysis Build(Compilation compilation, INamedTypeSymbol classSymbol,
         IReadOnlyList<IMethodSymbol> reachRoots, IReadOnlyDictionary<IMethodSymbol, IOperation> reachBodies,
-        IReadOnlyList<IOperation> fieldInits)
+        IReadOnlyList<IOperation> initializerRoots)
     {
-        if (fieldInits == null)
-            throw new ArgumentNullException(nameof(fieldInits),
+        if (initializerRoots == null)
+            throw new ArgumentNullException(nameof(initializerRoots),
                 "CaptureScopeAnalysis.Build requires the emitted field-initializer list (empty is fine) — "
               + "a null fallback would silently drop base/auto-property initializer closures (B50).");
 
@@ -246,7 +246,10 @@ public sealed class CaptureScopeAnalysis
             if (body != null) rootBodies.Add((root, body));
         }
 
-        SeedLocalFunctionCaptureFixpoint(rootBodies.Select(rb => rb.Body).Concat(fieldInits), captureAnalyzer);
+        SeedLocalFunctionCaptureFixpoint(
+            rootBodies.Select(rb => rb.Body)
+                .Concat(initializerRoots),
+            captureAnalyzer);
 
         var builder = new Builder(captureAnalyzer);
         foreach (var (root, body) in rootBodies)
@@ -261,7 +264,7 @@ public sealed class CaptureScopeAnalysis
                 builder.Declare(receiverKey, scope);
             builder.FlattenInto(body, scope);
         }
-        foreach (var initOp in fieldInits)
+        foreach (var initOp in initializerRoots)
         {
             var scope = builder.NewScope(CaptureScopeKind.MethodEntry, null, initOp);
             builder.FlattenInto(initOp, scope);

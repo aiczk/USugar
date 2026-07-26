@@ -14,7 +14,11 @@ internal sealed class SpecializationRegistrar
 
     public void Register(ClosureSpecializationCandidate candidate)
     {
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map = null;
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map =
+            candidate.ContainingTypeSpec != null
+                ? TypeEnvironment.ForContainingType(
+                    candidate.ContainingTypeSpec, null)
+                : null;
         for (var i = candidate.OwnerSpecs.Length - 1; i >= 0; i--)
             map = TypeEnvironment.ForMethod(candidate.OwnerSpecs[i], map);
         map = TypeEnvironment.ForMethod(candidate.Method, map);

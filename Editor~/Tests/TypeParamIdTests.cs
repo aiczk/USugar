@@ -121,6 +121,7 @@ public class TpCls : UdonSharpBehaviour {
             System.Collections.Immutable.ImmutableArray.Create(owner);
         mc.AddClosureCallable(lfSym, args,
             ownerSpecs,
+            owner.ContainingType,
             new MethodSlot(0, "__0_lf"), "lf1",
             System.Array.Empty<string>(),
             System.Array.Empty<StorageType>(),
@@ -128,6 +129,7 @@ public class TpCls : UdonSharpBehaviour {
         Assert.ThrowsAny<System.ArgumentException>(() =>
             mc.AddClosureCallable(lfSym, args,
                 ownerSpecs,
+                owner.ContainingType,
                 new MethodSlot(1, "__1_lf"), "lf2",
                 System.Array.Empty<string>(),
                 System.Array.Empty<StorageType>(),

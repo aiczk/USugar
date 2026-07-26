@@ -44,30 +44,19 @@ internal sealed class SyntheticDemandPlanner
     readonly Dictionary<string, DelegateWrapperDemand> _wrapperSigs = new();
 
     bool _published;
-    HashSet<string> _expectedDelegateSites;
-    readonly Dictionary<string, DelegateBindingPlan> _plannedDelegateSites = new(StringComparer.Ordinal);
+    readonly Dictionary<BoundDelegateSiteKey, DelegateBindingPlan>
+        _plannedDelegateSites = new();
 
-    public void SetExpectedDelegateSites(IEnumerable<string> sites)
+    public void PlanDelegateBinding(
+        BoundDelegateSiteKey key,
+        DelegateBindingPlan binding)
     {
         RequireMutable();
-        if (_expectedDelegateSites != null)
-            throw new InvalidOperationException("Delegate demand census was set twice.");
-        _expectedDelegateSites = new HashSet<string>(
-            sites ?? throw new ArgumentNullException(nameof(sites)), StringComparer.Ordinal);
-    }
-
-    public void PlanDelegateBinding(string key, DelegateBindingPlan binding)
-    {
-        RequireMutable();
-        if (string.IsNullOrEmpty(key)) throw new ArgumentException("Delegate site key is required.", nameof(key));
-        if (_expectedDelegateSites == null || !_expectedDelegateSites.Contains(key))
-            throw new InvalidOperationException(
-                $"Delegate binding plan at '{key}' was absent from the pre-emission demand census.");
         if (_plannedDelegateSites.TryGetValue(key, out var existing))
         {
             if (SameBinding(existing, binding)) return;
             throw new InvalidOperationException(
-                $"Delegate site '{key}' planned conflicting bindings "
+                $"Delegate site '{key.Operation.Syntax}' planned conflicting bindings "
                 + $"'{existing.BridgeName}' and '{binding.BridgeName}'.");
         }
         _plannedDelegateSites.Add(key, binding);
@@ -75,11 +64,12 @@ internal sealed class SyntheticDemandPlanner
 
     public static void PlanOperation(
         IOperation operation,
-        LoweringServices lowering)
+        LoweringServices lowering,
+        CallSiteBindingScope scope)
     {
         if (operation is IDelegateCreationOperation creation)
         {
-            lowering.PlanDelegateBridge(creation);
+            lowering.PlanDelegateBridge(creation, scope);
             return;
         }
         if (operation is ICompoundAssignmentOperation compound
@@ -213,12 +203,6 @@ internal sealed class SyntheticDemandPlanner
     internal SyntheticDemandPlan PublishPlan()
     {
         RequireMutable();
-        if (_expectedDelegateSites == null)
-            throw new InvalidOperationException("Synthetic demand plan has no delegate-site census.");
-        foreach (var site in _expectedDelegateSites)
-            if (!_plannedDelegateSites.ContainsKey(site))
-                throw new InvalidOperationException(
-                    $"Delegate site '{site}' was not bound during synthetic demand planning.");
         var plan = new SyntheticDemandPlan(
             _closureBridgeTargets,
             _plannedDelegateSites,
@@ -239,7 +223,6 @@ internal sealed class SyntheticDemandPlanner
         _classToString.Clear();
         _sigAdapterBridges.Clear();
         _wrapperSigs.Clear();
-        _expectedDelegateSites = null;
         return plan;
     }
 

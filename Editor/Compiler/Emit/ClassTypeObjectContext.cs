@@ -13,15 +13,15 @@ public sealed class ClassTypeObjectContext
 
     /// <summary>The minted concrete user classes in this program (constructed-spec identity). Drives
     /// both the _start typeobj allocation and the is-test enumeration set.</summary>
-    public IReadOnlyCollection<INamedTypeSymbol> MintedClasses => _vars.Keys;
+    public IReadOnlyCollection<INamedTypeSymbol> RuntimeClasses => _vars.Keys;
 
-    public void Seed(IEnumerable<INamedTypeSymbol> mintedClasses)
+    public void Seed(IEnumerable<INamedTypeSymbol> runtimeClasses)
     {
         if (_published)
             throw new InvalidOperationException(
                 "The class type-object table is frozen.");
         var unique = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        foreach (var c in mintedClasses)
+        foreach (var c in runtimeClasses)
             if (c != null && !c.IsImplicitlyDeclared && c.Name != "<Module>"
                 && c.Name != "<PrivateImplementationDetails>") unique.Add(c);
         var classes = unique.ToList();

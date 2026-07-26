@@ -221,7 +221,7 @@ public sealed class VirtualDispatch
         IMethodSymbol target)
     {
         var outp = new List<VDispatchTarget>();
-        foreach (var concrete in _typeObjs.MintedClasses)
+        foreach (var concrete in _typeObjs.RuntimeClasses)
         {
             var impl = ResolveImplementation(
                 concrete, staticType, target);

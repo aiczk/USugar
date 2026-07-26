@@ -11,13 +11,14 @@ using Microsoft.CodeAnalysis;
 internal sealed class SyntheticDemandPlan
 {
     readonly IReadOnlyDictionary<string, string> _closureBridgeTargets;
-    readonly IReadOnlyDictionary<string, DelegateBindingPlan> _delegateBindings;
+    readonly IReadOnlyDictionary<
+        BoundDelegateSiteKey, DelegateBindingPlan> _delegateBindings;
     readonly HashSet<INamedTypeSymbol> _enumToStringTypes;
     readonly HashSet<INamedTypeSymbol> _classToStringTypes;
 
     public readonly IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges;
-    public readonly IReadOnlyCollection<string> DelegateSites;
+    public readonly IReadOnlyCollection<BoundDelegateSiteKey> DelegateSites;
     public readonly IReadOnlyDictionary<string, MulticastSigPlan> MulticastSignatures;
     public readonly IReadOnlyCollection<INamedTypeSymbol> EnumToStringTypes;
     public readonly IReadOnlyCollection<INamedTypeSymbol> ClassToStringTypes;
@@ -26,7 +27,8 @@ internal sealed class SyntheticDemandPlan
 
     public SyntheticDemandPlan(
         IDictionary<string, string> closureBridgeTargets,
-        IDictionary<string, DelegateBindingPlan> delegateBindings,
+        IDictionary<BoundDelegateSiteKey, DelegateBindingPlan>
+            delegateBindings,
         IEnumerable<DelegateBridgeDemand> receiverBridges,
         IEnumerable<DelegateBridgeDemand> delegateBridges,
         IDictionary<string, MulticastSigPlan> multicastSignatures,
@@ -41,9 +43,15 @@ internal sealed class SyntheticDemandPlan
                 ?? throw new ArgumentNullException(
                     nameof(closureBridgeTargets)),
                 StringComparer.Ordinal));
-        _delegateBindings = CopyMap(delegateBindings);
+        _delegateBindings = new ReadOnlyDictionary<
+            BoundDelegateSiteKey, DelegateBindingPlan>(
+            new Dictionary<
+                BoundDelegateSiteKey, DelegateBindingPlan>(
+                delegateBindings
+                ?? throw new ArgumentNullException(
+                    nameof(delegateBindings))));
         DelegateSites = Array.AsReadOnly(
-            delegateBindings.Keys.ToArray());
+            _delegateBindings.Keys.ToArray());
         var receiverBridgeArray = receiverBridges.ToArray();
         var delegateBridgeArray = delegateBridges.ToArray();
         var signatureAdapterArray = signatureAdapterBridges.ToArray();
@@ -65,11 +73,13 @@ internal sealed class SyntheticDemandPlan
     public bool TryGetClosureBridge(string name, out string functionName)
         => _closureBridgeTargets.TryGetValue(name, out functionName);
 
-    public DelegateBindingPlan RequireDelegateBinding(string site)
+    public DelegateBindingPlan RequireDelegateBinding(
+        BoundDelegateSiteKey site)
         => _delegateBindings.TryGetValue(site, out var binding)
             ? binding
             : throw new InvalidOperationException(
-                $"Delegate site '{site}' was absent from the bound program.");
+                $"Delegate site '{site.Operation.Syntax}' was absent "
+                + "from the bound program.");
 
     public void RequireMulticast(string signature, MulticastOperations operation)
     {

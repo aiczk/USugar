@@ -37,8 +37,8 @@ internal sealed class LoweringState
         { get; private set; } = new ClassTypeObjectContext();
 
     SyntheticDemandPlanner _syntheticDemandPlanner = new();
-    readonly HashSet<string> _emittedDelegateSites =
-        new(StringComparer.Ordinal);
+    readonly HashSet<BoundDelegateSiteKey>
+        _emittedDelegateSites = new();
     bool _syntheticEmissionVerified;
     internal SyntheticDemandPlanner SyntheticDemandPlanner
         => _syntheticDemandPlanner
@@ -108,7 +108,8 @@ internal sealed class LoweringState
         return plan;
     }
 
-    internal void RecordEmittedDelegateSite(string site)
+    internal void RecordEmittedDelegateSite(
+        BoundDelegateSiteKey site)
     {
         RequireProgram().SyntheticDemands
             .RequireDelegateBinding(site);
@@ -124,7 +125,8 @@ internal sealed class LoweringState
                      .SyntheticDemands.DelegateSites)
             if (!_emittedDelegateSites.Contains(site))
                 throw new InvalidOperationException(
-                    $"Planned delegate site '{site}' was not emitted "
+                    $"Planned delegate site "
+                    + $"'{site.Operation.Syntax}' was not emitted "
                     + "during body emission.");
         _emittedDelegateSites.Clear();
         _syntheticEmissionVerified = true;
@@ -313,10 +315,16 @@ internal sealed class LoweringState
     {
         public readonly System.Collections.Immutable.ImmutableArray<ITypeSymbol> KeyArgs;
         public readonly System.Collections.Immutable.ImmutableArray<IMethodSymbol> OwnerSpecs;
+        public readonly INamedTypeSymbol ContainingTypeSpec;
         public ClosureIdentity(
             System.Collections.Immutable.ImmutableArray<ITypeSymbol> keyArgs,
-            System.Collections.Immutable.ImmutableArray<IMethodSymbol> ownerSpecs)
-        { KeyArgs = keyArgs; OwnerSpecs = ownerSpecs; }
+            System.Collections.Immutable.ImmutableArray<IMethodSymbol> ownerSpecs,
+            INamedTypeSymbol containingTypeSpec)
+        {
+            KeyArgs = keyArgs;
+            OwnerSpecs = ownerSpecs;
+            ContainingTypeSpec = containingTypeSpec;
+        }
     }
 
     public ClosureIdentity ResolveClosureIdentity(IMethodSymbol closure)
@@ -326,7 +334,9 @@ internal sealed class LoweringState
         if (closure.TypeArguments.Length > 0) b.AddRange(closure.TypeArguments);
         var identityPlan = ClosureIdentities
             ?? throw new InvalidOperationException("Closure identity plan was not frozen before emission.");
-        foreach (var ownerDef in identityPlan.GetLexicalOwners(closure))
+        var lexicalOwners =
+            identityPlan.GetLexicalOwners(closure);
+        foreach (var ownerDef in lexicalOwners)
         {
             IMethodSymbol spec = null;
             foreach (var os in Methods.CurrentOwnerSpecs)
@@ -349,7 +359,16 @@ internal sealed class LoweringState
                 && spec.ContainingType is { IsGenericType: true } ct)
                 b.AddRange(ct.TypeArguments);
         }
-        return new ClosureIdentity(b.ToImmutable(), owners.ToImmutable());
+        var containingTypeSpec =
+            ResolveSourceType(closure.ContainingType)
+            as INamedTypeSymbol;
+        if (lexicalOwners.Length == 0
+            && containingTypeSpec is { IsGenericType: true })
+            b.AddRange(containingTypeSpec.TypeArguments);
+        return new ClosureIdentity(
+            b.ToImmutable(),
+            owners.ToImmutable(),
+            containingTypeSpec);
     }
 
     public System.Collections.Immutable.ImmutableArray<ITypeSymbol> ComposeClosureKeyArgs(IMethodSymbol closure)

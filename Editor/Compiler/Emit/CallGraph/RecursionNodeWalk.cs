@@ -56,15 +56,16 @@ internal sealed class RecursionNodeWalk
 {
     readonly ResolvedEdgeResolver _resolver;
     readonly ReachabilityPlan _reach;
-    readonly IEnumerable<IOperation> _fieldInitOps;
+    readonly IEnumerable<IOperation> _initializerRoots;
     readonly IEnumerable<IMethodSymbol> _plannedCallables;
 
     public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachabilityPlan reach,
-        IEnumerable<IOperation> fieldInitOps, IEnumerable<IMethodSymbol> plannedCallables)
+        IEnumerable<IOperation> initializerRoots,
+        IEnumerable<IMethodSymbol> plannedCallables)
     {
         _resolver = resolver;
         _reach = reach;
-        _fieldInitOps = fieldInitOps;
+        _initializerRoots = initializerRoots;
         _plannedCallables = plannedCallables;
     }
 
@@ -190,7 +191,7 @@ internal sealed class RecursionNodeWalk
             var body = _reach.BodyByDef[m]; // seed roots are exactly BodyByDef keys
             AddNode(m, (body as ILocalFunctionOperation)?.Body ?? body);
         }
-        foreach (var initOp in _fieldInitOps)
+        foreach (var initOp in _initializerRoots)
             Visit(initOp, null);
         while (queue.Count > 0)
         {

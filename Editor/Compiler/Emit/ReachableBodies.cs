@@ -38,17 +38,33 @@ sealed class ReachableBodies
 
     // CA-v2b-1: concrete user classes instantiated (new C()) in this program — each needs a per-program
     // typeobj (its instances carry it in bundle slot 0; is/cast enumerates the assignable subset).
-    public readonly HashSet<INamedTypeSymbol> MintedClasses = new(SymbolEqualityComparer.Default);
+    // Only these classes execute their instance initializers in this program.
+    public readonly HashSet<INamedTypeSymbol> ConstructedClasses =
+        new(SymbolEqualityComparer.Default);
+    // These classes need runtime identity and dispatch coverage, but were constructed elsewhere.
+    public readonly HashSet<INamedTypeSymbol> ImportedRuntimeClasses =
+        new(SymbolEqualityComparer.Default);
 
     /// <summary>Registration-free definitions whose bodies remain roots for capture and recursion analysis.</summary>
     public readonly HashSet<IMethodSymbol> OpenGenericBaseRoots = new(SymbolEqualityComparer.Default);
 
-    public ReachabilityPlan Freeze(IEnumerable<INamedTypeSymbol> additionalMintedClasses)
+    public ReachabilityPlan Freeze(
+        IEnumerable<INamedTypeSymbol> additionalConstructedClasses)
     {
-        var minted = new HashSet<INamedTypeSymbol>(
-            MintedClasses.Where(type => !ClassTypeObjectContext.ContainsTypeParameter(type)),
+        var constructed = new HashSet<INamedTypeSymbol>(
+            ConstructedClasses.Where(
+                type => !ClassTypeObjectContext.ContainsTypeParameter(type)),
             SymbolEqualityComparer.Default);
-        minted.UnionWith(additionalMintedClasses);
+        constructed.UnionWith(
+            additionalConstructedClasses
+            ?? throw new ArgumentNullException(
+                nameof(additionalConstructedClasses)));
+        var runtimeTypes = new HashSet<INamedTypeSymbol>(
+            constructed, SymbolEqualityComparer.Default);
+        runtimeTypes.UnionWith(
+            ImportedRuntimeClasses.Where(
+                type => !ClassTypeObjectContext
+                    .ContainsTypeParameter(type)));
         return new ReachabilityPlan(
             BodyByDef,
             GenericForeignStaticBodies,
@@ -56,7 +72,8 @@ sealed class ReachableBodies
             StructMembers,
             BaseCopies,
             StructMemberDefs,
-            minted,
+            constructed,
+            runtimeTypes,
             OpenGenericBaseRoots);
     }
 }
@@ -73,7 +90,8 @@ sealed class ReachabilityPlan
     public readonly IReadOnlyList<IMethodSymbol> StructMembers;
     public readonly IReadOnlyList<IMethodSymbol> BaseCopies;
     public readonly IReadOnlyCollection<IMethodSymbol> StructMemberDefs;
-    public readonly IReadOnlyCollection<INamedTypeSymbol> MintedClasses;
+    public readonly IReadOnlyCollection<INamedTypeSymbol> ConstructedClasses;
+    public readonly IReadOnlyCollection<INamedTypeSymbol> RuntimeClassTypes;
     public readonly IReadOnlyCollection<IMethodSymbol> OpenGenericBaseRoots;
 
     public ReachabilityPlan(
@@ -83,7 +101,8 @@ sealed class ReachabilityPlan
         IEnumerable<IMethodSymbol> structMembers,
         IEnumerable<IMethodSymbol> baseCopies,
         IEnumerable<IMethodSymbol> structMemberDefs,
-        IEnumerable<INamedTypeSymbol> mintedClasses,
+        IEnumerable<INamedTypeSymbol> constructedClasses,
+        IEnumerable<INamedTypeSymbol> runtimeClassTypes,
         IEnumerable<IMethodSymbol> openGenericBaseRoots)
     {
         BodyByDef = CopyMap(bodyByDef);
@@ -92,7 +111,10 @@ sealed class ReachabilityPlan
         StructMembers = Array.AsReadOnly(structMembers.ToArray());
         BaseCopies = Array.AsReadOnly(baseCopies.ToArray());
         StructMemberDefs = Array.AsReadOnly(structMemberDefs.ToArray());
-        MintedClasses = Array.AsReadOnly(mintedClasses.ToArray());
+        ConstructedClasses =
+            Array.AsReadOnly(constructedClasses.ToArray());
+        RuntimeClassTypes =
+            Array.AsReadOnly(runtimeClassTypes.ToArray());
         OpenGenericBaseRoots = Array.AsReadOnly(openGenericBaseRoots.ToArray());
     }
 

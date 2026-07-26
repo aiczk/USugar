@@ -41,6 +41,7 @@ internal sealed class CallableLayoutPlan
     public readonly MethodLayout Layout;
     public readonly ImmutableArray<ITypeSymbol> ClosureKeyArgs;
     public readonly ImmutableArray<IMethodSymbol> ClosureOwnerSpecs;
+    public readonly INamedTypeSymbol ClosureContainingTypeSpec;
     public readonly Func<int, string> EnvironmentId;
 
     public CallableLayoutPlan(IMethodSymbol method, Func<int, string> functionName,
@@ -51,6 +52,7 @@ internal sealed class CallableLayoutPlan
         IReadOnlyList<CallableReturnPlan> returns = null, MethodLayout layout = null,
         ImmutableArray<ITypeSymbol> closureKeyArgs = default,
         ImmutableArray<IMethodSymbol> closureOwnerSpecs = default,
+        INamedTypeSymbol closureContainingTypeSpec = null,
         Func<int, string> environmentId = null)
     {
         Method = method ?? throw new ArgumentNullException(nameof(method));
@@ -64,6 +66,7 @@ internal sealed class CallableLayoutPlan
         Layout = layout;
         ClosureKeyArgs = closureKeyArgs;
         ClosureOwnerSpecs = closureOwnerSpecs;
+        ClosureContainingTypeSpec = closureContainingTypeSpec;
         EnvironmentId = environmentId;
     }
 
@@ -123,7 +126,9 @@ internal sealed class CallableRegistrar
         if (plan.IsClosure)
             return _context.Methods.AddClosureCallable(
                 plan.Method, plan.ClosureKeyArgs,
-                plan.ClosureOwnerSpecs, slot, name,
+                plan.ClosureOwnerSpecs,
+                plan.ClosureContainingTypeSpec,
+                slot, name,
                 parameterIds, parameterTypes, returns,
                 environmentId, deferredBody);
         return _context.Methods.AddCallable(

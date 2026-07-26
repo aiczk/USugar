@@ -1697,6 +1697,8 @@ internal sealed class LoweringServices
                 slotPrefix: index => $"__{index}_{funcName}",
                 parameters: parameters, returns: returns,
                 closureKeyArgs: keyArgs, closureOwnerSpecs: identity.OwnerSpecs,
+                closureContainingTypeSpec:
+                    identity.ContainingTypeSpec,
                 environmentId: capturing
                     ? index => $"__{index}_{funcName}__envp"
                     : null),
@@ -2169,18 +2171,23 @@ internal sealed class LoweringServices
 
     internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
-        var site = DelegateDemandCensus.SiteKey(
-            op.Syntax, _state.Methods.CurrentOwnerSpecs);
+        var scope = _state.CurrentBindingScope
+                    ?? throw new InvalidOperationException(
+                        $"Delegate site '{op.Syntax}' has no binding scope.");
+        var site = new BoundDelegateSiteKey(op, scope);
         var plan = _state.Program.SyntheticDemands.RequireDelegateBinding(site);
         _state.RecordEmittedDelegateSite(site);
         return MaterializeDelegateBinding(op, plan);
     }
 
-    internal DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
+    internal DelegateBindingPlan PlanDelegateBridge(
+        IDelegateCreationOperation op,
+        CallSiteBindingScope scope)
     {
         var binding = PlanDelegateBridgeCore(op).Plan;
         _state.SyntheticDemandPlanner.PlanDelegateBinding(
-            DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding);
+            new BoundDelegateSiteKey(op, scope),
+            binding);
         return binding;
     }
 

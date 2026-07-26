@@ -66,7 +66,8 @@ internal sealed class ResolverDrivenReach
                         // CallEdge is a recursion-graph edge, not a reach root — ignored here.
                     }
                 }
-                foreach (var mc in _resolver.ResolveMintedTypes(op)) result.MintedClasses.Add(mc);
+                foreach (var mc in _resolver.ResolveMintedTypes(op))
+                    result.ConstructedClasses.Add(mc);
                 foreach (var method in _resolver.ResolvePortableDispatchMethods(op, portableClasses))
                     if (_isCollectibleStructMember(method)) structMembers.Add(method);
                 foreach (var d in _resolver.ResolveOpenBaseGenericRoots(op)) result.OpenGenericBaseRoots.Add(d);
@@ -94,7 +95,7 @@ internal sealed class ResolverDrivenReach
         // dispatch has the same complete target set as locally minted values.
         foreach (var portableClass in portableClasses)
         {
-            result.MintedClasses.Add(portableClass);
+            result.ImportedRuntimeClasses.Add(portableClass);
         }
 
         foreach (var m in entryMethods) TryEnqueue(m);

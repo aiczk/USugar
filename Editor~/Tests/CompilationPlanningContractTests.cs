@@ -438,7 +438,6 @@ public class KeyedSpecs : UdonSharpBehaviour
         var planned = compilation.GetTypeByMetadataName("Planned");
         var late = compilation.GetTypeByMetadataName("Late");
         var planner = new SyntheticDemandPlanner();
-        planner.SetExpectedDelegateSites(Array.Empty<string>());
         planner.RegisterEnumToString(planned);
 
         var plan = planner.PublishPlan();

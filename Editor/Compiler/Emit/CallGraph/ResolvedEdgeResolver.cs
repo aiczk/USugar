@@ -109,9 +109,9 @@ public sealed class ResolvedEdgeResolver
     /// <summary>CA rewrite (M5 prerequisite): the concrete user classes `op` instantiates at runtime — a
     /// direct `new C()` plus any class minted transitively inside C's field initializers (which live off the
     /// walked body tree). The `minted` dedup bounds cyclic field-init mints. This is the instantiation-set
-    /// the worklist unions into ReachableBodies.MintedClasses (the typeobj registry seed); the ctor/virtual/
+    /// the worklist unions into ReachableBodies.ConstructedClasses; the ctor/virtual/
     /// base bodies host their own nested mints, which the worklist discovers when it walks them as reach
-    /// targets. Mirrors CollectClassMintReach's `result.MintedClasses.Add(ct)` provenance at def granularity.</summary>
+    /// targets. Imported runtime classes are tracked separately and never execute these initializers.</summary>
     public IEnumerable<INamedTypeSymbol> ResolveMintedTypes(IOperation op)
         => MintedTypes(op, new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default));
 
@@ -412,7 +412,7 @@ public sealed class ResolvedEdgeResolver
                 // The operation tree retains `new T()` while emission is per closed specialization.
                 // The typeobj census is already seeded here; conservatively connect the site to every
                 // minted parameterless user-class ctor. Over-yield may spill more, under-yield is wrong.
-                foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                foreach (var concrete in _emitter.ClassTypes.RuntimeClasses)
                 {
                     var ctor = concrete.InstanceConstructors.FirstOrDefault(c => c.Parameters.Length == 0);
                     if (ctor != null) yield return ctor.OriginalDefinition;
@@ -515,7 +515,7 @@ public sealed class ResolvedEdgeResolver
                      && receiver.Syntax is BaseExpressionSyntax))
             {
                 var slot = VirtualDispatch.SlotIntroducer(site.Target);
-                foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+                foreach (var concrete in _emitter.ClassTypes.RuntimeClasses)
                     if (VirtualDispatch.MostDerivedImpl(concrete, slot) is { } implementation)
                         yield return implementation.OriginalDefinition;
             }
@@ -598,7 +598,7 @@ public sealed class ResolvedEdgeResolver
         if (overYield)
         {
             var slotDef = VirtualDispatch.SlotIntroducer(acc);
-            foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+            foreach (var concrete in _emitter.ClassTypes.RuntimeClasses)
                 if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl)
                     yield return genImpl.OriginalDefinition;
         }
@@ -623,7 +623,7 @@ public sealed class ResolvedEdgeResolver
         var slotDef = ObjectToStringSlotDef();
         if (ClassTypeObjectContext.ContainsTypeParameter(t))
         {
-            foreach (var concrete in _emitter.ClassTypes.MintedClasses)
+            foreach (var concrete in _emitter.ClassTypes.RuntimeClasses)
                 if (VirtualDispatch.MostDerivedImpl(concrete, slotDef) is { } genImpl
                     && TypeClassifier.IsUserClass(genImpl.ContainingType))
                     yield return genImpl.OriginalDefinition;

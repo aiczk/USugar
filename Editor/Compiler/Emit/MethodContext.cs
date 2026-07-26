@@ -215,6 +215,7 @@ public sealed class MethodContext
     {
         public readonly ImmutableArray<ITypeSymbol> KeyArgs;
         public readonly ImmutableArray<IMethodSymbol> OwnerSpecs;
+        public readonly INamedTypeSymbol ContainingTypeSpec;
         public readonly string EnvpFieldId;
 
         public ClosureSpec(
@@ -226,6 +227,7 @@ public sealed class MethodContext
             IEnumerable<ReturnSlot> returnSlots,
             ImmutableArray<ITypeSymbol> keyArgs,
             ImmutableArray<IMethodSymbol> ownerSpecs,
+            INamedTypeSymbol containingTypeSpec,
             string envpFieldId,
             bool isDeferredBody)
             : base(
@@ -236,6 +238,7 @@ public sealed class MethodContext
         {
             KeyArgs = keyArgs;
             OwnerSpecs = ownerSpecs;
+            ContainingTypeSpec = containingTypeSpec;
             EnvpFieldId = envpFieldId;
         }
     }
@@ -259,7 +262,11 @@ public sealed class MethodContext
                     ? ImmutableArray.Create(callable.Definition)
                     : ImmutableArray<IMethodSymbol>.Empty);
 
-            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map = null;
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map =
+                closure?.ContainingTypeSpec != null
+                    ? TypeEnvironment.ForContainingType(
+                        closure.ContainingTypeSpec, null)
+                    : null;
             for (var i = OwnerSpecs.Length - 1; i >= 0; i--)
                 map = TypeEnvironment.ForMethod(OwnerSpecs[i], map);
             if (closure != null)
@@ -392,6 +399,7 @@ public sealed class MethodContext
         IMethodSymbol definition,
         ImmutableArray<ITypeSymbol> keyArgs,
         ImmutableArray<IMethodSymbol> ownerSpecs,
+        INamedTypeSymbol containingTypeSpec,
         MethodSlot slot,
         string name,
         IEnumerable<string> paramVarIds,
@@ -406,7 +414,8 @@ public sealed class MethodContext
         var spec = new ClosureSpec(
             definition, slot, name,
             paramVarIds, paramStorageTypes, returnSlots,
-            keyArgs, ownerSpecs, envpFieldId, isDeferredBody);
+            keyArgs, ownerSpecs, containingTypeSpec,
+            envpFieldId, isDeferredBody);
         _closureSpecs.Add(new SpecializationKey(definition, keyArgs), spec);
         _registeredBodies.Add(
             new RegisteredCallableBody(spec, spec));

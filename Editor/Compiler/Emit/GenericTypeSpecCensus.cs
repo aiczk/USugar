@@ -102,7 +102,15 @@ internal sealed class GenericTypeSpecCensus
             && !closureKind && hasEmittableBody)
             _specializations.Add(key, closed);
         if (closureKind)
-            _closures.Add(key, new ClosureSpecializationCandidate(closed, TraceMethods(parent)));
+            _closures.Add(
+                key,
+                new ClosureSpecializationCandidate(
+                    closed,
+                    lexicalOwners,
+                    TypeEnvironment.CloseType(
+                        _compilation,
+                        closed.ContainingType,
+                        ambient) as INamedTypeSymbol));
         _queue.Enqueue((closed, map, new SpecTrace(closed, parent)));
     }
 
@@ -219,10 +227,19 @@ internal sealed class GenericTypeSpecCensus
         => left != null && right != null && SymbolEqualityComparer.Default.Equals(
             left.OriginalDefinition, right.OriginalDefinition);
 
-    static string MethodKey(IMethodSymbol method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
+    string MethodKey(
+        IMethodSymbol method,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
         => (method.OriginalDefinition.GetDocumentationCommentId() ?? method.OriginalDefinition.ToDisplayString())
-           + "|" + ClassTypeObjectContext.SpecKey(method.ContainingType)
-           + "|" + string.Join("|", method.TypeArguments.Select(ClassTypeObjectContext.SpecKey));
+           + "|" + ClassTypeObjectContext.SpecKey(
+               TypeEnvironment.CloseType(
+                   _compilation, method.ContainingType, map))
+           + "|" + string.Join(
+               "|",
+               method.TypeArguments.Select(argument =>
+                   ClassTypeObjectContext.SpecKey(
+                       TypeEnvironment.CloseType(
+                           _compilation, argument, map))));
 
     static string SourceKey(IMethodSymbol method)
     {
@@ -272,14 +289,15 @@ internal sealed class GenericTypeSpecCensus
 
     internal sealed class Result
     {
-        public readonly HashSet<INamedTypeSymbol> MintedClasses;
+        public readonly HashSet<INamedTypeSymbol> ConstructedClasses;
         public readonly IMethodSymbol[] MethodSpecializations;
         public readonly ClosureSpecializationCandidate[] ClosureSpecializations;
 
-        public Result(HashSet<INamedTypeSymbol> mintedClasses, IMethodSymbol[] methodSpecializations,
+        public Result(HashSet<INamedTypeSymbol> constructedClasses,
+            IMethodSymbol[] methodSpecializations,
             ClosureSpecializationCandidate[] closureSpecializations)
         {
-            MintedClasses = mintedClasses;
+            ConstructedClasses = constructedClasses;
             MethodSpecializations = methodSpecializations;
             ClosureSpecializations = closureSpecializations;
         }
@@ -290,11 +308,14 @@ internal readonly struct ClosureSpecializationCandidate
 {
     public readonly IMethodSymbol Method;
     public readonly System.Collections.Immutable.ImmutableArray<IMethodSymbol> OwnerSpecs;
+    public readonly INamedTypeSymbol ContainingTypeSpec;
 
     public ClosureSpecializationCandidate(IMethodSymbol method,
-        System.Collections.Immutable.ImmutableArray<IMethodSymbol> ownerSpecs)
+        System.Collections.Immutable.ImmutableArray<IMethodSymbol> ownerSpecs,
+        INamedTypeSymbol containingTypeSpec)
     {
         Method = method;
         OwnerSpecs = ownerSpecs;
+        ContainingTypeSpec = containingTypeSpec;
     }
 }

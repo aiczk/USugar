@@ -243,18 +243,21 @@ public sealed class UasmEmitter
         // auto-property initializers.
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
         // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
-        _state.ClassTypes.Seed(reach.MintedClasses
+        _state.ClassTypes.Seed(reach.RuntimeClassTypes
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         _virtualDispatch = new VirtualDispatch(_state.ClassTypes);
+        var initializerRoots = fieldInitializers
+            .Concat(CollectConstructedClassInitializerRoots(reach))
+            .ToArray();
         var bodyGraph = new RecursionNodeWalk(
-            EdgeResolver, reach, fieldInitializers,
+            EdgeResolver, reach, initializerRoots,
             callables.Definitions).Run();
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
         var captureRoots = ComputeCaptureRoots(reach);
         var captures = CaptureScopeAnalysis.Build(
             _compilation, _classSymbol, captureRoots,
-            bodyGraph.Bodies, fieldInitializers);
+            bodyGraph.Bodies, initializerRoots);
         _state.SetClosurePlans(closureIdentities, captures);
         BindAndEmitMethods(
             callables,
@@ -342,7 +345,7 @@ public sealed class UasmEmitter
             definitions,
             specializations,
             census.ClosureSpecializations);
-        var reach = reachable.Freeze(census.MintedClasses);
+        var reach = reachable.Freeze(census.ConstructedClasses);
         return (callables, reach);
     }
 
@@ -1246,7 +1249,10 @@ public sealed class UasmEmitter
                 ? definition.Construct(closure.Method.TypeArguments.ToArray())
                 : definition;
             specializationRegistrar.Register(
-                new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
+                new ClosureSpecializationCandidate(
+                    method,
+                    closure.OwnerSpecs,
+                    closure.ContainingTypeSpec));
         }
         _state.Methods.FreezeCallableRegistry();
         var callableBodies =
@@ -1255,12 +1261,6 @@ public sealed class UasmEmitter
             _compilation,
             callableBodies.Select(
                 body => body.Method.OriginalDefinition));
-        _state.SyntheticDemandPlanner.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            callableBodies,
-            methodBodies,
-            fieldInitializers));
-        PlanSyntheticDemands(
-            fieldInitializers, methodBodies);
         var abiBuilder = new BoundAbiPlanBuilder(
             _session.AbiCatalog);
         var boundSource = BindSourceSemantics(
@@ -1417,6 +1417,8 @@ public sealed class UasmEmitter
             if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
                 return;
             typePlanner.Plan(operation, typeMap);
+            SyntheticDemandPlanner.PlanOperation(
+                operation, _lowering, scope);
             values.Add((
                 operation,
                 scope,
@@ -1523,8 +1525,21 @@ public sealed class UasmEmitter
             IOperation operation,
             IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
             CallSiteBindingScope scope,
-            BoundMethodBody body)
+            BoundMethodBody body,
+            MethodContext.RegisteredCallableBody callableBody = null)
         {
+            var receiverId = callableBody?.Callable.Receiver
+                             == MethodContext.ReceiverAbi.ObjectArray
+                ? callableBody.Callable.ReceiverFieldId
+                : null;
+            using var callableScope =
+                _state.Methods.EnterCallableScope(
+                    callableBody?.Method,
+                    callableBody?.Closure,
+                    receiverId,
+                    callableBody?.OwnerSpecs
+                    ?? System.Collections.Immutable
+                        .ImmutableArray<IMethodSymbol>.Empty);
             using var genericScope =
                 _state.EnterTypeParamOverlay(typeMap);
             BindTree(operation, typeMap, scope, body, true);
@@ -1550,7 +1565,8 @@ public sealed class UasmEmitter
                 boundBody.AnalysisRoot,
                 body.TypeParameterMap,
                 scope,
-                boundBody);
+                boundBody,
+                body);
         }
 
         (CallSiteBindingScope Scope,
@@ -1614,12 +1630,12 @@ public sealed class UasmEmitter
             BindInitializer(
                 initializer, _classSymbol, null);
 
-        // User-class instance initializers execute when a class bundle is minted, even though they
+        // User-class instance initializers execute when a class bundle is constructed locally, even though they
         // are not fields of the compiled behaviour. They are therefore body-emission inputs and
-        // must be bound under the minted class's closed containing-type map as well.
-        foreach (var mintedClass in reach.MintedClasses)
+        // must be bound under the constructed class's closed containing-type map as well.
+        foreach (var constructedClass in reach.ConstructedClasses)
         {
-            for (var owner = mintedClass;
+            for (var owner = constructedClass;
                  owner != null && IsUserClass(owner);
                  owner = owner.BaseType)
             {
@@ -1653,49 +1669,6 @@ public sealed class UasmEmitter
                 _compilation, constantFields),
             new BoundValueTable(values, methodPayloads),
             sourceStorageNames);
-    }
-
-    void PlanSyntheticDemands(
-        IReadOnlyList<IOperation> fieldInitializers,
-        BoundMethodBodyTable methodBodies)
-    {
-        foreach (var body in _state.Methods.RegisteredBodies.ToArray())
-        {
-            var method = body.Method;
-            var receiverId = body.Closure == null
-                && (_userClassDefaultMethods.Contains(method)
-                    || method.ContainingType is INamedTypeSymbol aggregate
-                       && IsObjectArrayEmulated(aggregate) && !method.IsStatic)
-                && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction)
-                    ? body.Callable.ReceiverFieldId
-                    : null;
-            using var methodScope = _state.Methods.EnterCallableScope(
-                method, body.Closure, receiverId, body.OwnerSpecs);
-            using var genericScope =
-                _state.EnterTypeParamOverlay(
-                    body.TypeParameterMap);
-            PlanSyntheticDemands(
-                methodBodies.Require(method.OriginalDefinition).AnalysisRoot,
-                true,
-                _lowering);
-        }
-
-        using var fieldMethodScope = _state.Methods.EnterCallableScope(
-            null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
-        foreach (var initializer in fieldInitializers)
-            PlanSyntheticDemands(initializer, true, _lowering);
-    }
-
-    static void PlanSyntheticDemands(
-        IOperation operation,
-        bool root,
-        LoweringServices lowering)
-    {
-        if (operation == null) return;
-        if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation) return;
-        SyntheticDemandPlanner.PlanOperation(operation, lowering);
-        foreach (var child in operation.ChildOps())
-            PlanSyntheticDemands(child, false, lowering);
     }
 
     void RegisterProgram(
@@ -2187,7 +2160,7 @@ public sealed class UasmEmitter
         // Type identities are immutable compile-time strings, not construction work. Giving their
         // heap variables defaults makes class minting safe before Start without forcing every program
         // that merely uses a user class through the runtime initialization barrier.
-        foreach (var type in _state.ClassTypes.MintedClasses)
+        foreach (var type in _state.ClassTypes.RuntimeClasses)
             _state.Storage.DeclareGeneratedField(
                 _state.ClassTypes.TryGetTypeObjVar(type),
                 StorageTypes.String,
@@ -2283,6 +2256,22 @@ public sealed class UasmEmitter
         => EnumerateClassFieldInitializers(classTy)
             .Select(initializer => initializer.Operation);
 
+    IReadOnlyList<IOperation> CollectConstructedClassInitializerRoots(
+        ReachabilityPlan reach)
+    {
+        var roots = new List<IOperation>();
+        var syntax = new HashSet<SyntaxNode>();
+        foreach (var constructedClass in reach.ConstructedClasses)
+            for (var owner = constructedClass;
+                 owner != null && IsUserClass(owner);
+                 owner = owner.BaseType)
+                foreach (var operation in
+                         EnumerateClassFieldInitOps(owner))
+                    if (syntax.Add(operation.Syntax))
+                        roots.Add(operation);
+        return Array.AsReadOnly(roots.ToArray());
+    }
+
     IEnumerable<(IFieldSymbol Field, IOperation Operation)>
         EnumerateClassFieldInitializers(INamedTypeSymbol classTy)
     {
@@ -2291,14 +2280,21 @@ public sealed class UasmEmitter
             if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
             ISymbol initHolder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop ? prop : f;
             var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-            var initValue = syntax switch
+            var initializer = syntax switch
             {
-                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
-                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
+                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd
+                    => vd.Initializer,
+                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd
+                    => pd.Initializer,
                 _ => null,
             };
-            if (initValue == null) continue;
-            var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
+            if (initializer == null) continue;
+            var model = _compilation.GetSemanticModel(
+                initializer.SyntaxTree);
+            var initOp =
+                (model.GetOperation(initializer)
+                    as ISymbolInitializerOperation)?.Value
+                ?? model.GetOperation(initializer.Value);
             if (initOp != null) yield return (f, initOp);
         }
     }

@@ -434,6 +434,79 @@ public class DlgInitNoStart : UdonSharpBehaviour {
         Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
         Assert.Contains("__dlg_", uasm);
     }
+
+    [Fact]
+    public void UserClassDelegateFieldInitializer_IsBoundWithConstruction()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class DelegateHolder {
+    public Func<int> Callback = () => 9;
+}
+public class UserClassDelegateInit : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        var holder = new DelegateHolder();
+        result = holder.Callback();
+    }
+}", "UserClassDelegateInit");
+
+        Assert.Contains("__typeobj_DelegateHolder", uasm);
+        Assert.Contains("__dlg_", uasm);
+        Assert.Contains(
+            "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            uasm);
+    }
+
+    [Fact]
+    public void UnconstructedRuntimeClass_DoesNotPlanItsInitializer()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class ImportedDelegateHolder {
+    public Func<int> Callback = () => 11;
+}
+public class ImportedDelegateConsumer : UdonSharpBehaviour {
+    public ImportedDelegateHolder imported;
+    void Start() { if (imported != null) { } }
+}", "ImportedDelegateConsumer");
+
+        Assert.Contains("__typeobj_ImportedDelegateHolder", uasm);
+        Assert.DoesNotContain("__dlg_", uasm);
+    }
+
+    [Fact]
+    public void GenericUserClassDelegateInitializer_BindsEachClosedType()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class GenericDelegateHolder<T> {
+    public Func<T> Callback = () => default(T);
+}
+public class GenericUserClassDelegateInit : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        var ints = new GenericDelegateHolder<int>();
+        var strings = new GenericDelegateHolder<string>();
+        result = ints.Callback();
+        string ignored = strings.Callback();
+    }
+}", "GenericUserClassDelegateInit");
+
+        Assert.Contains("__typeobj_GenericDelegateHolder_Int32", uasm);
+        Assert.Contains("__typeobj_GenericDelegateHolder_String", uasm);
+        var bridges = System.Text.RegularExpressions.Regex
+            .Matches(uasm, @"\.export (__dlg___\d+_lambda)")
+            .Cast<System.Text.RegularExpressions.Match>()
+            .Select(match => match.Groups[1].Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, bridges.Length);
+    }
+
     [Fact]
     public void CaptureFreeLambdas_InTernary_DelegateStore_Compiles()
     {
