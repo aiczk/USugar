@@ -85,6 +85,11 @@ internal interface IUdonTypeSystem
         ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
             typeParameterMap = null);
+
+    ITypeSymbol Resolve(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
 }
 
 /// <summary>
@@ -335,7 +340,7 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         return false;
     }
 
-    static ITypeSymbol Resolve(ITypeSymbol type,
+    public ITypeSymbol Resolve(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
     {
         while (type is ITypeParameterSymbol parameter

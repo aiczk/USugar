@@ -41,8 +41,7 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
     {
         RequireMutable();
         var key = BoundTypeKey.Create(type, typeParameterMap);
-        var resolved = TypeEnvironment.CloseType(
-            _compilation, type, typeParameterMap);
+        var resolved = Resolve(type, typeParameterMap);
         var lowering = _source.Describe(type, typeParameterMap);
         if (resolved is INamedTypeSymbol
                 { TypeKind: TypeKind.Interface } iface
@@ -54,9 +53,6 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
                 UdonRuntimeTypeTest.Unsupported,
                 lowering.InstalledEvidence,
                 lowering.SourceShape);
-        RecordResolution(
-            key,
-            resolved);
         if (_lowerings.TryGetValue(key, out var existing))
         {
             if (existing.Storage != lowering.Storage
@@ -109,6 +105,20 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
             typeParameterMap = null)
         => Describe(type, typeParameterMap).Storage;
+
+    public ITypeSymbol Resolve(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (type == null) return null;
+        var key = BoundTypeKey.Create(
+            type, typeParameterMap);
+        var resolved = TypeEnvironment.CloseType(
+            _compilation, type, typeParameterMap);
+        RecordResolution(key, resolved);
+        return resolved;
+    }
 
     public BoundUdonTypeSystem Publish()
     {

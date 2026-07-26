@@ -206,6 +206,35 @@ public class EditorSyntaxGuardTests
     }
 
     [Fact]
+    public void LoweringStateDoesNotFallbackBetweenSemanticPhases()
+    {
+        var packageRoot = FindPackageRoot();
+        var path = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit",
+            "LoweringState.cs");
+        var source = File.ReadAllText(path);
+        var forbidden = new[]
+        {
+            "Program?.",
+            "Program != null ?",
+            "Program == null ?",
+            "?? Environment.",
+            "_plannedClosure",
+            "_plannedCapture",
+            "_plannedRecursion",
+            "TypeEnvironment.CloseType",
+        };
+        var failures = forbidden.Where(token =>
+            source.Contains(token, StringComparison.Ordinal))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "LoweringState must transition its authorities when BoundProgram is published; "
+            + "a read may not choose between planning and emission data as a fallback.\n"
+            + string.Join("\n", failures));
+    }
+
+    [Fact]
     public void BodyHandlersCannotMaterializeCallableSpecializations()
     {
         var packageRoot = FindPackageRoot();

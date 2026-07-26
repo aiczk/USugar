@@ -8,24 +8,18 @@ internal sealed class LoweringState
     readonly LoweringEnvironment Environment;
     public Compilation Compilation => Environment.Compilation;
     public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
-    internal BoundAbiPlan BoundAbi => Program?.Abi
-        ?? throw new InvalidOperationException(
-            "ABI decisions are unavailable before the bound program is published.");
-    public FrozenLayoutPlan Planner
-        => Program?.Layouts ?? Environment.Planner;
-    internal IUdonTypeSystem Types
-        => Program != null ? Program.Types : Environment.Types;
+    internal BoundAbiPlan BoundAbi
+        => RequireProgram().Abi;
+    public FrozenLayoutPlan Planner { get; private set; }
+    internal IUdonTypeSystem Types { get; private set; }
     internal BoundProgram Program { get; private set; }
     internal CallSiteBindingScope? CurrentBindingScope { get; private set; }
-    ClosureIdentityPlan _plannedClosureIdentities;
-    CaptureScopeAnalysis _plannedCaptures;
-    RecursionInfo _plannedRecursion;
     internal ClosureIdentityPlan ClosureIdentities
-        => Program?.ClosureIdentities ?? _plannedClosureIdentities;
+        { get; private set; }
     internal CaptureScopeAnalysis Captures
-        => Program?.Captures ?? _plannedCaptures;
+        { get; private set; }
     internal RecursionInfo Recursion
-        => Program?.Recursion ?? _plannedRecursion;
+        { get; private set; }
 
     // Mutable output and lowering state.
     public readonly StructuredModule Module;
@@ -35,13 +29,10 @@ internal sealed class LoweringState
     internal OperationLowerer Operations { get; private set; }
     public readonly GenericContext Generics = new GenericContext();
     public readonly ClosureContext Closures = new ClosureContext();
-    readonly AggregateLayoutTable _aggregateLayouts = new AggregateLayoutTable();
     internal AggregateLayoutTable Aggregates
-        => Program?.Aggregates ?? _aggregateLayouts;
-    readonly ClassTypeObjectContext _classTypes =
-        new ClassTypeObjectContext();
+        { get; private set; } = new AggregateLayoutTable();
     public ClassTypeObjectContext ClassTypes
-        => Program?.ClassTypes ?? _classTypes;
+        { get; private set; } = new ClassTypeObjectContext();
 
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
@@ -60,22 +51,22 @@ internal sealed class LoweringState
         ClosureIdentityPlan identities,
         CaptureScopeAnalysis captures)
     {
-        if (_plannedClosureIdentities != null
-            || _plannedCaptures != null)
+        if (ClosureIdentities != null
+            || Captures != null)
             throw new InvalidOperationException(
                 "Closure plans were set twice.");
-        _plannedClosureIdentities = identities
+        ClosureIdentities = identities
             ?? throw new ArgumentNullException(nameof(identities));
-        _plannedCaptures = captures
+        Captures = captures
             ?? throw new ArgumentNullException(nameof(captures));
     }
 
     internal void SetRecursionPlan(RecursionInfo recursion)
     {
-        if (_plannedRecursion != null)
+        if (Recursion != null)
             throw new InvalidOperationException(
                 "The recursion plan was set twice.");
-        _plannedRecursion = recursion
+        Recursion = recursion
             ?? throw new ArgumentNullException(nameof(recursion));
     }
 
@@ -85,17 +76,21 @@ internal sealed class LoweringState
             throw new InvalidOperationException("Bound program was published twice.");
         if (program == null) throw new ArgumentNullException(nameof(program));
         if (!ReferenceEquals(
-                _plannedClosureIdentities,
+                ClosureIdentities,
                 program.ClosureIdentities)
-            || !ReferenceEquals(_plannedCaptures, program.Captures)
-            || !ReferenceEquals(_plannedRecursion, program.Recursion))
+            || !ReferenceEquals(Captures, program.Captures)
+            || !ReferenceEquals(Recursion, program.Recursion))
             throw new InvalidOperationException(
                 "Planned analyses do not match the bound program.");
         Module.PublishSemantics(program.Abi, program.TypeFacts);
         Program = program;
-        _plannedClosureIdentities = null;
-        _plannedCaptures = null;
-        _plannedRecursion = null;
+        Planner = program.Layouts;
+        Types = program.Types;
+        ClosureIdentities = program.ClosureIdentities;
+        Captures = program.Captures;
+        Recursion = program.Recursion;
+        Aggregates = program.Aggregates;
+        ClassTypes = program.ClassTypes;
     }
 
     internal void BeginBodyEmission()
@@ -105,6 +100,11 @@ internal sealed class LoweringState
                 "Body emission cannot start before a BoundProgram is published.");
         Generics.BeginBodyEmission();
     }
+
+    BoundProgram RequireProgram()
+        => Program
+           ?? throw new InvalidOperationException(
+               "Bound semantics are unavailable before the bound program is published.");
 
     internal IDisposable EnterBindingScope(CallSiteBindingScope scope)
     {
@@ -158,9 +158,7 @@ internal sealed class LoweringState
     {
         if (type == null) return null;
         var map = typeParameterMap ?? Generics.TypeParamMap;
-        return Program != null
-            ? Program.Types.Resolve(type, map)
-            : TypeEnvironment.CloseType(Compilation, type, map);
+        return Types.Resolve(type, map);
     }
 
     public string SourceStorageName(ISymbol member) => Environment.SourceStorageName(member);
@@ -269,6 +267,8 @@ internal sealed class LoweringState
     public LoweringState(LoweringEnvironment environment)
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        Planner = Environment.Planner;
+        Types = Environment.Types;
         Module = new StructuredModule()
             { ClassName = ClassSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
