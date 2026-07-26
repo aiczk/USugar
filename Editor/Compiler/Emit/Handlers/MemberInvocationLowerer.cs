@@ -592,19 +592,15 @@ internal sealed class MemberInvocationLowerer
 
     CLeaf VisitClassInitializerExpression(IOperation value, INamedTypeSymbol mintedType)
     {
-        var declaredOwner = _lowering.Compilation.GetSemanticModel(value.Syntax.SyntaxTree)
-            .GetEnclosingSymbol(value.Syntax.SpanStart)?.ContainingType;
-        INamedTypeSymbol closedOwner = null;
-        for (var current = mintedType; current != null; current = current.BaseType)
-            if (declaredOwner != null && SymbolEqualityComparer.Default.Equals(
-                    current.OriginalDefinition, declaredOwner.OriginalDefinition))
-            {
-                closedOwner = current;
-                break;
-            }
-        if (closedOwner == null || !closedOwner.IsGenericType) return _lowering.VisitExpression(value);
-        var overlay = TypeEnvironment.ForContainingType(closedOwner, _lowering.State.Generics.TypeParamMap);
-        using (_lowering.State.Generics.EnterOverlayScope(overlay)) return _lowering.VisitExpression(value);
+        var initializer = _lowering.State.Program.Initializers.Require(
+            value, mintedType);
+        using var bindingScope = _lowering.State.EnterBindingScope(
+            initializer.Scope);
+        using var genericScope = initializer.TypeParameterMap != null
+            ? _lowering.State.Generics.EnterOverlayScope(
+                initializer.TypeParameterMap)
+            : null;
+        return _lowering.VisitExpression(value);
     }
 
     CLeaf EmitClassInstanceMint(

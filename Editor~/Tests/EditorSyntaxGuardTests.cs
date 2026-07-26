@@ -117,6 +117,43 @@ public class EditorSyntaxGuardTests
             + string.Join("\n", failures));
     }
 
+    [Fact]
+    public void BodyLoweringCannotQueryRoslynSemanticModels()
+    {
+        var packageRoot = FindPackageRoot();
+        var emitRoot = Path.Combine(packageRoot, "Editor", "Compiler", "Emit");
+        var roots = new[]
+        {
+            Path.Combine(emitRoot, "Handlers"),
+            Path.Combine(emitRoot, "LValueLowerer.cs"),
+            Path.Combine(emitRoot, "LoweringServices.cs"),
+        };
+        var forbidden = new[]
+        {
+            "GetSemanticModel",
+            "GetOperation(",
+            "GetDeconstructionInfo",
+            "GetEnclosingSymbol",
+        };
+        var failures = roots.SelectMany(path => Directory.Exists(path)
+                ? Directory.GetFiles(path, "*.cs", SearchOption.AllDirectories)
+                : new[] { path })
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item => forbidden.Any(token =>
+                    item.line.Contains(token, StringComparison.Ordinal)))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:{item.index + 1}: "
+                    + item.line.Trim()))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body lowering must consume materialized BoundProgram semantics and cannot query "
+            + "Roslyn SemanticModel services.\n"
+            + string.Join("\n", failures));
+    }
+
     static string FindPackageRoot()
     {
         for (var current = new DirectoryInfo(AppContext.BaseDirectory);

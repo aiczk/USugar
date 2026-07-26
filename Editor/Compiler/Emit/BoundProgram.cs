@@ -16,6 +16,10 @@ internal sealed class BoundProgram
     public readonly RecursionInfo Recursion;
     public readonly SyntheticDemandPlan SyntheticDemands;
     public readonly BoundCallSiteTable CallSites;
+    public readonly BoundInitializerTable Initializers;
+    public readonly BoundDeconstructionTable Deconstructions;
+    public readonly BoundMethodBodyTable MethodBodies;
+    public readonly BoundMethodAnalysisTable MethodAnalyses;
     public readonly BoundAbiPlan Abi;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
@@ -32,6 +36,10 @@ internal sealed class BoundProgram
         RecursionInfo recursion,
         SyntheticDemandPlan syntheticDemands,
         BoundCallSiteTable callSites,
+        BoundInitializerTable initializers,
+        BoundDeconstructionTable deconstructions,
+        BoundMethodBodyTable methodBodies,
+        BoundMethodAnalysisTable methodAnalyses,
         BoundAbiPlan abi)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
@@ -43,6 +51,14 @@ internal sealed class BoundProgram
         SyntheticDemands = syntheticDemands
             ?? throw new ArgumentNullException(nameof(syntheticDemands));
         CallSites = callSites ?? throw new ArgumentNullException(nameof(callSites));
+        Initializers = initializers
+            ?? throw new ArgumentNullException(nameof(initializers));
+        Deconstructions = deconstructions
+            ?? throw new ArgumentNullException(nameof(deconstructions));
+        MethodBodies = methodBodies
+            ?? throw new ArgumentNullException(nameof(methodBodies));
+        MethodAnalyses = methodAnalyses
+            ?? throw new ArgumentNullException(nameof(methodAnalyses));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
     }
 }

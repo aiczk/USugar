@@ -137,15 +137,14 @@ public sealed class DeconstructionAssignmentHandler : IOperationHandler
             // the compiler-defined multi-stage evaluation order.
             if (op.Syntax is AssignmentExpressionSyntax assignmentSyntax)
             {
-                var model = _lowering.Compilation.GetSemanticModel(assignmentSyntax.SyntaxTree);
-                var deconstruct = model.GetDeconstructionInfo(assignmentSyntax).Method;
+                var deconstruct = _lowering.RequireBoundDeconstruction(op).Method;
                 if (deconstruct != null)
                 {
                     if (targetTuple.Elements.Any(e => e is ITupleOperation
                         || e is IDeclarationExpressionOperation { Expression: ITupleOperation }))
                         throw new System.NotSupportedException(
                             "Nested user-defined Deconstruct targets are not supported yet.");
-                    var method = _lowering.ResolveStructMember(_lowering.SubstituteMethodTypeArgs(deconstruct));
+                    var method = _lowering.ResolveStructMember(deconstruct);
                     if (method.Parameters.Length != targetTuple.Elements.Length
                         || method.Parameters.Any(p => p.RefKind != RefKind.Out))
                         throw new System.NotSupportedException(

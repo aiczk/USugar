@@ -76,30 +76,22 @@ public sealed class LoweringServices
     {
         if (operation == null) throw new ArgumentNullException(nameof(operation));
         if (target == null) throw new ArgumentNullException(nameof(target));
-        CallSiteBindingScope? scope = null;
-        var lexical = _compilation.GetSemanticModel(operation.Syntax.SyntaxTree)
-            .GetEnclosingSymbol(operation.Syntax.SpanStart);
-        IMethodSymbol lexicalMethod = null;
-        for (var symbol = lexical; symbol != null; symbol = symbol.ContainingSymbol)
-            if (symbol is IMethodSymbol method)
-            {
-                lexicalMethod = method;
-                break;
-            }
-        if (_state.Methods.CurrentMethod != null && lexicalMethod != null)
-        {
-            var methodKey = _state.Methods.CurrentClosureSpec != null
-                ? new SpecializationKey(
-                    _state.Methods.CurrentMethod,
-                    _state.Methods.CurrentClosureSpec.KeyArgs)
-                : SpecializationKey.ForMethod(_state.Methods.CurrentMethod);
-            scope = CallSiteBindingScope.ForMethod(methodKey);
-        }
-        else
-            scope = CallSiteBindingScope.ForLexicalType(
-                _compilation, operation, _state.Generics.TypeParamMap);
+        var scope = _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                $"Callable site '{operation.Syntax}' is being lowered "
+                + "outside a bound semantic scope.");
         return _state.Program.CallSites.Require(
             operation.Syntax, kind, target, scope);
+    }
+
+    internal BoundDeconstruction RequireBoundDeconstruction(IOperation operation)
+    {
+        if (operation == null) throw new ArgumentNullException(nameof(operation));
+        var scope = _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                $"Deconstruction '{operation.Syntax}' is being lowered "
+                + "outside a bound semantic scope.");
+        return _state.Program.Deconstructions.Require(operation, scope);
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -20,24 +21,32 @@ public sealed class MethodAnalysis
     }
 }
 
-/// <summary>Compilation-local owner of reusable Roslyn method analysis.</summary>
-public sealed class MethodAnalysisCache
+/// <summary>
+/// Frozen reusable method facts. Construction consumes already-bound operation
+/// roots and never retains a Compilation or SemanticModel.
+/// </summary>
+internal sealed class BoundMethodAnalysisTable
 {
-    readonly Compilation _compilation;
-    readonly Dictionary<IMethodSymbol, MethodAnalysis> _cache = new(SymbolEqualityComparer.Default);
+    readonly IReadOnlyDictionary<IMethodSymbol, MethodAnalysis> _analyses;
 
-    public MethodAnalysisCache(Compilation compilation) => _compilation = compilation;
-
-    public MethodAnalysis Get(IMethodSymbol method)
+    public BoundMethodAnalysisTable(BoundMethodBodyTable bodies)
     {
-        if (method == null) return null;
-        if (_cache.TryGetValue(method, out var cached)) return cached;
-        var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return null;
-        var syntax = syntaxRef.GetSyntax();
-        var body = _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-        if (body == null) return null;
+        if (bodies == null) throw new ArgumentNullException(nameof(bodies));
+        var analyses = new Dictionary<IMethodSymbol, MethodAnalysis>(
+            SymbolEqualityComparer.Default);
+        foreach (var boundBody in bodies.Bodies)
+        {
+            var analysis = Analyze(boundBody.AnalysisRoot);
+            if (analysis != null)
+                analyses.Add(boundBody.MethodDefinition, analysis);
+        }
+        _analyses = new System.Collections.ObjectModel.ReadOnlyDictionary<
+            IMethodSymbol, MethodAnalysis>(analyses);
+    }
 
+    static MethodAnalysis Analyze(IOperation body)
+    {
+        if (body == null) return null;
         var initializers = new Dictionary<ILocalSymbol, IOperation>(SymbolEqualityComparer.Default);
         var unstable = new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
         var referencedTypes = new List<ITypeSymbol>();
@@ -65,8 +74,17 @@ public sealed class MethodAnalysisCache
         }
         foreach (var local in unstable) initializers.Remove(local);
 
-        var analysis = new MethodAnalysis(body, initializers, referencedTypes);
-        _cache.Add(method, analysis);
+        return new MethodAnalysis(
+            body,
+            new System.Collections.ObjectModel.ReadOnlyDictionary<
+                ILocalSymbol, IOperation>(initializers),
+            Array.AsReadOnly(referencedTypes.ToArray()));
+    }
+
+    public MethodAnalysis Get(IMethodSymbol method)
+    {
+        if (method == null) return null;
+        _analyses.TryGetValue(method.OriginalDefinition, out var analysis);
         return analysis;
     }
 

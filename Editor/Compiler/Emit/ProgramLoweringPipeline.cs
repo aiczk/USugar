@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -1031,7 +1032,12 @@ internal sealed class ProgramLoweringPipeline
             _state.Methods.RegisteredBodies, GetMethodBodyOperation, discovery.FieldInitOps));
         PlanSyntheticDemands(discovery);
         var syntheticDemands = _state.Synthetics.PublishPlan();
-        var callSites = BindCallSites(discovery);
+        var methodBodies = BoundMethodBodyTable.Materialize(
+            _compilation,
+            _state.Methods.RegisteredBodies.Select(
+                body => body.Method.OriginalDefinition));
+        var methodAnalyses = new BoundMethodAnalysisTable(methodBodies);
+        var boundSource = BindSourceSemantics(discovery, methodBodies);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.RecursionContext.SetPlan(recursion);
         var program = new BoundProgram(
@@ -1041,7 +1047,11 @@ internal sealed class ProgramLoweringPipeline
             bodyGraph,
             recursion,
             syntheticDemands,
-            callSites,
+            boundSource.CallSites,
+            boundSource.Initializers,
+            boundSource.Deconstructions,
+            methodBodies,
+            methodAnalyses,
             new BoundAbiPlan(_environment.AbiCatalog));
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
@@ -1049,19 +1059,43 @@ internal sealed class ProgramLoweringPipeline
         RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
-    BoundCallSiteTable BindCallSites(ProgramDiscovery discovery)
+    (BoundCallSiteTable CallSites,
+        BoundInitializerTable Initializers,
+        BoundDeconstructionTable Deconstructions)
+        BindSourceSemantics(
+            ProgramDiscovery discovery,
+            BoundMethodBodyTable methodBodies)
     {
         var sites = new Dictionary<BoundCallSiteKey, BoundCallSite>();
+        var initializers =
+            new Dictionary<BoundInitializerKey, BoundInitializer>();
+        var deconstructions =
+            new Dictionary<BoundDeconstructionKey, BoundDeconstruction>();
 
         void BindTree(
             IOperation operation,
             IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
-            CallSiteBindingScope? scope,
+            CallSiteBindingScope scope,
             bool root)
         {
             if (operation == null) return;
             if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
                 return;
+            if (operation is IDeconstructionAssignmentOperation
+                && operation.Syntax is AssignmentExpressionSyntax assignment)
+            {
+                var method = _compilation.GetSemanticModel(assignment.SyntaxTree)
+                    .GetDeconstructionInfo(assignment).Method;
+                if (method != null)
+                    method = TypeEnvironment.CloseMethod(
+                        _compilation, method, typeMap);
+                var deconstructionKey = new BoundDeconstructionKey(
+                    operation.Syntax, scope);
+                if (!deconstructions.TryAdd(
+                        deconstructionKey, new BoundDeconstruction(method)))
+                    throw new InvalidOperationException(
+                        $"Deconstruction '{operation.Syntax}' was bound twice.");
+            }
             foreach (var rawSite in CallableSites.FromOperation(operation))
             {
                 var target = TypeEnvironment.CloseMethod(
@@ -1095,36 +1129,89 @@ internal sealed class ProgramLoweringPipeline
                 : SpecializationKey.ForMethod(body.Method);
             var scope = CallSiteBindingScope.ForMethod(methodKey);
             BindTree(
-                GetMethodBodyOperation(body.Method.OriginalDefinition),
+                methodBodies.Require(body.Method.OriginalDefinition).AnalysisRoot,
                 body.TypeParameterMap,
                 scope,
                 true);
         }
 
-        foreach (var initializer in discovery.FieldInitOps)
+        (CallSiteBindingScope Scope,
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeMap)
+            InitializerEnvironment(
+                IOperation initializer,
+                INamedTypeSymbol executionType)
+        {
+            var lexical = _compilation.GetSemanticModel(
+                    initializer.Syntax.SyntaxTree)
+                .GetEnclosingSymbol(initializer.Syntax.SpanStart);
+            var lexicalType = lexical as INamedTypeSymbol
+                              ?? lexical?.ContainingType
+                              ?? throw new InvalidOperationException(
+                                  $"Initializer '{initializer.Syntax}' "
+                                  + "has no lexical containing type.");
+            var closedOwner = lexicalType;
+            for (var current = executionType;
+                 current != null;
+                 current = current.BaseType)
+                if (SymbolEqualityComparer.Default.Equals(
+                        current.OriginalDefinition,
+                        lexicalType.OriginalDefinition))
+                {
+                    closedOwner = current;
+                    break;
+                }
+            var typeMap = TypeEnvironment.ForContainingType(
+                closedOwner, null);
+            return (
+                CallSiteBindingScope.ForType(closedOwner),
+                typeMap);
+        }
+
+        void BindInitializer(
+            IOperation initializer,
+            INamedTypeSymbol executionType,
+            INamedTypeSymbol mintedKey)
+        {
+            var environment = InitializerEnvironment(
+                initializer, executionType);
+            var key = new BoundInitializerKey(
+                initializer.Syntax, mintedKey);
+            if (!initializers.TryAdd(
+                    key,
+                    new BoundInitializer(
+                        environment.Scope,
+                        environment.TypeMap)))
+                throw new InvalidOperationException(
+                    $"Initializer '{initializer.Syntax}' was bound twice "
+                    + $"for '{mintedKey?.ToDisplayString() ?? "program fields"}'.");
             BindTree(
                 initializer,
-                null,
-                CallSiteBindingScope.ForLexicalType(
-                    _compilation, initializer, null),
+                environment.TypeMap,
+                environment.Scope,
                 true);
+        }
+
+        foreach (var initializer in discovery.FieldInitOps)
+            BindInitializer(
+                initializer, _classSymbol, null);
 
         // User-class instance initializers execute when a class bundle is minted, even though they
         // are not fields of the compiled behaviour. They are therefore body-emission inputs and
         // must be bound under the minted class's closed containing-type map as well.
         foreach (var mintedClass in discovery.Reach.MintedClasses)
         {
-            var typeMap = TypeEnvironment.ForContainingType(mintedClass, null);
-            foreach (var initializer in EnumerateClassFieldInitOps(mintedClass))
-                BindTree(
-                    initializer,
-                    typeMap,
-                    CallSiteBindingScope.ForLexicalType(
-                        _compilation, initializer, typeMap),
-                    true);
+            for (var owner = mintedClass;
+                 owner != null && TypeClassifier.IsUserClass(owner);
+                 owner = owner.BaseType)
+                foreach (var initializer in EnumerateClassFieldInitOps(owner))
+                    BindInitializer(
+                        initializer, mintedClass, mintedClass);
         }
 
-        return new BoundCallSiteTable(sites);
+        return (
+            new BoundCallSiteTable(sites),
+            new BoundInitializerTable(initializers),
+            new BoundDeconstructionTable(deconstructions));
     }
 
     void PlanSyntheticDemands(ProgramDiscovery plan)
@@ -1474,6 +1561,11 @@ internal sealed class ProgramLoweringPipeline
                        : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         using var _methodScope = _state.Methods.EnterEmission(
             method, closureSpec, receiverParamId, ownerSpecs);
+        var bindingKey = closureSpec != null
+            ? new SpecializationKey(method, closureSpec.KeyArgs)
+            : SpecializationKey.ForMethod(method);
+        using var _bindingScope = _state.EnterBindingScope(
+            CallSiteBindingScope.ForMethod(bindingKey));
 
         // FieldChangeCallback: check if this setter has an associated callback field
         string fcbFieldName = null;
@@ -1571,14 +1663,10 @@ internal sealed class ProgramLoweringPipeline
 
         // Get method body IOperation
         var bodySource = isSpec ? method.OriginalDefinition : method;
-        var syntaxRef = bodySource.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef != null)
+        var boundBody = _state.Program.MethodBodies.Require(bodySource);
         {
-            var syntax = syntaxRef.GetSyntax();
-            var tree = syntax.SyntaxTree;
-            var model = _compilation.GetSemanticModel(tree);
-
-            var bodyOp = model.GetOperation(syntax);
+            var syntax = boundBody.Declaration;
+            var bodyOp = boundBody.Root;
 
             // The former [Y8]/B51/B70 rekey block (re-binding the map under each walk's fresh
             // type-parameter symbols) is retired: TypeParamScope composes its maps with
@@ -1674,7 +1762,7 @@ internal sealed class ProgramLoweringPipeline
             else if (syntax is PropertyDeclarationSyntax propDecl
                      && propDecl.ExpressionBody != null)
             {
-                var exprOp = model.GetOperation(propDecl.ExpressionBody.Expression);
+                var exprOp = boundBody.ExpressionBody;
                 if (exprOp != null && _methodReturns.TryGetValue(method, out var propRets) && propRets.Length == 1)
                 {
                     var resultVal = _operations.VisitExpression(exprOp);
@@ -1705,7 +1793,7 @@ internal sealed class ProgramLoweringPipeline
                 }
                 else
                 {
-                    var accessorOp = model.GetOperation(accessorDecl);
+                    var accessorOp = boundBody.Root;
                     if (accessorOp is IMethodBodyOperation accessorBody)
                     {
                         if (accessorBody.BlockBody != null)
@@ -1762,6 +1850,13 @@ internal sealed class ProgramLoweringPipeline
         {
             try
             {
+                var initializer = _state.Program.Initializers.Require(initOp);
+                using var bindingScope = _state.EnterBindingScope(
+                    initializer.Scope);
+                using var genericScope = initializer.TypeParameterMap != null
+                    ? _state.Generics.EnterOverlayScope(
+                        initializer.TypeParameterMap)
+                    : null;
                 // Bare array initializer { 1, 2, 3 } → synthesize array creation + element Set
                 if (initOp is IArrayInitializerOperation arrayInit)
                 {

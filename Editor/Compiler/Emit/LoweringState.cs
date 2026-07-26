@@ -13,8 +13,11 @@ public sealed class LoweringState
         ?? throw new InvalidOperationException(
             "ABI decisions are unavailable before the bound program is published.");
     public FrozenLayoutPlan Planner => Environment.Planner;
-    public MethodAnalysisCache MethodAnalyses => Environment.MethodAnalyses;
+    internal BoundMethodAnalysisTable MethodAnalyses => Program?.MethodAnalyses
+        ?? throw new InvalidOperationException(
+            "Method analyses are unavailable before the bound program is published.");
     internal BoundProgram Program { get; private set; }
+    internal CallSiteBindingScope? CurrentBindingScope { get; private set; }
 
     // Mutable output and lowering state.
     public readonly StructuredModule Module;
@@ -64,6 +67,37 @@ public sealed class LoweringState
             throw new InvalidOperationException(
                 "Body emission cannot start before a BoundProgram is published.");
         Generics.BeginBodyEmission();
+    }
+
+    internal IDisposable EnterBindingScope(CallSiteBindingScope scope)
+    {
+        var previous = CurrentBindingScope;
+        CurrentBindingScope = scope;
+        return new BindingScopeToken(this, previous);
+    }
+
+    sealed class BindingScopeToken : IDisposable
+    {
+        readonly LoweringState _state;
+        readonly CallSiteBindingScope? _previous;
+        bool _disposed;
+
+        public BindingScopeToken(
+            LoweringState state,
+            CallSiteBindingScope? previous)
+        {
+            _state = state;
+            _previous = previous;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed)
+                throw new InvalidOperationException(
+                    "BindingScopeToken disposed twice.");
+            _disposed = true;
+            _state.CurrentBindingScope = _previous;
+        }
     }
 
     // Depth-1 type-param scope. EmitMethod is a non-recursive serial drain, so exactly one map is

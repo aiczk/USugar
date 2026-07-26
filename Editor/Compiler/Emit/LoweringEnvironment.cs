@@ -14,7 +14,6 @@ public sealed class LoweringEnvironment
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
     public readonly FrozenLayoutPlan Planner;
-    public readonly MethodAnalysisCache MethodAnalyses;
 
     public LoweringEnvironment(CompilationSession session, INamedTypeSymbol classSymbol,
         FrozenLayoutPlan planner)
@@ -27,7 +26,6 @@ public sealed class LoweringEnvironment
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
                 "Frozen layout plan and lowering environment must share one compilation session's type facts.");
-        MethodAnalyses = new MethodAnalysisCache(Compilation);
     }
 
     public StorageType ResolveStorageType(ITypeSymbol type,

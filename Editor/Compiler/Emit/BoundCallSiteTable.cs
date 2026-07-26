@@ -26,24 +26,6 @@ internal readonly struct CallSiteBindingScope : IEquatable<CallSiteBindingScope>
     public static CallSiteBindingScope ForType(INamedTypeSymbol type)
         => new CallSiteBindingScope(type);
 
-    public static CallSiteBindingScope ForLexicalType(
-        Compilation compilation,
-        IOperation operation,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap)
-    {
-        if (compilation == null) throw new ArgumentNullException(nameof(compilation));
-        if (operation == null) throw new ArgumentNullException(nameof(operation));
-        var lexical = compilation.GetSemanticModel(operation.Syntax.SyntaxTree)
-            .GetEnclosingSymbol(operation.Syntax.SpanStart);
-        var lexicalType = lexical as INamedTypeSymbol ?? lexical?.ContainingType;
-        if (lexicalType == null)
-            throw new InvalidOperationException(
-                $"Callable site '{operation.Syntax}' has no lexical containing type.");
-        var closedType = TypeEnvironment.CloseType(
-            compilation, lexicalType, typeMap) as INamedTypeSymbol;
-        return ForType(closedType ?? lexicalType);
-    }
-
     public bool Equals(CallSiteBindingScope other)
         => Nullable.Equals(_method, other._method)
            && SymbolEqualityComparer.Default.Equals(_type, other._type);

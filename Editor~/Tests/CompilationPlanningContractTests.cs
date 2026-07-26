@@ -134,7 +134,12 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(RecursionInfo));
         Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundInitializerTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundDeconstructionTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodBodyTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodAnalysisTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
