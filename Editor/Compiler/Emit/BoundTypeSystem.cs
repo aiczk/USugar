@@ -13,13 +13,26 @@ using Microsoft.CodeAnalysis.Operations;
 internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
 {
     readonly UdonTypeSystem _source;
+    readonly FrozenLayoutPlan _layouts;
+    readonly Compilation _compilation;
     readonly Dictionary<string, UdonTypeLowering> _lowerings =
+        new(StringComparer.Ordinal);
+    readonly Dictionary<string, ITypeSymbol> _resolutions =
         new(StringComparer.Ordinal);
     bool _published;
 
-    public MaterializingUdonTypeSystem(UdonTypeSystem source)
-        => _source = source
+    public MaterializingUdonTypeSystem(
+        UdonTypeSystem source,
+        FrozenLayoutPlan layouts,
+        Compilation compilation)
+    {
+        _source = source
             ?? throw new ArgumentNullException(nameof(source));
+        _layouts = layouts
+            ?? throw new ArgumentNullException(nameof(layouts));
+        _compilation = compilation
+            ?? throw new ArgumentNullException(nameof(compilation));
+    }
 
     public UdonTypeLowering Describe(
         ITypeSymbol type,
@@ -28,7 +41,22 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
     {
         RequireMutable();
         var key = BoundTypeKey.Create(type, typeParameterMap);
+        var resolved = TypeEnvironment.CloseType(
+            _compilation, type, typeParameterMap);
         var lowering = _source.Describe(type, typeParameterMap);
+        if (resolved is INamedTypeSymbol
+                { TypeKind: TypeKind.Interface } iface
+            && _layouts.InterfaceIsLocalUserClassOnly(iface))
+            lowering = new UdonTypeLowering(
+                lowering.SourceType,
+                StorageTypes.ObjectArray,
+                UdonRepresentationKind.ObjectArrayBehaviourAlias,
+                UdonRuntimeTypeTest.Unsupported,
+                lowering.InstalledEvidence,
+                lowering.SourceShape);
+        RecordResolution(
+            key,
+            resolved);
         if (_lowerings.TryGetValue(key, out var existing))
         {
             if (existing.Storage != lowering.Storage
@@ -41,6 +69,24 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
         }
         _lowerings.Add(key, lowering);
         return lowering;
+    }
+
+    internal void RecordResolution(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap,
+        ITypeSymbol resolved)
+        => RecordResolution(
+            BoundTypeKey.Create(type, typeParameterMap),
+            resolved);
+
+    void RecordResolution(string key, ITypeSymbol resolved)
+    {
+        if (resolved == null)
+            throw new ArgumentNullException(nameof(resolved));
+        if (_resolutions.ContainsKey(key))
+            return;
+        _resolutions.Add(key, resolved);
     }
 
     public bool IsFoldedEnum(ITypeSymbol type)
@@ -68,7 +114,8 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
     {
         RequireMutable();
         _published = true;
-        return new BoundUdonTypeSystem(_lowerings);
+        return new BoundUdonTypeSystem(
+            _lowerings, _resolutions);
     }
 
     void RequireMutable()
@@ -86,14 +133,14 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
 /// </summary>
 internal sealed class TypeDemandPlanner
 {
-    readonly IUdonTypeSystem _types;
+    readonly MaterializingUdonTypeSystem _types;
     readonly Compilation _compilation;
     readonly AggregateLayoutTable _aggregates;
     readonly HashSet<string> _recording =
         new(StringComparer.Ordinal);
 
     public TypeDemandPlanner(
-        IUdonTypeSystem types,
+        MaterializingUdonTypeSystem types,
         Compilation compilation,
         AggregateLayoutTable aggregates)
     {
@@ -219,8 +266,16 @@ internal sealed class TypeDemandPlanner
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
             typeParameterMap)
     {
-        if (type == null || type.SpecialType == SpecialType.System_Void)
+        if (type == null) return;
+        if (type.SpecialType == SpecialType.System_Void)
+        {
+            _types.RecordResolution(
+                type,
+                typeParameterMap,
+                TypeEnvironment.CloseType(
+                    _compilation, type, typeParameterMap));
             return;
+        }
         var key = BoundTypeKey.Create(type, typeParameterMap);
         if (!_recording.Add(key)) return;
         try
@@ -231,6 +286,8 @@ internal sealed class TypeDemandPlanner
                 PlanAggregate(sourceAggregate, typeParameterMap);
             var resolved = TypeEnvironment.CloseType(
                 _compilation, type, typeParameterMap);
+            _types.RecordResolution(
+                type, typeParameterMap, resolved);
             if (resolved is INamedTypeSymbol aggregate
                 && (aggregate.IsAnonymousType
                     || TypeClassifier.IsObjectArrayEmulated(aggregate))
@@ -302,15 +359,25 @@ internal sealed class TypeDemandPlanner
 internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
 {
     readonly IReadOnlyDictionary<string, UdonTypeLowering> _lowerings;
+    readonly IReadOnlyDictionary<string, ITypeSymbol> _resolutions;
 
     public BoundUdonTypeSystem(
-        IDictionary<string, UdonTypeLowering> lowerings)
-        => _lowerings =
+        IDictionary<string, UdonTypeLowering> lowerings,
+        IDictionary<string, ITypeSymbol> resolutions = null)
+    {
+        _lowerings =
             new ReadOnlyDictionary<string, UdonTypeLowering>(
                 new Dictionary<string, UdonTypeLowering>(
                     lowerings
                     ?? throw new ArgumentNullException(nameof(lowerings)),
                     StringComparer.Ordinal));
+        var resolved = new Dictionary<string, ITypeSymbol>(
+            resolutions
+            ?? new Dictionary<string, ITypeSymbol>(),
+            StringComparer.Ordinal);
+        _resolutions =
+            new ReadOnlyDictionary<string, ITypeSymbol>(resolved);
+    }
 
     public UdonTypeLowering Describe(
         ITypeSymbol type,
@@ -344,6 +411,20 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
             typeParameterMap = null)
         => Describe(type, typeParameterMap).Storage;
+
+    public ITypeSymbol Resolve(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (type == null) return null;
+        var key = BoundTypeKey.Create(type, typeParameterMap);
+        return _resolutions.TryGetValue(key, out var resolved)
+            ? resolved
+            : throw new InvalidOperationException(
+                $"Resolved source type '{key}' "
+                + "was absent from the bound program.");
+    }
 }
 
 internal static class BoundTypeKey
@@ -404,6 +485,19 @@ internal static class BoundTypeKey
                        ?? "?")
                     + ":" + open.Ordinal;
             case INamedTypeSymbol named:
+                if (named.IsAnonymousType)
+                    return "anonymous:{"
+                           + string.Join(
+                               ",",
+                               named.GetMembers()
+                                   .OfType<IPropertySymbol>()
+                                   .Select(property =>
+                                       property.Name + ":"
+                                       + Create(
+                                           property.Type,
+                                           typeParameterMap,
+                                           resolving)))
+                           + "}";
                 var definition = named.OriginalDefinition;
                 var identity =
                     definition.ContainingAssembly?.Identity.Name

@@ -194,7 +194,12 @@ public sealed class UdonTypeSystem : IUdonTypeSystem
     {
         _abiCatalog.TryGetType(sourceType, out var evidence);
         return new UdonTypeLowering(
-            sourceType, storage, representation, runtimeTypeTest, evidence, sourceShape);
+            sourceType,
+            storage,
+            representation,
+            runtimeTypeTest,
+            evidence,
+            sourceShape);
     }
 
     UdonRepresentationKind Classify(ITypeSymbol type,

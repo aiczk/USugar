@@ -8,12 +8,18 @@ internal static class DelegateDemandCensus
 {
     public static IReadOnlyCollection<string> Collect(
         IEnumerable<MethodContext.RegisteredCallableBody> bodies,
-        Func<IMethodSymbol, IOperation> bodyOf,
+        BoundMethodBodyTable methodBodies,
         IEnumerable<IOperation> fieldInitializers)
     {
+        if (methodBodies == null)
+            throw new ArgumentNullException(nameof(methodBodies));
         var sites = new HashSet<string>(StringComparer.Ordinal);
         foreach (var body in bodies)
-            Collect(bodyOf(body.Method.OriginalDefinition), body.OwnerSpecs, sites, true);
+            Collect(
+                methodBodies.Require(body.Method.OriginalDefinition).AnalysisRoot,
+                body.OwnerSpecs,
+                sites,
+                true);
         foreach (var initializer in fieldInitializers)
             Collect(initializer, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty, sites, true);
         return sites;

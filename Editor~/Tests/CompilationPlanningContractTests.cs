@@ -35,9 +35,10 @@ public class CompilationPlanningContractTests
         Assert.All(environmentFields, field => Assert.True(field.IsInitOnly, field.Name));
 
         var stateFields = typeof(LoweringState).GetFields(
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
+            BindingFlags.Instance | BindingFlags.Public
+            | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
         Assert.Contains(stateFields,
-            field => field.Name == nameof(LoweringState.Environment)
+            field => field.Name == "Environment"
                      && field.FieldType == typeof(LoweringEnvironment));
         var operations = typeof(LoweringState).GetProperty(
             "Operations", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -128,23 +129,31 @@ public class CompilationPlanningContractTests
         Assert.NotEmpty(fields);
         Assert.All(fields, field => Assert.True(field.IsInitOnly, field.Name));
         Assert.Contains(fields, field => field.FieldType == typeof(ProgramDiscovery));
-        Assert.Contains(fields, field => field.FieldType == typeof(ClosureIdentityPlan));
-        Assert.Contains(fields, field => field.FieldType == typeof(CaptureScopeAnalysis));
-        Assert.Contains(fields, field => field.FieldType == typeof(RecursionInfo));
-        Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundInitializerTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundDeconstructionTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundConversionTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundConstantTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodBodyTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundValueTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundSyntheticDispatchTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundUdonTypeSystem));
         Assert.Contains(fields, field => field.FieldType == typeof(UdonTypeFactRegistry));
-        Assert.Contains(fields, field => field.FieldType == typeof(AggregateLayoutTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(ClassTypeObjectContext));
+        Assert.Contains(fields, field => field.FieldType == typeof(FrozenLayoutPlan));
+        var forbiddenAuthorities = new[]
+        {
+            typeof(CompilationSession),
+            typeof(Compilation),
+            typeof(UdonAbiCatalog),
+            typeof(UdonAbiBinder),
+            typeof(MaterializingUdonTypeSystem),
+            typeof(CallableBodyGraph),
+            typeof(StructuredFunction),
+            typeof(LoweringEnvironment),
+            typeof(LoweringState),
+        };
+        Assert.DoesNotContain(fields, field =>
+            forbiddenAuthorities.Any(forbidden =>
+                ContainsType(field.FieldType, forbidden)));
+        Assert.DoesNotContain(
+            typeof(SyntheticDemandPlan).GetFields(
+                BindingFlags.Instance | BindingFlags.Public
+                | BindingFlags.NonPublic),
+            field => ContainsType(
+                field.FieldType, typeof(StructuredFunction)));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysis"));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("BoundMethodAnalysisTable"));
@@ -389,5 +398,15 @@ class C
         Assert.Equal(planned, Assert.Single(plan.EnumToStringTypes));
         Assert.Throws<InvalidOperationException>(() => context.RegisterEnumToString(late));
         context.VerifyEmissionComplete();
+    }
+
+    static bool ContainsType(Type candidate, Type forbidden)
+    {
+        if (candidate == forbidden) return true;
+        if (candidate.IsArray)
+            return ContainsType(candidate.GetElementType(), forbidden);
+        return candidate.IsGenericType
+               && candidate.GetGenericArguments().Any(
+                   argument => ContainsType(argument, forbidden));
     }
 }

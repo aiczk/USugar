@@ -25,6 +25,7 @@ internal sealed class BoundProgram
     public readonly BoundAbiPlan Abi;
     public readonly BoundUdonTypeSystem Types;
     public readonly UdonTypeFactRegistry TypeFacts;
+    public readonly FrozenLayoutPlan Layouts;
     public readonly AggregateLayoutTable Aggregates;
     public readonly ClassTypeObjectContext ClassTypes;
 
@@ -51,6 +52,7 @@ internal sealed class BoundProgram
         BoundAbiPlan abi,
         BoundUdonTypeSystem types,
         UdonTypeFactRegistry typeFacts,
+        FrozenLayoutPlan layouts,
         AggregateLayoutTable aggregates,
         ClassTypeObjectContext classTypes)
     {
@@ -82,6 +84,8 @@ internal sealed class BoundProgram
             throw new ArgumentException(
                 "A bound program requires frozen type facts.",
                 nameof(typeFacts));
+        Layouts = layouts
+            ?? throw new ArgumentNullException(nameof(layouts));
         Aggregates = aggregates
             ?? throw new ArgumentNullException(nameof(aggregates));
         ClassTypes = classTypes

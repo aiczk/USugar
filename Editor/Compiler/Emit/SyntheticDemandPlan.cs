@@ -10,7 +10,7 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 internal sealed class SyntheticDemandPlan
 {
-    readonly IReadOnlyDictionary<string, StructuredFunction> _closureBridgeFunctions;
+    readonly IReadOnlyDictionary<string, string> _closureBridgeTargets;
     readonly IReadOnlyDictionary<string, DelegateBindingPlan> _delegateBindings;
     readonly HashSet<INamedTypeSymbol> _enumToStringTypes;
     readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _receiverBridges;
@@ -36,7 +36,14 @@ internal sealed class SyntheticDemandPlan
         IEnumerable<DelegateBridgeDemand> signatureAdapterBridges,
         IDictionary<string, DelegateWrapperDemand> wrapperSignatures)
     {
-        _closureBridgeFunctions = CopyMap(closureBridgeFunctions);
+        _closureBridgeTargets = new ReadOnlyDictionary<string, string>(
+            closureBridgeFunctions.ToDictionary(
+                pair => pair.Key,
+                pair => pair.Value?.Name
+                    ?? throw new ArgumentException(
+                        $"Closure bridge '{pair.Key}' has no target function.",
+                        nameof(closureBridgeFunctions)),
+                StringComparer.Ordinal));
         _delegateBindings = CopyMap(delegateBindings);
         var receiverBridgeArray = receiverBridges.ToArray();
         var delegateBridgeArray = delegateBridges.ToArray();
@@ -56,8 +63,8 @@ internal sealed class SyntheticDemandPlan
         WrapperSignatures = CopyMap(wrapperSignatures);
     }
 
-    public bool TryGetClosureBridge(string name, out StructuredFunction function)
-        => _closureBridgeFunctions.TryGetValue(name, out function);
+    public bool TryGetClosureBridge(string name, out string functionName)
+        => _closureBridgeTargets.TryGetValue(name, out functionName);
 
     public DelegateBindingPlan RequireDelegateBinding(string site)
         => _delegateBindings.TryGetValue(site, out var binding)

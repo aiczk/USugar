@@ -71,8 +71,14 @@ public sealed class DelegateBridgeEmitter
     }
 
     bool TryResolveTarget(IMethodSymbol method, string bridgeName, out StructuredFunction target)
-        => _demands.TryGetClosureBridge(bridgeName, out target)
-            || _context.Methods.Functions.TryGetValue(method, out target);
+    {
+        if (_demands.TryGetClosureBridge(bridgeName, out var functionName))
+        {
+            target = _context.Module.RequireFunction(functionName);
+            return true;
+        }
+        return _context.Methods.Functions.TryGetValue(method, out target);
+    }
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,

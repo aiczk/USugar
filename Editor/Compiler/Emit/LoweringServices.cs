@@ -145,7 +145,7 @@ public sealed class LoweringServices
     internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     internal TypeClassifierContext TypeCtx => new TypeClassifierContext(_state.Generics.TypeParamMap);
     internal ITypeSymbol ResolveType(ITypeSymbol type)
-        => TypeEnvironment.CloseType(_compilation, type, _state.Generics.TypeParamMap);
+        => _state.ResolveSourceType(type);
     internal bool IsFoldedEnum(ITypeSymbol type)
         => _state.Types.IsFoldedEnum(ResolveType(type));
     internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);

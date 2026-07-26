@@ -23,7 +23,8 @@ public sealed class LoweringEnvironment
         ClassSymbol = classSymbol ?? throw new ArgumentNullException(nameof(classSymbol));
         AbiCatalog = session.AbiCatalog;
         Planner = planner ?? throw new ArgumentNullException(nameof(planner));
-        Types = new MaterializingUdonTypeSystem(session.Types);
+        Types = new MaterializingUdonTypeSystem(
+            session.Types, Planner, Compilation);
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
                 "Frozen layout plan and lowering environment must share one compilation session's type facts.");

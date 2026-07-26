@@ -5,13 +5,14 @@ using Microsoft.CodeAnalysis;
 
 public sealed class LoweringState
 {
-    public readonly LoweringEnvironment Environment;
+    readonly LoweringEnvironment Environment;
     public Compilation Compilation => Environment.Compilation;
     public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
     internal BoundAbiPlan BoundAbi => Program?.Abi
         ?? throw new InvalidOperationException(
             "ABI decisions are unavailable before the bound program is published.");
-    public FrozenLayoutPlan Planner => Environment.Planner;
+    public FrozenLayoutPlan Planner
+        => Program?.Layouts ?? Environment.Planner;
     internal IUdonTypeSystem Types
         => Program != null ? Program.Types : Environment.Types;
     internal BoundProgram Program { get; private set; }
@@ -42,9 +43,6 @@ public sealed class LoweringState
     public ClassTypeObjectContext ClassTypes
         => Program?.ClassTypes ?? _classTypes;
 
-    /// <summary>CA-v2b-2: virtual-call lowering authority (dispatch set + devirt). Set by UasmEmitter after
-    /// ClassTypes is seeded and before EmitMethods/BuildRecursionInfo, which both consume it.</summary>
-    public VirtualDispatch VirtualDispatch;
     public readonly SyntheticContext Synthetics = new SyntheticContext();
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
     public readonly InitializationContext Initializers = new InitializationContext();
@@ -150,13 +148,19 @@ public sealed class LoweringState
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
     {
         var map = typeParameterMap ?? Generics.TypeParamMap;
-        var resolved = TypeEnvironment.CloseType(
-            Compilation, type, map);
-        if (resolved is INamedTypeSymbol
-                { TypeKind: TypeKind.Interface } iface
-            && Planner.InterfaceIsLocalUserClassOnly(iface))
-            return StorageTypes.ObjectArray;
         return Types.GetStorageType(type, map);
+    }
+
+    internal ITypeSymbol ResolveSourceType(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (type == null) return null;
+        var map = typeParameterMap ?? Generics.TypeParamMap;
+        return Program != null
+            ? Program.Types.Resolve(type, map)
+            : TypeEnvironment.CloseType(Compilation, type, map);
     }
 
     public string SourceStorageName(ISymbol member) => Environment.SourceStorageName(member);

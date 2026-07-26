@@ -306,6 +306,15 @@ public sealed class StructuredModule
         Functions.Add(func);
         return func;
     }
+
+    internal StructuredFunction RequireFunction(string name)
+    {
+        foreach (var function in Functions)
+            if (string.Equals(function.Name, name, StringComparison.Ordinal))
+                return function;
+        throw new InvalidOperationException(
+            $"Structured function '{name}' was absent from the module.");
+    }
 }
 
 /// <summary>

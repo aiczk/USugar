@@ -16,6 +16,7 @@ internal sealed class ProgramLoweringPipeline
     readonly LoweringServices _lowering;
     FieldDiscoveryPlanBuilder _fieldDiscovery;
     RecursionAnalysisPass _recursionAnalysis;
+    VirtualDispatch _virtualDispatch;
 
 
     // Phase-local projections; immutable services remain on _environment.
@@ -124,7 +125,10 @@ internal sealed class ProgramLoweringPipeline
 
     // C4: the seeded-context reads the relocated CallEdge classifier consumes (null/empty before Emit
     // seeds them at the compile-plan build — the resolver fails loud on a pre-seed CallEdge call).
-    internal VirtualDispatch VirtualDispatchInstance => _state.VirtualDispatch;
+    internal VirtualDispatch VirtualDispatchInstance
+        => _virtualDispatch
+           ?? throw new InvalidOperationException(
+               "Virtual dispatch was queried before the class type census was frozen.");
     internal ClassTypeObjectContext ClassTypes => _state.ClassTypes;
     internal FrozenLayoutPlan Planner => _planner;
 
@@ -163,7 +167,7 @@ internal sealed class ProgramLoweringPipeline
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         DeclareTypeObjectConstants();
-        _state.VirtualDispatch = new VirtualDispatch(_state.ClassTypes); // CA-v2b-2: virtual-call lowering
+        _virtualDispatch = new VirtualDispatch(_state.ClassTypes);
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
@@ -1028,15 +1032,15 @@ internal sealed class ProgramLoweringPipeline
             specializationRegistrar.Register(
                 new ClosureSpecializationCandidate(method, closure.OwnerSpecs));
         }
-        _state.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            _state.Methods.RegisteredBodies, GetMethodBodyOperation, discovery.FieldInitOps));
-        PlanSyntheticDemands(discovery);
-        var syntheticDemands = _state.Synthetics.PublishPlan();
-        var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var methodBodies = BoundMethodBodyTable.Materialize(
             _compilation,
             _state.Methods.RegisteredBodies.Select(
                 body => body.Method.OriginalDefinition));
+        _state.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
+            _state.Methods.RegisteredBodies, methodBodies, discovery.FieldInitOps));
+        PlanSyntheticDemands(discovery, methodBodies);
+        var syntheticDemands = _state.Synthetics.PublishPlan();
+        var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var abiBuilder = new BoundAbiPlanBuilder(
             _environment.AbiCatalog);
         var boundSource = BindSourceSemantics(
@@ -1065,6 +1069,7 @@ internal sealed class ProgramLoweringPipeline
             abi,
             types,
             typeFacts,
+            _planner,
             aggregates,
             classTypes);
         _state.PublishBoundProgram(program);
@@ -1091,7 +1096,7 @@ internal sealed class ProgramLoweringPipeline
             if (sites.ContainsKey(key)) return;
             sites.Add(
                 key,
-                _state.VirtualDispatch.Resolve(
+                _virtualDispatch.Resolve(
                     CallableSites.Synthetic(
                         CallableSiteKind.Method, target),
                     receiver));
@@ -1212,7 +1217,7 @@ internal sealed class ProgramLoweringPipeline
                     var receiver = TypeEnvironment.CloseType(
                             _compilation, rawSite.Receiver?.Type, typeMap)
                         as INamedTypeSymbol ?? target.ContainingType;
-                    dispatch = _state.VirtualDispatch.Resolve(
+                    dispatch = _virtualDispatch.Resolve(
                         site, receiver, _classSymbol);
                 }
                 var key = new BoundCallSiteKey(
@@ -1365,7 +1370,9 @@ internal sealed class ProgramLoweringPipeline
             new BoundValueTable(values, methodPayloads));
     }
 
-    void PlanSyntheticDemands(ProgramDiscovery plan)
+    void PlanSyntheticDemands(
+        ProgramDiscovery plan,
+        BoundMethodBodyTable methodBodies)
     {
         var planner = new SyntheticDemandPlanner(_lowering);
         foreach (var body in _state.Methods.RegisteredBodies.ToArray())
@@ -1381,7 +1388,10 @@ internal sealed class ProgramLoweringPipeline
             using var methodScope = _state.Methods.EnterEmission(
                 method, body.Closure, receiverId, body.OwnerSpecs);
             using var genericScope = _state.Generics.EnterOverlayScope(body.TypeParameterMap);
-            PlanSyntheticDemands(GetMethodBodyOperation(method.OriginalDefinition), true, planner);
+            PlanSyntheticDemands(
+                methodBodies.Require(method.OriginalDefinition).AnalysisRoot,
+                true,
+                planner);
         }
 
         using var fieldMethodScope = _state.Methods.EnterEmission(
