@@ -2302,7 +2302,7 @@ internal sealed class LoweringServices
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             if (bridgeClosure != null)
                 _state.SyntheticDemandPlanner.RegisterClosureBridge(
-                    bridgeExportName, bridgeClosure.Function);
+                    bridgeExportName, bridgeClosure.Name);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
             PlanDelegateDemand(

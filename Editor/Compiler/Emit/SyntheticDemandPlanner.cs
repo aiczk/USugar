@@ -10,9 +10,9 @@ using Microsoft.CodeAnalysis.Operations;
 internal sealed class SyntheticDemandPlanner
 {
     // Per-spec closure bridges (design 2026-07-10 v3 SS2B): bridgeExportName -> the closure's
-    // per-spec StructuredFunction. The pending-bridge drain resolves closure targets here (a bare
+    // exact per-spec function name. The pending-bridge drain resolves closure targets here (a bare
     // definition-symbol lookup cannot distinguish specs).
-    readonly Dictionary<string, StructuredFunction> _closureBridgeFuncs = new();
+    readonly Dictionary<string, string> _closureBridgeTargets = new();
 
     // MG auto-wrap (design 2026-07-11 v2): pending receiver-bridges — a class/struct instance method
     // group's bridge re-dispatches DelegateAbi.Env as the member's param0 (CA-M1 receiver ABI).
@@ -231,7 +231,7 @@ internal sealed class SyntheticDemandPlanner
                 throw new InvalidOperationException(
                     $"Delegate site '{site}' was not bound during synthetic demand planning.");
         var plan = new SyntheticDemandPlan(
-            _closureBridgeFuncs,
+            _closureBridgeTargets,
             _plannedDelegateSites,
             _receiverBridges.Values,
             _delegateBridges.Values,
@@ -241,7 +241,7 @@ internal sealed class SyntheticDemandPlanner
             _sigAdapterBridges.Values,
             _wrapperSigs);
         _published = true;
-        _closureBridgeFuncs.Clear();
+        _closureBridgeTargets.Clear();
         _plannedDelegateSites.Clear();
         _receiverBridges.Clear();
         _delegateBridges.Clear();
@@ -261,12 +261,15 @@ internal sealed class SyntheticDemandPlanner
                 "Synthetic demands cannot change after publication.");
     }
 
-    public void RegisterClosureBridge(string name, StructuredFunction function)
+    public void RegisterClosureBridge(
+        string name, string targetFunctionName)
     {
         RequireMutable();
-        if (function == null)
-            throw new ArgumentNullException(nameof(function));
-        _closureBridgeFuncs[name] = function;
+        if (string.IsNullOrEmpty(targetFunctionName))
+            throw new ArgumentException(
+                "A closure bridge requires a target function name.",
+                nameof(targetFunctionName));
+        _closureBridgeTargets[name] = targetFunctionName;
     }
 
     public bool RegisterClosureBridgeAlias(
@@ -274,10 +277,10 @@ internal sealed class SyntheticDemandPlanner
         string aliasName)
     {
         RequireMutable();
-        if (!_closureBridgeFuncs.TryGetValue(
-                sourceName, out var function))
+        if (!_closureBridgeTargets.TryGetValue(
+                sourceName, out var targetFunctionName))
             return false;
-        RegisterClosureBridge(aliasName, function);
+        RegisterClosureBridge(aliasName, targetFunctionName);
         return true;
     }
 

@@ -25,7 +25,7 @@ internal sealed class SyntheticDemandPlan
     public readonly IReadOnlyDictionary<string, DelegateWrapperDemand> WrapperSignatures;
 
     public SyntheticDemandPlan(
-        IDictionary<string, StructuredFunction> closureBridgeFunctions,
+        IDictionary<string, string> closureBridgeTargets,
         IDictionary<string, DelegateBindingPlan> delegateBindings,
         IEnumerable<DelegateBridgeDemand> receiverBridges,
         IEnumerable<DelegateBridgeDemand> delegateBridges,
@@ -36,12 +36,10 @@ internal sealed class SyntheticDemandPlan
         IDictionary<string, DelegateWrapperDemand> wrapperSignatures)
     {
         _closureBridgeTargets = new ReadOnlyDictionary<string, string>(
-            closureBridgeFunctions.ToDictionary(
-                pair => pair.Key,
-                pair => pair.Value?.Name
-                    ?? throw new ArgumentException(
-                        $"Closure bridge '{pair.Key}' has no target function.",
-                        nameof(closureBridgeFunctions)),
+            new Dictionary<string, string>(
+                closureBridgeTargets
+                ?? throw new ArgumentNullException(
+                    nameof(closureBridgeTargets)),
                 StringComparer.Ordinal));
         _delegateBindings = CopyMap(delegateBindings);
         DelegateSites = Array.AsReadOnly(
