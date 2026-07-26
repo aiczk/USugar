@@ -53,11 +53,11 @@ internal sealed class LoweringServices
         => _state.Methods.PendingBodies;
     internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
     internal Dictionary<ILocalSymbol, LocalBinding> _localBindings => _state.Storage.LocalBindings;
-    internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.Initializers.FieldInitOps;
-    internal Dictionary<string, string> _fieldChangeCallbacks => _state.Initializers.FieldChangeCallbacks;
-    internal Stack<CLeaf> _conditionalAccessStack => _state.ControlFlow.ConditionalAccessStack;
-    internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _state.ControlFlow.UsingDisposableStack;
-    internal List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
+    internal List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.FieldInitOps;
+    internal Dictionary<string, string> _fieldChangeCallbacks => _state.FieldChangeCallbacks;
+    internal Stack<CLeaf> _conditionalAccessStack => _state.ConditionalAccessStack;
+    internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _state.UsingDisposableStack;
+    internal List<EmitDiagnostic> _diagnostics => _state.Diagnostics;
     internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
         => _state.Recursion.IsRecursiveEdge(caller, callee);
 

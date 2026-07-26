@@ -35,16 +35,16 @@ internal sealed class LoopHandler : IOperationHandler
                 return _lowering.VisitExpression(op.Condition);
             }, _ =>
             {
-                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.SwitchBreakLabels.Pop();
                 }
             });
         }
@@ -56,16 +56,16 @@ internal sealed class LoopHandler : IOperationHandler
             _lowering.Builder.EmitWhile(() => _lowering.VisitExpression(op.Condition), _ =>
             {
                 EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Iteration));
-                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.SwitchBreakLabels.Pop();
                 }
             }, isDoWhile: true);
         }
@@ -104,16 +104,16 @@ internal sealed class LoopHandler : IOperationHandler
             _ =>
             {
                 // Body
-                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.SwitchBreakLabels.Pop();
                 }
             });
     }
@@ -212,16 +212,16 @@ internal sealed class LoopHandler : IOperationHandler
                 else
                     _lowering.EmitStoreField(loopVarId, elemVal);
 
-                _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
+                _lowering.State.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+                    _lowering.State.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
                     _lowering.VisitOperation(op.Body);
-                    _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
+                    _lowering.State.LoopUsingDepthStack.Pop();
                 }
                 finally
                 {
-                    _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
+                    _lowering.State.SwitchBreakLabels.Pop();
                 }
             });
     }

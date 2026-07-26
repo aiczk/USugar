@@ -47,7 +47,7 @@ static class EnvEmit
             : (CLeaf)new CConst(null, StorageTypes.Object);
         b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Kind, StorageTypes.Int32), new CConst(EnvAbi.KindTag, StorageTypes.String) });
         b.EmitExternVoid(SetSig, new List<CLeaf> { env, new CConst(EnvAbi.Parent, StorageTypes.Int32), parentLeaf });
-        ctx.Closures.ScopeEnvSlots[(b.CurrentFunction, scope.Id)] = env.SlotId;
+        ctx.ScopeEnvSlots[(b.CurrentFunction, scope.Id)] = env.SlotId;
     }
 
     /// <summary>The live env-record reference for <paramref name="scope"/> at the current emission
@@ -55,7 +55,8 @@ static class EnvEmit
     /// closure's __envp (hop 0 = the closure's BindingScope, each hop = one parent __Get).</summary>
     public static CLeaf Leaf(CoreBuilder b, LoweringState ctx, CaptureScope scope)
     {
-        if (ctx.Closures.ScopeEnvSlots.TryGetValue((b.CurrentFunction, scope.Id), out var slotId))
+        if (ctx.ScopeEnvSlots.TryGetValue(
+                (b.CurrentFunction, scope.Id), out var slotId))
             return new CSlotRef(slotId, new StorageType(EnvType));
 
         var currentClosure = CurrentClosure(ctx);

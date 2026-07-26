@@ -259,8 +259,10 @@ internal sealed class StatementHandler : IOperationHandler
         {
             EmitPendingDisposeForBreakContinue();
             // Switch breaks use goto to end label; loop breaks use structured CBreak
-            if (_lowering.State.ControlFlow.SwitchBreakLabels.Count > 0 && _lowering.State.ControlFlow.SwitchBreakLabels.Peek() != null)
-                _lowering.Builder.EmitGoto(_lowering.State.ControlFlow.SwitchBreakLabels.Peek());
+            if (_lowering.State.SwitchBreakLabels.Count > 0
+                && _lowering.State.SwitchBreakLabels.Peek() != null)
+                _lowering.Builder.EmitGoto(
+                    _lowering.State.SwitchBreakLabels.Peek());
             else
                 _lowering.Builder.EmitBreak();
         }
@@ -279,7 +281,10 @@ internal sealed class StatementHandler : IOperationHandler
             // goto case <const>; / goto default; target a Roslyn label ("case 2:", "default") that is not a
             // valid UASM token — the enclosing switch maps it to a sanitized landing label. A plain user goto
             // (its label is emitted verbatim by ILabeledOperation) is not in the map and uses its own name.
-            var target = _lowering.State.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.State.ControlFlow.GotoCaseLabels.Peek().TryGetValue(op.Target.Name, out var mapped)
+            var target = _lowering.State.GotoCaseLabels.Count > 0
+                         && _lowering.State.GotoCaseLabels.Peek()
+                             .TryGetValue(
+                                 op.Target.Name, out var mapped)
                 ? mapped : op.Target.Name;
             _lowering.Builder.EmitGoto(target);
         }
@@ -314,8 +319,8 @@ internal sealed class StatementHandler : IOperationHandler
     /// </summary>
     void EmitPendingDisposeForBreakContinue()
     {
-        var loopDepth = _lowering.State.ControlFlow.LoopUsingDepthStack.Count > 0
-            ? _lowering.State.ControlFlow.LoopUsingDepthStack.Peek()
+        var loopDepth = _lowering.State.LoopUsingDepthStack.Count > 0
+            ? _lowering.State.LoopUsingDepthStack.Peek()
             : 0;
         var currentDepth = _lowering.UsingDisposableStack.Count;
         var scopesToDispose = currentDepth - loopDepth;

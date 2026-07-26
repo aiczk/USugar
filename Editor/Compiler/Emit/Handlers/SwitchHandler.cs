@@ -36,9 +36,10 @@ internal sealed class SwitchHandler : IOperationHandler
         // CONDITION is built (below), so the env cell must already exist.
         EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Switch));
 
-        var endLabel = _lowering.State.ControlFlow.NextSwitchEndLabel();
-        _lowering.State.ControlFlow.SwitchBreakLabels.Push(endLabel);
-        _lowering.State.ControlFlow.LoopUsingDepthStack.Push(_lowering.UsingDisposableStack.Count);
+        var endLabel = _lowering.State.NextSwitchEndLabel();
+        _lowering.State.SwitchBreakLabels.Push(endLabel);
+        _lowering.State.LoopUsingDepthStack.Push(
+            _lowering.UsingDisposableStack.Count);
         // Build a per-switch map: Roslyn goto-case/-default target name → sanitized UASM landing label. Only
         // targeted cases get a label (a switch with no goto-case keeps byte-identical UASM). Sorted for
         // determinism; labels derive from this switch's unique end-label counter.
@@ -49,7 +50,7 @@ internal sealed class SwitchHandler : IOperationHandler
         int gi = 0;
         foreach (var name in gotoTargets.OrderBy(n => n, System.StringComparer.Ordinal))
             labelMap[name] = $"{labelBase}_{gi++}";
-        _lowering.State.ControlFlow.GotoCaseLabels.Push(labelMap);
+        _lowering.State.GotoCaseLabels.Push(labelMap);
         try
         {
             // Pre-convert enum switch value once (Udon VM has no enum-typed operators)
@@ -66,9 +67,9 @@ internal sealed class SwitchHandler : IOperationHandler
         }
         finally
         {
-            _lowering.State.ControlFlow.GotoCaseLabels.Pop();
-            _lowering.State.ControlFlow.LoopUsingDepthStack.Pop();
-            _lowering.State.ControlFlow.SwitchBreakLabels.Pop();
+            _lowering.State.GotoCaseLabels.Pop();
+            _lowering.State.LoopUsingDepthStack.Pop();
+            _lowering.State.SwitchBreakLabels.Pop();
         }
         _lowering.Builder.EmitLabel(endLabel);
     }
@@ -218,9 +219,10 @@ internal sealed class SwitchHandler : IOperationHandler
         // landing label before the body; StatementHandler.VisitBranch resolves the goto through the same map.
         // Only emitted when targeted, so a switch without goto-case is unchanged. Roslyn names the targets
         // "case <const>:" and "default".
-        if (_lowering.State.ControlFlow.GotoCaseLabels.Count > 0 && _lowering.State.ControlFlow.GotoCaseLabels.Peek().Count > 0)
+        if (_lowering.State.GotoCaseLabels.Count > 0
+            && _lowering.State.GotoCaseLabels.Peek().Count > 0)
         {
-            var map = _lowering.State.ControlFlow.GotoCaseLabels.Peek();
+            var map = _lowering.State.GotoCaseLabels.Peek();
             foreach (var clause in caseSection.Clauses)
             {
                 string roslynName = clause switch

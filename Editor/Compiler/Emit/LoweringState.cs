@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 internal sealed class LoweringState
 {
@@ -27,7 +28,8 @@ internal sealed class LoweringState
     public readonly BoundaryChecker Boundary;
     internal OperationLowerer Operations { get; private set; }
     public readonly GenericContext Generics = new GenericContext();
-    public readonly ClosureContext Closures = new ClosureContext();
+    public readonly Dictionary<(object Func, int ScopeId), int>
+        ScopeEnvSlots = new();
     internal AggregateLayoutTable Aggregates
         { get; private set; } = new AggregateLayoutTable();
     public ClassTypeObjectContext ClassTypes
@@ -41,9 +43,30 @@ internal sealed class LoweringState
         => _syntheticDemandPlanner
            ?? throw new InvalidOperationException(
                "Synthetic demands were already published.");
-    public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
-    public readonly InitializationContext Initializers = new InitializationContext();
-    public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
+    public readonly Stack<CLeaf> ConditionalAccessStack = new();
+    public readonly Stack<List<(CLeaf Val, ITypeSymbol Type)>>
+        UsingDisposableStack = new();
+    public readonly Stack<int> LoopUsingDepthStack = new();
+    public readonly Stack<string> SwitchBreakLabels = new();
+    public readonly Stack<Dictionary<string, string>>
+        GotoCaseLabels = new();
+    int _switchLabelCounter;
+
+    public string NextSwitchEndLabel()
+        => $"__switchEnd_{++_switchLabelCounter}";
+
+    public readonly List<(
+        string FieldName,
+        IOperation InitOp,
+        ITypeSymbol FieldType)> FieldInitOps = new();
+    public readonly List<(
+        string FieldName,
+        IOperation InitOp,
+        ITypeSymbol FieldType)> StaticFieldInitOps = new();
+    public readonly Dictionary<string, string>
+        FieldChangeCallbacks = new();
+    public readonly List<EmitDiagnostic> Diagnostics = new();
+    public readonly HashSet<string> ReportedExterns = new();
     public readonly MethodContext Methods = new MethodContext();
 
     internal void SetOperationLowerer(OperationLowerer operations)

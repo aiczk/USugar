@@ -64,21 +64,21 @@ internal static class FieldPlanEmitter
     {
         if (plan == null) throw new ArgumentNullException(nameof(plan));
         if (state == null) throw new ArgumentNullException(nameof(state));
-        if (state.Initializers.FieldInitOps.Count != 0
-            || state.Initializers.StaticFieldInitOps.Count != 0
-            || state.Initializers.FieldChangeCallbacks.Count != 0)
+        if (state.FieldInitOps.Count != 0
+            || state.StaticFieldInitOps.Count != 0
+            || state.FieldChangeCallbacks.Count != 0)
             throw new InvalidOperationException("Field discovery plan was published twice.");
 
         foreach (var declaration in plan.Declarations)
             state.Storage.DeclarePlannedField(Clone(declaration));
         foreach (var initializer in plan.Initializers)
-            state.Initializers.FieldInitOps.Add((
+            state.FieldInitOps.Add((
                 initializer.FieldName, initializer.Operation, initializer.FieldType));
         foreach (var initializer in plan.StaticInitializers)
-            state.Initializers.StaticFieldInitOps.Add((
+            state.StaticFieldInitOps.Add((
                 initializer.FieldName, initializer.Operation, initializer.FieldType));
         foreach (var pair in plan.FieldChangeCallbacks)
-            state.Initializers.FieldChangeCallbacks.Add(pair.Key, pair.Value);
+            state.FieldChangeCallbacks.Add(pair.Key, pair.Value);
     }
 
     static FieldDecl Clone(FieldDecl source)

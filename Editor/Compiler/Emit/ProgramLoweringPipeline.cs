@@ -36,10 +36,10 @@ internal sealed class ProgramLoweringPipeline
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap => _state.Generics.TypeParamMap;
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.Initializers.FieldInitOps;
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _state.Initializers.StaticFieldInitOps;
-    Dictionary<string, string> _fieldChangeCallbacks => _state.Initializers.FieldChangeCallbacks;
-    List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.FieldInitOps;
+    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _state.StaticFieldInitOps;
+    Dictionary<string, string> _fieldChangeCallbacks => _state.FieldChangeCallbacks;
+    List<EmitDiagnostic> _diagnostics => _state.Diagnostics;
 
     CodeGenResult _codeGenResult;
     VerifiedFlatModule _flatModule;
