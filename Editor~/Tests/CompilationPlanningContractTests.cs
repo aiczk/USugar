@@ -12,6 +12,34 @@ namespace USugar.Tests;
 public class CompilationPlanningContractTests
 {
     [Fact]
+    public void BoundValueTable_DistinguishesNegativeFactsFromAbsence()
+    {
+        var scope = default(CallSiteBindingScope);
+        var table = new BoundValueTable(
+            Array.Empty<(
+                IOperation Operation,
+                CallSiteBindingScope Scope,
+                ValueInfo Value)>(),
+            new Dictionary<CallSiteBindingScope, bool>
+            {
+                [scope] = false,
+            });
+
+        Assert.False(table.MethodMentionsProgramLocalPayload(scope));
+        Assert.Throws<InvalidOperationException>(() =>
+            table.MethodMentionsProgramLocalPayload(null));
+
+        var absent = new BoundValueTable(
+            Array.Empty<(
+                IOperation Operation,
+                CallSiteBindingScope Scope,
+                ValueInfo Value)>(),
+            new Dictionary<CallSiteBindingScope, bool>());
+        Assert.Throws<InvalidOperationException>(() =>
+            absent.MethodMentionsProgramLocalPayload(scope));
+    }
+
+    [Fact]
     public void UasmEmitter_IsAThinPipelineFacade()
     {
         var fields = typeof(UasmEmitter).GetFields(

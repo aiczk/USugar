@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 
@@ -52,7 +53,7 @@ public sealed class DelegateBridgeEmitter
         {
             var method = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;
-            if (!TryResolveTarget(method, bridgeName, out var target)) continue;
+            var target = RequireTarget(method, bridgeName);
             DelegateAbi.ValidateNoRefOutParams(method);
             EmitBody(bridgeName, demand.SignatureMethod, demand.TypeParameterMap, target, method);
         }
@@ -64,20 +65,24 @@ public sealed class DelegateBridgeEmitter
         {
             var targetMethod = demand.Binding.TargetMethod;
             var adapterName = demand.Binding.BridgeName;
-            if (!TryResolveTarget(targetMethod, adapterName, out var target)) continue;
+            var target = RequireTarget(targetMethod, adapterName);
             DelegateAbi.ValidateNoRefOutParams(targetMethod);
             EmitBody(adapterName, demand.SignatureMethod, demand.TypeParameterMap, target, targetMethod);
         }
     }
 
-    bool TryResolveTarget(IMethodSymbol method, string bridgeName, out StructuredFunction target)
+    StructuredFunction RequireTarget(
+        IMethodSymbol method,
+        string bridgeName)
     {
         if (_demands.TryGetClosureBridge(bridgeName, out var functionName))
-        {
-            target = _context.Module.RequireFunction(functionName);
-            return true;
-        }
-        return _context.Methods.Functions.TryGetValue(method, out target);
+            return _context.Module.RequireFunction(functionName);
+        if (_context.Methods.Functions.TryGetValue(method, out var target))
+            return target;
+        throw new InvalidOperationException(
+            $"Delegate bridge demand '{bridgeName}' targets callable "
+            + $"'{method?.ToDisplayString() ?? "(null)"}', which was absent "
+            + "from the bound program.");
     }
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,

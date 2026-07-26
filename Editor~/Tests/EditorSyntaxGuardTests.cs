@@ -12,6 +12,25 @@ namespace USugar.Tests;
 public class EditorSyntaxGuardTests
 {
     [Fact]
+    public void DemandedDelegateBridgesCannotBeSilentlySkipped()
+    {
+        var packageRoot = FindPackageRoot();
+        var path = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit",
+            "DelegateBridgeEmitter.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.DoesNotContain(
+            "TryResolveTarget(",
+            source,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RequireTarget(",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void UnityIntegrationSourcesParseAsCSharp9()
     {
         var packageRoot = FindPackageRoot();

@@ -308,10 +308,18 @@ internal sealed class BoundValueTable
 
     internal bool MethodMentionsProgramLocalPayload(
         CallSiteBindingScope? scope)
-        => scope.HasValue
-           && _methodMentionsProgramLocalPayload.TryGetValue(
-               scope.Value, out var result)
-           && result;
+    {
+        if (!scope.HasValue)
+            throw new InvalidOperationException(
+                "Method payload semantics were requested outside "
+                + "a bound semantic scope.");
+        if (_methodMentionsProgramLocalPayload.TryGetValue(
+                scope.Value, out var result))
+            return result;
+        throw new InvalidOperationException(
+            $"Method payload semantics '{scope.Value}' were absent "
+            + "from the bound program.");
+    }
 
     sealed class OperationReferenceComparer
         : IEqualityComparer<IOperation>
