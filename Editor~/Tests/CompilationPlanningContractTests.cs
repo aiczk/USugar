@@ -141,12 +141,13 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(BoundConversionTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundConstantTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodBodyTable));
-        Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodAnalysisTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundValueTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundSyntheticDispatchTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundUdonTypeSystem));
         Assert.Contains(fields, field => field.FieldType == typeof(UdonTypeFactRegistry));
         Assert.Contains(fields, field => field.FieldType == typeof(AggregateLayoutTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(ClassTypeObjectContext));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(

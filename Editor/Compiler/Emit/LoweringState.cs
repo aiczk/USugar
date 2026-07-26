@@ -14,9 +14,6 @@ public sealed class LoweringState
     public FrozenLayoutPlan Planner => Environment.Planner;
     internal IUdonTypeSystem Types
         => Program != null ? Program.Types : Environment.Types;
-    internal BoundMethodAnalysisTable MethodAnalyses => Program?.MethodAnalyses
-        ?? throw new InvalidOperationException(
-            "Method analyses are unavailable before the bound program is published.");
     internal BoundProgram Program { get; private set; }
     internal CallSiteBindingScope? CurrentBindingScope { get; private set; }
 
@@ -32,7 +29,10 @@ public sealed class LoweringState
     readonly AggregateLayoutTable _aggregateLayouts = new AggregateLayoutTable();
     internal AggregateLayoutTable Aggregates
         => Program?.Aggregates ?? _aggregateLayouts;
-    public readonly ClassTypeObjectContext ClassTypes = new ClassTypeObjectContext();
+    readonly ClassTypeObjectContext _classTypes =
+        new ClassTypeObjectContext();
+    public ClassTypeObjectContext ClassTypes
+        => Program?.ClassTypes ?? _classTypes;
 
     /// <summary>CA-v2b-2: virtual-call lowering authority (dispatch set + devirt). Set by UasmEmitter after
     /// ClassTypes is seeded and before EmitMethods/BuildRecursionInfo, which both consume it.</summary>

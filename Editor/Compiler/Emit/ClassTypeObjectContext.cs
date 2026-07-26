@@ -9,6 +9,7 @@ using Microsoft.CodeAnalysis;
 public sealed class ClassTypeObjectContext
 {
     readonly Dictionary<INamedTypeSymbol, string> _vars = new(SymbolEqualityComparer.Default);
+    bool _published;
 
     /// <summary>The minted concrete user classes in this program (constructed-spec identity). Drives
     /// both the _start typeobj allocation and the is-test enumeration set.</summary>
@@ -16,6 +17,9 @@ public sealed class ClassTypeObjectContext
 
     public void Seed(IEnumerable<INamedTypeSymbol> mintedClasses)
     {
+        if (_published)
+            throw new InvalidOperationException(
+                "The class type-object table is frozen.");
         var unique = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
         foreach (var c in mintedClasses)
             if (c != null && !c.IsImplicitlyDeclared && c.Name != "<Module>"
@@ -34,6 +38,15 @@ public sealed class ClassTypeObjectContext
                         $"Typeobj key collision for '{c.ToDisplayString()}': '{name}'.");
                 _vars[c] = name;
             }
+    }
+
+    internal ClassTypeObjectContext Publish()
+    {
+        if (_published)
+            throw new InvalidOperationException(
+                "The class type-object table was published twice.");
+        _published = true;
+        return this;
     }
 
     /// <summary>The heap-var name holding this class's typeobj, or null if the class is never minted in

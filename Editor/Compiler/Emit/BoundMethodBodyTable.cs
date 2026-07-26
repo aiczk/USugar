@@ -4,6 +4,7 @@ using System.Collections.ObjectModel;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// Roslyn operations materialized before body emission for one source method definition.
@@ -15,6 +16,9 @@ internal sealed class BoundMethodBody
     public readonly SyntaxNode Declaration;
     public readonly IOperation Root;
     public readonly IOperation ExpressionBody;
+    public readonly IReadOnlyDictionary<ILocalSymbol, IOperation>
+        StableLocalInitializers;
+    public readonly IReadOnlyList<ITypeSymbol> ReferencedTypes;
 
     public IOperation AnalysisRoot => Root ?? ExpressionBody;
     public bool HasSourceDeclaration => Declaration != null;
@@ -30,6 +34,77 @@ internal sealed class BoundMethodBody
         Declaration = declaration;
         Root = root;
         ExpressionBody = expressionBody;
+        var analysis = Analyze(AnalysisRoot);
+        StableLocalInitializers = analysis.StableLocalInitializers;
+        ReferencedTypes = analysis.ReferencedTypes;
+    }
+
+    static (
+        IReadOnlyDictionary<ILocalSymbol, IOperation> StableLocalInitializers,
+        IReadOnlyList<ITypeSymbol> ReferencedTypes)
+        Analyze(IOperation body)
+    {
+        var initializers = new Dictionary<ILocalSymbol, IOperation>(
+            SymbolEqualityComparer.Default);
+        var unstable = new HashSet<ILocalSymbol>(
+            SymbolEqualityComparer.Default);
+        var referencedTypes = new List<ITypeSymbol>();
+        if (body != null)
+            foreach (var operation in body.DescendantsAndSelf())
+            {
+                if (operation is IVariableDeclaratorOperation declaration)
+                {
+                    referencedTypes.Add(declaration.Symbol.Type);
+                    if (declaration.Initializer?.Value == null
+                        || initializers.ContainsKey(declaration.Symbol))
+                        unstable.Add(declaration.Symbol);
+                    else
+                        initializers.Add(
+                            declaration.Symbol,
+                            declaration.Initializer.Value);
+                }
+
+                var written = WrittenLocal(operation);
+                if (written != null) unstable.Add(written);
+                var referenced = operation switch
+                {
+                    ILocalReferenceOperation local => local.Local.Type,
+                    IParameterReferenceOperation parameter
+                        => parameter.Parameter.Type,
+                    IFieldReferenceOperation field => field.Field.Type,
+                    _ => null,
+                };
+                if (referenced != null)
+                    referencedTypes.Add(referenced);
+            }
+        foreach (var local in unstable)
+            initializers.Remove(local);
+        return (
+            new ReadOnlyDictionary<ILocalSymbol, IOperation>(initializers),
+            Array.AsReadOnly(referencedTypes.ToArray()));
+    }
+
+    static ILocalSymbol WrittenLocal(IOperation operation)
+    {
+        static ILocalSymbol Local(IOperation candidate)
+            => ValueClassifier.UnwrapConversions(candidate)
+                is ILocalReferenceOperation reference
+                ? reference.Local
+                : null;
+        return operation switch
+        {
+            ISimpleAssignmentOperation assignment
+                => Local(assignment.Target),
+            ICompoundAssignmentOperation assignment
+                => Local(assignment.Target),
+            IIncrementOrDecrementOperation increment
+                => Local(increment.Target),
+            IArgumentOperation argument
+                when argument.Parameter?.RefKind
+                    is RefKind.Ref or RefKind.Out
+                => Local(argument.Value),
+            _ => null,
+        };
     }
 }
 

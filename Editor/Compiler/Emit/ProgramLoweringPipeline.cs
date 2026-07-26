@@ -1038,7 +1038,6 @@ internal sealed class ProgramLoweringPipeline
             _compilation,
             _state.Methods.RegisteredBodies.Select(
                 body => body.Method.OriginalDefinition));
-        var methodAnalyses = new BoundMethodAnalysisTable(methodBodies);
         var abiBuilder = new BoundAbiPlanBuilder(
             _environment.AbiCatalog);
         var boundSource = BindSourceSemantics(
@@ -1049,6 +1048,7 @@ internal sealed class ProgramLoweringPipeline
         var types = _environment.Types.Publish();
         var typeFacts = _environment.Session.TypeFacts.FreezeCopy();
         var aggregates = _state.Aggregates.Publish();
+        var classTypes = _state.ClassTypes.Publish();
         var program = new BoundProgram(
             discovery,
             closureIdentities,
@@ -1063,12 +1063,13 @@ internal sealed class ProgramLoweringPipeline
             boundSource.Conversions,
             boundSource.Constants,
             methodBodies,
-            methodAnalyses,
+            boundSource.Values,
             syntheticDispatch,
             abi,
             types,
             typeFacts,
-            aggregates);
+            aggregates,
+            classTypes);
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
@@ -1117,7 +1118,8 @@ internal sealed class ProgramLoweringPipeline
         BoundClassInitializationTable ClassInitializers,
         BoundDeconstructionTable Deconstructions,
         BoundConversionTable Conversions,
-        BoundConstantTable Constants)
+        BoundConstantTable Constants,
+        BoundValueTable Values)
         BindSourceSemantics(
             ProgramDiscovery discovery,
             BoundMethodBodyTable methodBodies,
@@ -1134,6 +1136,12 @@ internal sealed class ProgramLoweringPipeline
             new Dictionary<BoundDeconstructionKey, BoundDeconstruction>();
         var conversions =
             new Dictionary<BoundConversionKey, ClosedConversionPlan>();
+        var values = new List<(
+            IOperation Operation,
+            CallSiteBindingScope Scope,
+            ValueInfo Value)>();
+        var methodPayloads =
+            new Dictionary<CallSiteBindingScope, bool>();
         var abiPlanner = new AbiDemandPlanner(
             _lowering, abiBuilder);
         var conversionPlanner =
@@ -1151,12 +1159,21 @@ internal sealed class ProgramLoweringPipeline
             IOperation operation,
             IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
             CallSiteBindingScope scope,
+            BoundMethodBody body,
             bool root)
         {
             if (operation == null) return;
             if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
                 return;
             typePlanner.Plan(operation, typeMap);
+            values.Add((
+                operation,
+                scope,
+                ValueClassifier.ClassifyStable(
+                    operation,
+                    new TypeClassifierContext(typeMap),
+                    _state.Closures.CaptureScope,
+                    body?.StableLocalInitializers)));
             abiPlanner.Plan(operation);
             if (operation is IFieldReferenceOperation fieldReference)
                 constantBuilder.Record(fieldReference.Field);
@@ -1208,17 +1225,18 @@ internal sealed class ProgramLoweringPipeline
                         $"Callable site '{operation.Syntax}' was bound twice in one specialization.");
             }
             foreach (var child in operation.ChildOps())
-                BindTree(child, typeMap, scope, false);
+                BindTree(child, typeMap, scope, body, false);
         }
 
         void BindRoot(
             IOperation operation,
             IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
-            CallSiteBindingScope scope)
+            CallSiteBindingScope scope,
+            BoundMethodBody body)
         {
             using var genericScope =
                 _state.Generics.EnterOverlayScope(typeMap);
-            BindTree(operation, typeMap, scope, true);
+            BindTree(operation, typeMap, scope, body, true);
         }
 
         foreach (var body in _state.Methods.RegisteredBodies)
@@ -1228,10 +1246,25 @@ internal sealed class ProgramLoweringPipeline
                 : SpecializationKey.ForMethod(body.Method);
             var scope = CallSiteBindingScope.ForMethod(methodKey);
             typePlanner.Plan(body.Method, body.TypeParameterMap);
+            var boundBody =
+                methodBodies.Require(body.Method.OriginalDefinition);
+            var typeContext =
+                new TypeClassifierContext(body.TypeParameterMap);
+            var mentionsPayload =
+                LambdaCaptureAnalyzer.ReceiverCaptureKey(body.Method) != null
+                || boundBody.ReferencedTypes.Any(type =>
+                    type != null
+                    && TypeClassifier.ShapeOf(type, typeContext)
+                        .ContainsUserClassPayload);
+            if (!methodPayloads.TryAdd(scope, mentionsPayload))
+                throw new InvalidOperationException(
+                    $"Method payload semantics '{body.Method}' "
+                    + "were materialized twice.");
             BindRoot(
-                methodBodies.Require(body.Method.OriginalDefinition).AnalysisRoot,
+                boundBody.AnalysisRoot,
                 body.TypeParameterMap,
-                scope);
+                scope,
+                boundBody);
         }
 
         (CallSiteBindingScope Scope,
@@ -1282,10 +1315,12 @@ internal sealed class ProgramLoweringPipeline
                 throw new InvalidOperationException(
                     $"Initializer '{initializer.Syntax}' was bound twice "
                     + $"for '{mintedKey?.ToDisplayString() ?? "program fields"}'.");
+            methodPayloads.TryAdd(environment.Scope, false);
             BindRoot(
                 initializer,
                 environment.TypeMap,
-                environment.Scope);
+                environment.Scope,
+                null);
             return binding;
         }
 
@@ -1328,7 +1363,8 @@ internal sealed class ProgramLoweringPipeline
             new BoundClassInitializationTable(classInitializers),
             new BoundDeconstructionTable(deconstructions),
             new BoundConversionTable(conversions),
-            constantBuilder.Publish());
+            constantBuilder.Publish(),
+            new BoundValueTable(values, methodPayloads));
     }
 
     void PlanSyntheticDemands(ProgramDiscovery plan)

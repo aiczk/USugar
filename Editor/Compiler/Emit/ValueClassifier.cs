@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -53,6 +55,36 @@ public readonly struct ValueInfo
 
 public static class ValueClassifier
 {
+    internal static ValueInfo ClassifyStable(
+        IOperation value,
+        TypeClassifierContext typeCtx,
+        CaptureScopeAnalysis captureScope,
+        IReadOnlyDictionary<ILocalSymbol, IOperation>
+            stableLocalInitializers)
+        => ClassifyStable(
+            value, typeCtx, captureScope, stableLocalInitializers,
+            new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+
+    static ValueInfo ClassifyStable(
+        IOperation value,
+        TypeClassifierContext typeCtx,
+        CaptureScopeAnalysis captureScope,
+        IReadOnlyDictionary<ILocalSymbol, IOperation>
+            stableLocalInitializers,
+        HashSet<ISymbol> tracing)
+    {
+        var unwrapped = UnwrapConversions(value);
+        if (unwrapped is ILocalReferenceOperation local
+            && tracing.Add(local.Local)
+            && stableLocalInitializers != null
+            && stableLocalInitializers.TryGetValue(
+                local.Local, out var initializer))
+            return ClassifyStable(
+                initializer, typeCtx, captureScope,
+                stableLocalInitializers, tracing);
+        return Classify(value, typeCtx, captureScope);
+    }
+
     public static ValueInfo Classify(
         IOperation value,
         TypeClassifierContext typeCtx,
@@ -212,4 +244,85 @@ public static class ValueClassifier
             IDelegateCreationOperation => ValueProvenance.DelegateCreation,
             _ => ValueProvenance.Unknown,
         };
+}
+
+/// <summary>
+/// Frozen value-provenance and method-payload decisions for every operation
+/// specialization consumed by body lowering.
+/// </summary>
+internal sealed class BoundValueTable
+{
+    readonly Dictionary<
+        IOperation,
+        Dictionary<CallSiteBindingScope, ValueInfo>> _values;
+    readonly Dictionary<CallSiteBindingScope, bool>
+        _methodMentionsProgramLocalPayload;
+
+    internal BoundValueTable(
+        IEnumerable<(
+            IOperation Operation,
+            CallSiteBindingScope Scope,
+            ValueInfo Value)> values,
+        IDictionary<CallSiteBindingScope, bool>
+            methodMentionsProgramLocalPayload)
+    {
+        if (values == null) throw new ArgumentNullException(nameof(values));
+        _values = new Dictionary<
+            IOperation,
+            Dictionary<CallSiteBindingScope, ValueInfo>>(
+            OperationReferenceComparer.Instance);
+        foreach (var entry in values)
+        {
+            if (!_values.TryGetValue(
+                    entry.Operation, out var byScope))
+            {
+                byScope =
+                    new Dictionary<CallSiteBindingScope, ValueInfo>();
+                _values.Add(entry.Operation, byScope);
+            }
+            if (!byScope.TryAdd(entry.Scope, entry.Value))
+                throw new InvalidOperationException(
+                    $"Value semantics '{entry.Operation?.Syntax}' "
+                    + "were materialized twice.");
+        }
+        _methodMentionsProgramLocalPayload =
+            new Dictionary<CallSiteBindingScope, bool>(
+                methodMentionsProgramLocalPayload
+                ?? throw new ArgumentNullException(
+                    nameof(methodMentionsProgramLocalPayload)));
+    }
+
+    internal ValueInfo Require(
+        IOperation operation,
+        CallSiteBindingScope? scope)
+    {
+        if (operation != null
+            && scope.HasValue
+            && _values.TryGetValue(operation, out var byScope)
+            && byScope.TryGetValue(scope.Value, out var value))
+            return value;
+        throw new InvalidOperationException(
+            $"Value semantics '{operation?.Syntax}' were absent "
+            + "from the bound program.");
+    }
+
+    internal bool MethodMentionsProgramLocalPayload(
+        CallSiteBindingScope? scope)
+        => scope.HasValue
+           && _methodMentionsProgramLocalPayload.TryGetValue(
+               scope.Value, out var result)
+           && result;
+
+    sealed class OperationReferenceComparer
+        : IEqualityComparer<IOperation>
+    {
+        internal static readonly OperationReferenceComparer Instance = new();
+
+        public bool Equals(IOperation x, IOperation y)
+            => ReferenceEquals(x, y);
+
+        public int GetHashCode(IOperation obj)
+            => System.Runtime.CompilerServices.RuntimeHelpers
+                .GetHashCode(obj);
+    }
 }

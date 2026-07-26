@@ -22,12 +22,13 @@ internal sealed class BoundProgram
     public readonly BoundConversionTable Conversions;
     public readonly BoundConstantTable Constants;
     public readonly BoundMethodBodyTable MethodBodies;
-    public readonly BoundMethodAnalysisTable MethodAnalyses;
+    public readonly BoundValueTable Values;
     public readonly BoundSyntheticDispatchTable SyntheticDispatch;
     public readonly BoundAbiPlan Abi;
     public readonly BoundUdonTypeSystem Types;
     public readonly UdonTypeFactRegistry TypeFacts;
     public readonly AggregateLayoutTable Aggregates;
+    public readonly ClassTypeObjectContext ClassTypes;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
     public ReachabilityPlan Reach => Discovery.Reach;
@@ -49,12 +50,13 @@ internal sealed class BoundProgram
         BoundConversionTable conversions,
         BoundConstantTable constants,
         BoundMethodBodyTable methodBodies,
-        BoundMethodAnalysisTable methodAnalyses,
+        BoundValueTable values,
         BoundSyntheticDispatchTable syntheticDispatch,
         BoundAbiPlan abi,
         BoundUdonTypeSystem types,
         UdonTypeFactRegistry typeFacts,
-        AggregateLayoutTable aggregates)
+        AggregateLayoutTable aggregates,
+        ClassTypeObjectContext classTypes)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
         ClosureIdentities = closureIdentities
@@ -77,8 +79,7 @@ internal sealed class BoundProgram
             ?? throw new ArgumentNullException(nameof(constants));
         MethodBodies = methodBodies
             ?? throw new ArgumentNullException(nameof(methodBodies));
-        MethodAnalyses = methodAnalyses
-            ?? throw new ArgumentNullException(nameof(methodAnalyses));
+        Values = values ?? throw new ArgumentNullException(nameof(values));
         SyntheticDispatch = syntheticDispatch
             ?? throw new ArgumentNullException(nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
@@ -90,5 +91,7 @@ internal sealed class BoundProgram
                 nameof(typeFacts));
         Aggregates = aggregates
             ?? throw new ArgumentNullException(nameof(aggregates));
+        ClassTypes = classTypes
+            ?? throw new ArgumentNullException(nameof(classTypes));
     }
 }

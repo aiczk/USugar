@@ -25,47 +25,22 @@ public sealed class BoundaryChecker
 
     public BoundaryChecker(LoweringState ctx) => _ctx = ctx ?? throw new ArgumentNullException(nameof(ctx));
 
-    TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     RuntimeShape ShapeOf(ITypeSymbol type)
         => _ctx.Types.Describe(type, _ctx.Generics.TypeParamMap).SourceShape
            ?? throw new InvalidOperationException(
                $"Source type '{type}' has no semantic runtime shape.");
 
     public ValueInfo ClassifyValue(IOperation value)
-        => ClassifyValue(value, new HashSet<ISymbol>(SymbolEqualityComparer.Default));
-
-    ValueInfo ClassifyValue(IOperation value, HashSet<ISymbol> tracing)
-    {
-        var unwrapped = ValueClassifier.UnwrapConversions(value);
-        if (unwrapped is ILocalReferenceOperation local && tracing.Add(local.Local))
-        {
-            var initializer = FindStableLocalInitializer(local.Local);
-            if (initializer != null)
-                return ClassifyValue(initializer, tracing);
-        }
-        return ValueClassifier.Classify(value, TypeCtx, _ctx.Closures.CaptureScope);
-    }
-
-    IOperation FindStableLocalInitializer(ILocalSymbol local)
-    {
-        var analysis = _ctx.MethodAnalyses.Get(_ctx.Methods.CurrentMethod);
-        return analysis != null && analysis.StableLocalInitializers.TryGetValue(local, out var initializer)
-            ? initializer
-            : null;
-    }
+        => _ctx.Program.Values.Require(
+            value, _ctx.CurrentBindingScope);
 
     public bool CurrentMethodBodyMentionsUserClassPayload()
     {
         // Receiver-capture design v2 SS2(b): inside a v1-class instance member the receiver itself is
         // a program-local payload in scope - an unclassifiable delegate store from here cannot be
         // proven class-free (bounded conservative polarity; over-reject is the accepted trade).
-        if (LambdaCaptureAnalyzer.ReceiverCaptureKey(_ctx.Methods.CurrentMethod) != null) return true;
-        var analysis = _ctx.MethodAnalyses.Get(_ctx.Methods.CurrentMethod);
-        if (analysis == null) return false;
-        foreach (var type in analysis.ReferencedTypes)
-            if (type != null && TypeClassifier.ContainsUserClassPayload(type, TypeCtx))
-                return true;
-        return false;
+        return _ctx.Program.Values.MethodMentionsProgramLocalPayload(
+            _ctx.CurrentBindingScope);
     }
 
     /// <summary>Report any delegate store target here; non-cross-program targets (locals, private
@@ -118,7 +93,7 @@ public sealed class BoundaryChecker
     {
         var argType = arg.Value?.Type ?? arg.Parameter?.Type;
         if (argType == null
-            || !TypeClassifier.ShapeOf(argType, TypeCtx).ContainsDelegate) return;
+            || !ShapeOf(argType).ContainsDelegate) return;
         RequireDelegateValueSafeForCrossProgramStore(ClassifyValue(arg.Value),
             $"the cross-program argument '{arg.Parameter?.Name ?? "?"}'", "the call site",
             "Pass a direct class-free lambda/method group, or keep the call within this behaviour.");
@@ -174,7 +149,8 @@ public sealed class BoundaryChecker
     }
 
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
-        ITypeSymbol sourceType, ITypeSymbol destinationType)
+        ITypeSymbol sourceType, ITypeSymbol destinationType,
+        bool allowsProgramLocalClassErasure)
     {
         var sourceShape = ShapeOf(sourceType);
         var destinationShape = ShapeOf(destinationType);
@@ -222,7 +198,7 @@ public sealed class BoundaryChecker
         if (!sourceShape.ContainsUserClassPayload
             || destinationShape.ContainsUserClassPayload
             || IsProgramLocalEqualityPosition(conversion)
-            || IsProvablyLocalClassErasure(conversion, sourceType, destinationType))
+            || allowsProgramLocalClassErasure)
             return;
         throw new NotSupportedException(
             $"Erasing the v1 user class '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -258,10 +234,12 @@ public sealed class BoundaryChecker
     /// The erased value must be a single-declaration local and every reference must immediately perform
     /// a runtime class test/cast or reference equality. This is deliberately a whole-body proof: one
     /// opaque use makes the originating erasure loud again.</summary>
-    static bool IsProvablyLocalClassErasure(IConversionOperation conversion,
+    internal static bool IsProvablyLocalClassErasure(
+        IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
-        if (!TypeClassifier.IsUserClass(sourceType)
+        if (destinationType == null
+            || !TypeClassifier.IsUserClass(sourceType)
             || destinationType.SpecialType != SpecialType.System_Object)
             return false;
 
@@ -363,7 +341,10 @@ public sealed class BoundaryChecker
     {
         if (!IsDelegateCarryingStorageType(propRef.Property.Type)) return false;
         var containing = propRef.Property.ContainingType;
-        if (containing == null || TypeClassifier.IsObjectArrayEmulated(containing)) return false;
+        if (containing == null
+            || ShapeOf(containing).Bundle
+                is RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class)
+            return false;
         if (propRef.Instance is not null and not IInstanceReferenceOperation)
             return ExternResolver.IsUdonSharpBehaviour(containing)
                 || ExternResolver.IsUserInterface(containing);

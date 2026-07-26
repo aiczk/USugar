@@ -2143,7 +2143,10 @@ public sealed class LoweringServices
 
     internal void RejectProgramLocalErasure(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
-        => _state.Boundary.RequireCanEraseProgramLocalPayload(conversion, sourceType, destinationType);
+        => _state.Boundary.RequireCanEraseProgramLocalPayload(
+            conversion, sourceType, destinationType,
+            RequireBoundConversion(conversion)
+                .AllowsProgramLocalClassErasure);
 
     internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {

@@ -527,11 +527,15 @@ public class ExpressionHandler : IExpressionHandler
         // CA-v2 M3: a USER conversion operator on a v1 class consumes the class value through the
         // operator (C# forbids user conversions to object/a base type, so the destination is always a
         // concrete non-erasing type) — it is a real value conversion, not a laundering erasure.
-        bool userClassConversion = operatorMethod is { MethodKind: MethodKind.Conversion }
-            && operatorMethod.ContainingType is INamedTypeSymbol ucct && TypeClassifier.IsObjectArrayEmulated(ucct);
+        bool userClassConversion = operatorMethod is
+            { MethodKind: MethodKind.Conversion }
+            && operatorMethod.ContainingType is INamedTypeSymbol owner
+            && TypeClassifier.IsObjectArrayEmulated(owner);
         if (!userClassConversion
-            && _lowering.ResolveType(conv.Operand.Type) is { } b82Src && _lowering.ResolveType(conv.Type) is { } b82Dst)
-            _lowering.RejectProgramLocalErasure(conv, b82Src, b82Dst);
+            && _lowering.ResolveType(conv.Operand.Type) is { } source
+            && _lowering.ResolveType(conv.Type) is { } destination)
+            _lowering.RejectProgramLocalErasure(
+                conv, source, destination);
 
         var sourceValue = _lowering.VisitLoweredExpression(conv.Operand);
         var srcVal = sourceValue.Leaf;
