@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
 internal readonly struct BoundConstantValue
@@ -40,45 +41,30 @@ internal sealed class BoundConstantTable
         value = constant.Value;
         return constant.HasValue;
     }
-}
 
-/// <summary>
-/// Roslyn-facing constant evaluator confined to bound-program construction.
-/// </summary>
-internal sealed class BoundConstantTableBuilder
-{
-    readonly Compilation _compilation;
-    readonly Dictionary<IFieldSymbol, BoundConstantValue> _fields =
-        new(SymbolEqualityComparer.Default);
-    bool _published;
-
-    public BoundConstantTableBuilder(Compilation compilation)
-        => _compilation = compilation
-            ?? throw new ArgumentNullException(nameof(compilation));
-
-    public void Record(IFieldSymbol field)
+    public static BoundConstantTable Materialize(
+        Compilation compilation,
+        IEnumerable<IFieldSymbol> fields)
     {
-        RequireMutable();
-        if (field == null || !field.IsStatic || !field.IsReadOnly)
-            return;
-        if (_fields.ContainsKey(field)) return;
-        var hasValue = EmitPolicy.TryGetConstFieldInitializer(
-            _compilation, field, out var value);
-        _fields.Add(
-            field, new BoundConstantValue(hasValue, value));
-    }
-
-    public BoundConstantTable Publish()
-    {
-        RequireMutable();
-        _published = true;
-        return new BoundConstantTable(_fields);
-    }
-
-    void RequireMutable()
-    {
-        if (_published)
-            throw new InvalidOperationException(
-                "The constant table was already published.");
+        if (compilation == null)
+            throw new ArgumentNullException(nameof(compilation));
+        if (fields == null)
+            throw new ArgumentNullException(nameof(fields));
+        var values = new Dictionary<
+            IFieldSymbol, BoundConstantValue>(
+            SymbolEqualityComparer.Default);
+        foreach (var field in fields
+                     .Where(field => field is
+                         { IsStatic: true, IsReadOnly: true })
+                     .Distinct<IFieldSymbol>(
+                         SymbolEqualityComparer.Default))
+        {
+            var hasValue = EmitPolicy.TryGetConstFieldInitializer(
+                compilation, field, out var value);
+            values.Add(
+                field,
+                new BoundConstantValue(hasValue, value));
+        }
+        return new BoundConstantTable(values);
     }
 }

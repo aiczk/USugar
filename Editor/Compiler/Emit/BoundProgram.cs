@@ -16,7 +16,6 @@ internal sealed class BoundProgram
     public readonly SyntheticDemandPlan SyntheticDemands;
     public readonly BoundCallSiteTable CallSites;
     public readonly BoundInitializerTable Initializers;
-    public readonly BoundClassInitializationTable ClassInitializers;
     public readonly BoundDeconstructionTable Deconstructions;
     public readonly BoundConversionTable Conversions;
     public readonly BoundConstantTable Constants;
@@ -43,7 +42,6 @@ internal sealed class BoundProgram
         SyntheticDemandPlan syntheticDemands,
         BoundCallSiteTable callSites,
         BoundInitializerTable initializers,
-        BoundClassInitializationTable classInitializers,
         BoundDeconstructionTable deconstructions,
         BoundConversionTable conversions,
         BoundConstantTable constants,
@@ -66,8 +64,6 @@ internal sealed class BoundProgram
         CallSites = callSites ?? throw new ArgumentNullException(nameof(callSites));
         Initializers = initializers
             ?? throw new ArgumentNullException(nameof(initializers));
-        ClassInitializers = classInitializers
-            ?? throw new ArgumentNullException(nameof(classInitializers));
         Deconstructions = deconstructions
             ?? throw new ArgumentNullException(nameof(deconstructions));
         Conversions = conversions

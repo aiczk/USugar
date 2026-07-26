@@ -137,7 +137,7 @@ public sealed class DeconstructionAssignmentHandler : IOperationHandler
             // the compiler-defined multi-stage evaluation order.
             if (op.Syntax is AssignmentExpressionSyntax assignmentSyntax)
             {
-                var deconstruct = _lowering.RequireBoundDeconstruction(op).Method;
+                var deconstruct = _lowering.RequireBoundDeconstruction(op);
                 if (deconstruct != null)
                 {
                     if (targetTuple.Elements.Any(e => e is ITupleOperation

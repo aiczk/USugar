@@ -64,11 +64,35 @@ internal readonly struct BoundInitializerKey : IEquatable<BoundInitializerKey>
 internal sealed class BoundInitializerTable
 {
     readonly IReadOnlyDictionary<BoundInitializerKey, BoundInitializer> _sites;
+    readonly IReadOnlyDictionary<
+        INamedTypeSymbol,
+        IReadOnlyList<BoundClassFieldInitializer>> _classes;
 
     internal BoundInitializerTable(
-        IDictionary<BoundInitializerKey, BoundInitializer> sites)
-        => _sites = new ReadOnlyDictionary<BoundInitializerKey, BoundInitializer>(
+        IDictionary<BoundInitializerKey, BoundInitializer> sites,
+        IDictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>> classes)
+    {
+        _sites = new ReadOnlyDictionary<BoundInitializerKey, BoundInitializer>(
             new Dictionary<BoundInitializerKey, BoundInitializer>(sites));
+        if (classes == null)
+            throw new ArgumentNullException(nameof(classes));
+        var classCopy = new Dictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>(
+            SymbolEqualityComparer.Default);
+        foreach (var pair in classes)
+            classCopy.Add(
+                pair.Key,
+                Array.AsReadOnly(
+                    (pair.Value
+                     ?? Array.Empty<BoundClassFieldInitializer>())
+                    .ToArray()));
+        _classes = new ReadOnlyDictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>(classCopy);
+    }
 
     public BoundInitializer Require(
         IOperation operation,
@@ -79,6 +103,17 @@ internal sealed class BoundInitializerTable
         throw new InvalidOperationException(
             $"Initializer '{operation.Syntax}' was absent from the bound program "
             + $"for '{mintedType?.ToDisplayString() ?? "program fields"}'.");
+    }
+
+    public IReadOnlyList<BoundClassFieldInitializer> RequireClass(
+        INamedTypeSymbol type)
+    {
+        if (type != null
+            && _classes.TryGetValue(type, out var plan))
+            return plan;
+        throw new InvalidOperationException(
+            $"Class initializer plan '{type?.ToDisplayString()}' "
+            + "was absent from the bound program.");
     }
 }
 
@@ -98,50 +133,5 @@ internal sealed class BoundClassFieldInitializer
         Slot = slot;
         Binding = binding
             ?? throw new ArgumentNullException(nameof(binding));
-    }
-}
-
-/// <summary>
-/// Closed class-initializer programs. Member discovery, Roslyn operation
-/// lookup, aggregate slot selection, and lexical generic binding are all
-/// complete before body emission starts.
-/// </summary>
-internal sealed class BoundClassInitializationTable
-{
-    readonly IReadOnlyDictionary<
-        INamedTypeSymbol,
-        IReadOnlyList<BoundClassFieldInitializer>> _classes;
-
-    public BoundClassInitializationTable(
-        IDictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>> classes)
-    {
-        if (classes == null)
-            throw new ArgumentNullException(nameof(classes));
-        var copy = new Dictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>>(
-            SymbolEqualityComparer.Default);
-        foreach (var pair in classes)
-            copy.Add(
-                pair.Key,
-                Array.AsReadOnly(
-                    (pair.Value
-                     ?? Array.Empty<BoundClassFieldInitializer>())
-                    .ToArray()));
-        _classes = new ReadOnlyDictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>>(copy);
-    }
-
-    public IReadOnlyList<BoundClassFieldInitializer> Require(
-        INamedTypeSymbol type)
-    {
-        if (type != null && _classes.TryGetValue(type, out var plan))
-            return plan;
-        throw new InvalidOperationException(
-            $"Class initializer plan '{type?.ToDisplayString()}' "
-            + "was absent from the bound program.");
     }
 }

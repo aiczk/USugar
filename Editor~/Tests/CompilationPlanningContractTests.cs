@@ -134,8 +134,6 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundInitializerTable));
-        Assert.Contains(fields,
-            field => field.FieldType == typeof(BoundClassInitializationTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundDeconstructionTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundConversionTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundConstantTable));

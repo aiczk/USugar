@@ -33,29 +33,19 @@ internal readonly struct BoundDeconstructionKey
     }
 }
 
-/// <summary>
-/// Roslyn's result for one deconstruction site. A null method is intentional:
-/// tuple-return deconstruction has no selected user-defined Deconstruct method.
-/// </summary>
-internal sealed class BoundDeconstruction
-{
-    public readonly IMethodSymbol Method;
-
-    public BoundDeconstruction(IMethodSymbol method)
-        => Method = method;
-}
-
 /// <summary>Deconstruction binding results, closed per specialization.</summary>
 internal sealed class BoundDeconstructionTable
 {
-    readonly IReadOnlyDictionary<BoundDeconstructionKey, BoundDeconstruction> _sites;
+    readonly IReadOnlyDictionary<BoundDeconstructionKey, IMethodSymbol> _sites;
 
     internal BoundDeconstructionTable(
-        IDictionary<BoundDeconstructionKey, BoundDeconstruction> sites)
-        => _sites = new ReadOnlyDictionary<BoundDeconstructionKey, BoundDeconstruction>(
-            new Dictionary<BoundDeconstructionKey, BoundDeconstruction>(sites));
+        IDictionary<BoundDeconstructionKey, IMethodSymbol> sites)
+        => _sites = new ReadOnlyDictionary<
+            BoundDeconstructionKey, IMethodSymbol>(
+            new Dictionary<BoundDeconstructionKey, IMethodSymbol>(
+                sites));
 
-    public BoundDeconstruction Require(
+    public IMethodSymbol Require(
         IOperation operation,
         CallSiteBindingScope scope)
     {

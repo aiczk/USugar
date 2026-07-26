@@ -85,7 +85,7 @@ public sealed class LoweringServices
             operation.Syntax, kind, target, scope);
     }
 
-    internal BoundDeconstruction RequireBoundDeconstruction(IOperation operation)
+    internal IMethodSymbol RequireBoundDeconstruction(IOperation operation)
     {
         if (operation == null) throw new ArgumentNullException(nameof(operation));
         var scope = _state.CurrentBindingScope

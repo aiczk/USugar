@@ -1056,7 +1056,6 @@ internal sealed class ProgramLoweringPipeline
             syntheticDemands,
             boundSource.CallSites,
             boundSource.Initializers,
-            boundSource.ClassInitializers,
             boundSource.Deconstructions,
             boundSource.Conversions,
             boundSource.Constants,
@@ -1113,7 +1112,6 @@ internal sealed class ProgramLoweringPipeline
 
     (BoundCallSiteTable CallSites,
         BoundInitializerTable Initializers,
-        BoundClassInitializationTable ClassInitializers,
         BoundDeconstructionTable Deconstructions,
         BoundConversionTable Conversions,
         BoundConstantTable Constants,
@@ -1131,7 +1129,7 @@ internal sealed class ProgramLoweringPipeline
             IReadOnlyList<BoundClassFieldInitializer>>(
             SymbolEqualityComparer.Default);
         var deconstructions =
-            new Dictionary<BoundDeconstructionKey, BoundDeconstruction>();
+            new Dictionary<BoundDeconstructionKey, IMethodSymbol>();
         var conversions =
             new Dictionary<BoundConversionKey, ClosedConversionPlan>();
         var values = new List<(
@@ -1144,8 +1142,9 @@ internal sealed class ProgramLoweringPipeline
             _lowering, abiBuilder);
         var conversionPlanner =
             new ConversionSemanticPlanner(_lowering);
-        var constantBuilder =
-            new BoundConstantTableBuilder(_compilation);
+        var constantFields =
+            new HashSet<IFieldSymbol>(
+                SymbolEqualityComparer.Default);
         var typePlanner =
             new TypeDemandPlanner(
                 _environment.Types, _compilation, _state.Aggregates);
@@ -1174,7 +1173,7 @@ internal sealed class ProgramLoweringPipeline
                     body?.StableLocalInitializers)));
             abiPlanner.Plan(operation);
             if (operation is IFieldReferenceOperation fieldReference)
-                constantBuilder.Record(fieldReference.Field);
+                constantFields.Add(fieldReference.Field);
             if (operation is IConversionOperation conversion)
             {
                 var conversionKey = new BoundConversionKey(
@@ -1196,7 +1195,7 @@ internal sealed class ProgramLoweringPipeline
                 var deconstructionKey = new BoundDeconstructionKey(
                     operation.Syntax, scope);
                 if (!deconstructions.TryAdd(
-                        deconstructionKey, new BoundDeconstruction(method)))
+                        deconstructionKey, method))
                     throw new InvalidOperationException(
                         $"Deconstruction '{operation.Syntax}' was bound twice.");
             }
@@ -1357,11 +1356,12 @@ internal sealed class ProgramLoweringPipeline
 
         return (
             new BoundCallSiteTable(sites),
-            new BoundInitializerTable(initializers),
-            new BoundClassInitializationTable(classInitializers),
+            new BoundInitializerTable(
+                initializers, classInitializers),
             new BoundDeconstructionTable(deconstructions),
             new BoundConversionTable(conversions),
-            constantBuilder.Publish(),
+            BoundConstantTable.Materialize(
+                _compilation, constantFields),
             new BoundValueTable(values, methodPayloads));
     }
 
