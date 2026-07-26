@@ -27,7 +27,7 @@ public sealed class BoundaryChecker
 
     TypeClassifierContext TypeCtx => new TypeClassifierContext(_ctx.Generics.TypeParamMap);
     RuntimeShape ShapeOf(ITypeSymbol type)
-        => _ctx.Session.Types.Describe(type, _ctx.Generics.TypeParamMap).SourceShape
+        => _ctx.Types.Describe(type, _ctx.Generics.TypeParamMap).SourceShape
            ?? throw new InvalidOperationException(
                $"Source type '{type}' has no semantic runtime shape.");
 

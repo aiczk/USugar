@@ -73,7 +73,7 @@ public sealed class MulticastDelegateEmitter
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
         var mSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
-        var thisType = _ctx.Session.Types.GetUdonTypeName(_classSymbol);
+        var thisType = _ctx.Types.GetUdonTypeName(_classSymbol);
         return DelegateAbi.EmitBundleMintToSlot(_builder, mSlot,
             () => _bridge.Load(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
             _builder.Const(fanoutName, StorageTypes.String),

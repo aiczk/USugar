@@ -388,9 +388,10 @@ public static class AggregateAbi
 public static class ClassAbi
 {
     /// <summary>Emit the complete class instance mint sequence for a supported v1 user class.</summary>
-    public static CLeaf EmitMint(CoreBuilder builder, Compilation compilation,
-        INamedTypeSymbol classTy, AggregateLayout layout,
-        Func<IOperation, CLeaf> emitValue, Action<CLeaf> emitDefaultInitialize,
+    internal static CLeaf EmitMint(
+        CoreBuilder builder,
+        AggregateLayout layout,
+        Action<CLeaf> emitDefaultInitialize,
         Action<CLeaf> emitConstructor, Action<CLeaf> emitObjectInitializer,
         Action<CLeaf> emitTypeObj = null)
     {
@@ -413,9 +414,14 @@ public static class ClassAbi
     /// field initializers, then recurse into a user-class base (derived->base init order, empty bodies).
     /// Used by the mint for a class with no explicit ctor, and by an explicit ctor whose base ctor is
     /// itself implicit.</summary>
-    public static void EmitImplicitCtorChain(CoreBuilder builder, Compilation compilation,
-        CLeaf instance, INamedTypeSymbol classTy, Func<INamedTypeSymbol, AggregateLayout> getLayout,
-        Func<IOperation, CLeaf> emitValue, Action<IMethodSymbol, CLeaf> callBaseCtor)
+    internal static void EmitImplicitCtorChain(
+        CoreBuilder builder,
+        CLeaf instance,
+        INamedTypeSymbol classTy,
+        Func<INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>> getInitializers,
+        Func<BoundClassFieldInitializer, CLeaf> emitValue,
+        Action<IMethodSymbol, CLeaf> callBaseCtor)
     {
         // If this class has an EXPLICIT parameterless ctor, its BODY must run (its own field inits, base
         // chain, and statements — e.g. a base ctor calling a virtual method, charter #6). CALL it rather than
@@ -428,9 +434,12 @@ public static class ClassAbi
             callBaseCtor(ownCtor, instance);
             return;
         }
-        EmitInstanceFieldInitializers(builder, compilation, instance, classTy, getLayout(classTy), emitValue);
+        EmitInstanceFieldInitializers(
+            builder, instance, getInitializers(classTy), emitValue);
         if (classTy.BaseType is { } bt && TypeClassifier.IsUserClass(bt))
-            EmitImplicitCtorChain(builder, compilation, instance, bt, getLayout, emitValue, callBaseCtor);
+            EmitImplicitCtorChain(
+                builder, instance, bt, getInitializers,
+                emitValue, callBaseCtor);
     }
 
     /// <summary>M4b: `method` occupies the System.Object.ToString dispatch slot — object.ToString itself,
@@ -569,26 +578,17 @@ public static class ClassAbi
     }
 
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
-    public static void EmitInstanceFieldInitializers(CoreBuilder builder, Compilation compilation,
-        CLeaf instance, INamedTypeSymbol classTy, AggregateLayout layout, Func<IOperation, CLeaf> emitValue)
+    internal static void EmitInstanceFieldInitializers(
+        CoreBuilder builder,
+        CLeaf instance,
+        IReadOnlyList<BoundClassFieldInitializer> initializers,
+        Func<BoundClassFieldInitializer, CLeaf> emitValue)
     {
-        foreach (var member in classTy.GetMembers())
-        {
-            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
-            var initHolder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop
-                ? (ISymbol)prop : f;
-            if (!layout.TryGetIndex(f, out var idx)) continue;
-            var syntax = initHolder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-            var initValue = syntax switch
-            {
-                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer?.Value,
-                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer?.Value,
-                _ => null,
-            };
-            if (initValue == null) continue;
-            var initOp = compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
-            if (initOp == null) continue;
-            AggregateAbi.WriteSlot(builder, instance, idx, emitValue(initOp));
-        }
+        if (initializers == null)
+            throw new ArgumentNullException(nameof(initializers));
+        foreach (var initializer in initializers)
+            AggregateAbi.WriteSlot(
+                builder, instance, initializer.Slot,
+                emitValue(initializer));
     }
 }

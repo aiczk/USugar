@@ -399,7 +399,10 @@ internal sealed class ExternInvocationLowerer
     internal CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
         var typeArg = target.TypeArguments[0];
-        if (_lowering.State.Session.ObjectArrayBehaviourAliases.IsAlias(typeArg, _lowering.TypeParamMap))
+        if (_lowering.State.Types.Describe(
+                typeArg,
+                _lowering.TypeParamMap).Representation
+            == UdonRepresentationKind.ObjectArrayBehaviourAlias)
             throw new System.NotSupportedException(
                 $"GetComponent<{_lowering.ResolveType(typeArg).ToDisplayString()}> is invalid: this type is used "
                 + "as a legacy object[] nominal alias in the same compilation and therefore has "
@@ -420,8 +423,8 @@ internal sealed class ExternInvocationLowerer
     /// module implementing IUdonComponentGetterModule, and that same interface is what registers the
     /// module's own `__GetComponent*__T` node under its own type name. So the token is a legal key
     /// exactly when this key resolves — one interface causing both facts, not a numeric coincidence.
-    /// Asking <see cref="UdonAbiCatalog"/> keeps the answer on the installed SDK's own registry, the
-    /// single ground truth every other extern USugar emits is already trusted against.
+    /// The frozen ABI snapshot answers this membership question from the same
+    /// installed-SDK registry used while the bound program was materialized.
     /// </summary>
     bool IsGenericComponentGetterKey(IMethodSymbol target, string tokenUdonType)
     {
@@ -1470,90 +1473,24 @@ internal sealed class ExternInvocationLowerer
 
     // ── Extern Signature Helpers ──
 
-    BoundExtern BindExternMethodCall(IMethodSymbol method, ITypeSymbol instanceType = null,
-        string[] paramTypeOverride = null, bool allowMissing = false)
+    BoundExtern BindExternMethodCall(
+        IMethodSymbol method,
+        ITypeSymbol instanceType = null,
+        string[] paramTypeOverride = null,
+        bool allowMissing = false)
     {
-        ITypeSymbol containingTypeSym = method.ContainingType;
-
-        // Interface method on a type parameter: use the concrete type as containing type
-        // e.g., IComparable<T>.CompareTo(T) with T=int → SystemInt32.__CompareTo__SystemInt32__SystemInt32
-        if (containingTypeSym.TypeKind == TypeKind.Interface && instanceType != null
-            && _lowering.TypeParamMap != null
-            && instanceType is ITypeParameterSymbol tp
-            && _lowering.TypeParamMap.TryGetValue(tp, out var concreteType))
-            containingTypeSym = concreteType;
-
-        // Wave-12 [V3]: an Object/ValueType/Enum-inherited member (Equals/GetHashCode/ToString) invoked
-        // on a TYPE-PARAMETER receiver binds the effective-base-class symbol (e.g. System.ValueType.Equals
-        // under a struct constraint), whose Udon-mapped containing type (SystemValueType) has no registered
-        // extern — the invalid signature then fell into ResolveExtern's Component fallback chain and
-        // silently adopted UnityEngineComponent.__Equals/__GetHashCode/__ToString for a boxed value
-        // receiver (type-mismatched extern on the real VM). Monomorphization knows the exact runtime type,
-        // so resolve the boxed virtual dispatch at compile time: re-route to the concrete type's own
-        // extern (SystemInt32.__Equals__SystemObject__SystemBoolean etc. — all registered per primitive).
-        // A user aggregate (object[]-emulated struct) has no such extern and C#'s ValueType semantics
-        // (field-wise Equals, type-name ToString) cannot be expressed as one — loud per design §8-3.
-        if (instanceType is ITypeParameterSymbol vtp && _lowering.TypeParamMap != null
-            && _lowering.TypeParamMap.TryGetValue(vtp, out var vConcrete)
-            && method.ContainingType.SpecialType is SpecialType.System_Object
-                or SpecialType.System_ValueType or SpecialType.System_Enum)
-        {
-            if (vConcrete is INamedTypeSymbol vAgg && TypeClassifier.IsAggregateValue(vAgg))
-                throw new System.NotSupportedException(
-                    $"'{method.Name}' on type parameter '{vtp.Name}' instantiated with user-defined "
-                    + $"struct '{vConcrete.Name}' is not supported: Udon has no extern for it and C#'s "
-                    + "ValueType semantics cannot be emulated. Compare/format the struct's fields "
-                    + "directly instead.");
-            containingTypeSym = vConcrete;
-        }
-        // B59/B60: the SAME Object/ValueType/Enum-inherited member on a CONCRETE receiver (not a type
-        // parameter) keeps the base owner (SystemEnum/SystemValueType — no registered extern). Route it
-        // through the shared owner choke point: an enum resolves to the receiver's static type (→
-        // underlying-primitive extern, B59); a user-struct receiver hits the designed reject (B60).
-        else if (instanceType != null && instanceType is not ITypeParameterSymbol
-            && method.ContainingType.SpecialType is SpecialType.System_Object
-                or SpecialType.System_ValueType or SpecialType.System_Enum)
-            containingTypeSym = _lowering.ResolveExternOwnerType(method.ContainingType, instanceType, method.Name);
-
-        // Armor: a user-struct member reaching generic extern construction means no StructuredFunction was
-        // registered for it (collector-scope drift) — fail with a diagnosis, not a bogus
-        // SystemObjectArray.__<Name>__ extern (roadmap B46 family). An instance user-struct method is
-        // pre-routed to EmitStructInstanceCall (InvocationHandler), so this catches static-on-struct and
-        // any future uncovered call shape.
-        _lowering.GuardUserStructMemberReachedExtern(containingTypeSym, method.Name);
-
-        var containingType = _lowering.GetStorageTypeName(containingTypeSym);
-
-        // Object.Instantiate → VRCInstantiate (Udon VM redirect)
-        // Generic static Array methods (IndexOf<T>, LastIndexOf<T>, BinarySearch<T>, Reverse<T>):
-        // UdonSharp resolves these to the non-generic overload (Array, object) instead of (T[], T).
-        // The TArray/T version exists but causes HeapTypeMismatch (reads String[] as Object[]).
-        if (method.IsGenericMethod && containingType == "SystemArray")
-        {
-            var nonGenericPts = method.OriginalDefinition.Parameters.Select(p =>
-            {
-                var t = p.Type;
-                switch (t)
-                {
-                    case ITypeParameterSymbol:
-                        return "SystemObject";
-                    case IArrayTypeSymbol { ElementType: ITypeParameterSymbol }:
-                        return "SystemArray";
-                }
-                var tn = _lowering.GetStorageTypeName(t);
-                if (p.RefKind != RefKind.None) tn += "Ref";
-                return tn;
-            }).ToArray();
-            paramTypeOverride = nonGenericPts;
-        }
-
+        var request = _lowering.DescribeExternMethodAbi(
+            method, instanceType, paramTypeOverride);
         if (_lowering.State.BoundAbi.TryGetMethod(
-                method, containingType, type => _lowering.GetStorageTypeName(type),
-                paramTypeOverride, out var bound))
+                request.Method, request.Owner,
+                type => _lowering.GetStorageTypeName(type),
+                request.ParameterOverride, out var bound))
             return bound;
-        if (allowMissing)
-            return null;
+        if (allowMissing) return null;
         return _lowering.State.BoundAbi.RequireMethod(
-            method, containingType, type => _lowering.GetStorageTypeName(type), paramTypeOverride);
+            request.Method, request.Owner,
+            type => _lowering.GetStorageTypeName(type),
+            request.ParameterOverride);
     }
+
 }

@@ -135,11 +135,16 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundInitializerTable));
+        Assert.Contains(fields,
+            field => field.FieldType == typeof(BoundClassInitializationTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundDeconstructionTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundConversionTable));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundConstantTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodBodyTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundMethodAnalysisTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundSyntheticDispatchTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
+        Assert.Contains(fields, field => field.FieldType == typeof(BoundUdonTypeSystem));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
@@ -166,6 +171,46 @@ public class CompilationPlanningContractTests
             typeof(BoundAbiPlan).GetFields(
                 BindingFlags.Instance | BindingFlags.NonPublic),
             field => Assert.True(field.IsInitOnly, field.Name));
+        Assert.DoesNotContain(
+            typeof(BoundAbiPlan).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            field => field.FieldType == typeof(UdonAbiBinder)
+                     || field.FieldType == typeof(UdonAbiCatalog));
+        Assert.DoesNotContain(
+            typeof(BoundUdonTypeSystem).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            field => field.FieldType == typeof(UdonTypeSystem)
+                     || field.FieldType == typeof(UdonAbiCatalog)
+                     || field.FieldType == typeof(CompilationSession)
+                     || field.FieldType == typeof(Compilation));
+        Assert.DoesNotContain(fields, field =>
+            field.FieldType == typeof(BoundAbiPlanBuilder)
+            || field.FieldType == typeof(MaterializingUdonTypeSystem)
+            || field.FieldType == typeof(CompilationSession)
+            || field.FieldType == typeof(Compilation)
+            || field.FieldType == typeof(UdonAbiCatalog)
+            || field.FieldType == typeof(UdonAbiBinder));
+    }
+
+    [Fact]
+    public void FrozenTypeSnapshot_RejectsAnUnplannedQuestion()
+    {
+        var compilation = TestHelper.BuildCompilation(
+            "class FrozenTypeQuestion { }",
+            "FrozenTypeQuestion",
+            out _);
+        var snapshot = new BoundUdonTypeSystem(
+            new Dictionary<string, UdonTypeLowering>());
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            snapshot.GetStorageType(
+                compilation.GetSpecialType(
+                    SpecialType.System_Int32)));
+
+        Assert.Contains(
+            "absent from the bound program",
+            error.Message,
+            StringComparison.Ordinal);
     }
 
     [Fact]

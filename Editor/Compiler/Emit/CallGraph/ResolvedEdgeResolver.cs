@@ -194,13 +194,13 @@ public sealed class ResolvedEdgeResolver
         {
             var t = mrOp.Method.OriginalDefinition;
             var sigS = DelegateAbi.BuildSigPart(
-                vInvoke, _emitter.Session.Types);
+                vInvoke, _emitter.Types);
             if (sigS != DelegateAbi.BuildSigPart(
-                    t, _emitter.Session.Types))
+                    t, _emitter.Types))
                 yield return (t, sigS);
             if (LeafMethodRefTarget(mrOp) is { } leafT
                 && sigS != DelegateAbi.BuildSigPart(
-                    leafT, _emitter.Session.Types))
+                    leafT, _emitter.Types))
                 yield return (leafT, sigS);
         }
     }

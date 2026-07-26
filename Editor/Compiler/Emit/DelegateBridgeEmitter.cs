@@ -80,7 +80,7 @@ public sealed class DelegateBridgeEmitter
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(
-            signatureMethod, _context.Session.Types, typeParameterMap);
+            signatureMethod, _context.Types, typeParameterMap);
         var returnType = _convention.Declare(signaturePart, signatureMethod, typeParameterMap);
         var targetReturnType = closureCheckMethod.ReturnsVoid
             ? StorageTypes.Void

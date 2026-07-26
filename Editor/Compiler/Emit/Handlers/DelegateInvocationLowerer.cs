@@ -111,7 +111,7 @@ internal sealed class DelegateInvocationLowerer
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
         DelegateAbi.ValidateNoRefOutParams(invoke);
         var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
-            delegateType, _lowering.State.Session.Types, _lowering.TypeParamMap);
+            delegateType, _lowering.State.Types, _lowering.TypeParamMap);
 
         // The __dlgc_ conv vars are a signature-keyed cross-program byte contract (§3.2). Bridges declare
         // the same names for their own sigs; the dispatch site declares-on-first-use for foreign sigs.
@@ -179,7 +179,7 @@ internal sealed class DelegateInvocationLowerer
         // delegate Invoke method. Byte-identical for the pre-existing fan-out caller (invoke there
         // already IS the delegate's own Invoke method, so the old round-trip was a no-op derivation).
         var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
-            invoke, _lowering.State.Session.Types, typeParamMap);
+            invoke, _lowering.State.Types, typeParamMap);
         StorageType? retType = invoke.ReturnsVoid
             ? null
             : _lowering.State.ResolveStorageType(invoke.ReturnType, typeParamMap);

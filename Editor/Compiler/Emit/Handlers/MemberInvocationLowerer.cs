@@ -509,26 +509,6 @@ internal sealed class MemberInvocationLowerer
     /// redirect to a `: this(...)` target (suppressing own field inits) or run own field inits then the
     /// base ctor (explicit `: base(...)` function, or the implicit base chain). Emitted from EmitMethod
     /// which owns the ctor function; this handler owns EmitCallToMethod/field-init helpers.</summary>
-    // True if any instance field / auto-property of THIS class tier declares an initializer (drives the
-    // ctor-prologue zero-work fast path — a plain single class with no initializers stays byte-identical).
-    static bool ClassHasFieldInitializers(INamedTypeSymbol classTy)
-    {
-        foreach (var member in classTy.GetMembers())
-        {
-            if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
-            var holder = f.IsImplicitlyDeclared && f.AssociatedSymbol is IPropertySymbol prop ? (ISymbol)prop : f;
-            var syntax = holder.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-            bool hasInit = syntax switch
-            {
-                Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax vd => vd.Initializer != null,
-                Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax pd => pd.Initializer != null,
-                _ => false,
-            };
-            if (hasInit) return true;
-        }
-        return false;
-    }
-
     public void EmitClassCtorPrologue(IMethodSymbol ctor, IConstructorBodyOperation body, string receiverParamId)
     {
         var classTy = (INamedTypeSymbol)ctor.ContainingType;
@@ -546,7 +526,9 @@ internal sealed class MemberInvocationLowerer
         // this class has field initializers, a user-class base chain, or an EXPLICIT this/base call.
         bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && TypeClassifier.IsUserClass(bt0);
         bool explicitChainCall = initInv != null && !initInv.TargetMethod.IsImplicitlyDeclared;
-        if (!ClassHasFieldInitializers(classTy) && !baseIsUserClass && !explicitChainCall)
+        if (_lowering.State.Program.ClassInitializers.Require(classTy).Count == 0
+            && !baseIsUserClass
+            && !explicitChainCall)
             return;
 
         var inst = _lowering.LoadField(receiverParamId, new StorageType(AggregateAbi.ArrayType));
@@ -555,13 +537,14 @@ internal sealed class MemberInvocationLowerer
         {
             bool isThisChain = SymbolEqualityComparer.Default.Equals(target.ContainingType, classTy);
             if (!isThisChain)
-                ClassAbi.EmitInstanceFieldInitializers(_lowering.Builder, _lowering.Compilation, inst, classTy,
-                    _lowering.State.Aggregates.GetLayout(classTy), _lowering.VisitExpression);
+                EmitClassInitializers(inst, classTy);
             if (target.IsImplicitlyDeclared)
             {
                 if (target.ContainingType is INamedTypeSymbol implBase && TypeClassifier.IsUserClass(implBase))
-                    ClassAbi.EmitImplicitCtorChain(_lowering.Builder, _lowering.Compilation, inst, implBase,
-                        _lowering.State.Aggregates.GetLayout, _lowering.VisitExpression, CallBaseCtor);
+                    ClassAbi.EmitImplicitCtorChain(
+                        _lowering.Builder, inst, implBase,
+                        _lowering.State.Program.ClassInitializers.Require,
+                        VisitClassInitializerExpression, CallBaseCtor);
             }
             else
             {
@@ -577,11 +560,12 @@ internal sealed class MemberInvocationLowerer
         }
 
         // No initializer node = implicit `: base()`: own field inits then the implicit base chain.
-        ClassAbi.EmitInstanceFieldInitializers(_lowering.Builder, _lowering.Compilation, inst, classTy,
-            _lowering.State.Aggregates.GetLayout(classTy), _lowering.VisitExpression);
+        EmitClassInitializers(inst, classTy);
         if (classTy.BaseType is INamedTypeSymbol cbt && TypeClassifier.IsUserClass(cbt))
-            ClassAbi.EmitImplicitCtorChain(_lowering.Builder, _lowering.Compilation, inst, cbt,
-                _lowering.State.Aggregates.GetLayout, _lowering.VisitExpression, CallBaseCtor);
+            ClassAbi.EmitImplicitCtorChain(
+                _lowering.Builder, inst, cbt,
+                _lowering.State.Program.ClassInitializers.Require,
+                VisitClassInitializerExpression, CallBaseCtor);
     }
 
     /// <summary>CA-v2b-2: emit a direct call to an explicit parameterless base ctor from an implicit derived
@@ -590,17 +574,24 @@ internal sealed class MemberInvocationLowerer
     void CallBaseCtor(IMethodSymbol ctorSym, CLeaf inst)
         => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(ctorSym), new List<CLeaf> { inst }));
 
-    CLeaf VisitClassInitializerExpression(IOperation value, INamedTypeSymbol mintedType)
+    void EmitClassInitializers(CLeaf instance, INamedTypeSymbol owner)
+        => ClassAbi.EmitInstanceFieldInitializers(
+            _lowering.Builder,
+            instance,
+            _lowering.State.Program.ClassInitializers.Require(owner),
+            VisitClassInitializerExpression);
+
+    CLeaf VisitClassInitializerExpression(
+        BoundClassFieldInitializer initializer)
     {
-        var initializer = _lowering.State.Program.Initializers.Require(
-            value, mintedType);
         using var bindingScope = _lowering.State.EnterBindingScope(
-            initializer.Scope);
-        using var genericScope = initializer.TypeParameterMap != null
+            initializer.Binding.Scope);
+        using var genericScope =
+            initializer.Binding.TypeParameterMap != null
             ? _lowering.State.Generics.EnterOverlayScope(
-                initializer.TypeParameterMap)
+                initializer.Binding.TypeParameterMap)
             : null;
-        return _lowering.VisitExpression(value);
+        return _lowering.VisitExpression(initializer.Operation);
     }
 
     CLeaf EmitClassInstanceMint(
@@ -610,7 +601,7 @@ internal sealed class MemberInvocationLowerer
     {
         var layout = _lowering.State.Aggregates.GetLayout(classTy);
         return ClassAbi.EmitMint(
-            _lowering.Builder, _lowering.Compilation, classTy, layout, _lowering.VisitExpression,
+            _lowering.Builder, layout,
             instance => AggregateAbi.DefaultInitialize(_lowering.Builder, instance, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName),
             instance =>
             {
@@ -619,8 +610,10 @@ internal sealed class MemberInvocationLowerer
                 // derived->base) inline here.
                 if (constructor == null || constructor.IsImplicitlyDeclared)
                 {
-                    ClassAbi.EmitImplicitCtorChain(_lowering.Builder, _lowering.Compilation, instance, classTy,
-                        _lowering.State.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor);
+                    ClassAbi.EmitImplicitCtorChain(
+                        _lowering.Builder, instance, classTy,
+                        _lowering.State.Program.ClassInitializers.Require,
+                        VisitClassInitializerExpression, CallBaseCtor);
                     return;
                 }
                 // CW4: ctor args were staged positionally (IObjectCreationOperation.Arguments arrives in
@@ -669,10 +662,12 @@ internal sealed class MemberInvocationLowerer
         if (concrete is INamedTypeSymbol classTy && TypeClassifier.IsUserClass(classTy))
         {
             var layout = _lowering.State.Aggregates.GetLayout(classTy);
-            return ClassAbi.EmitMint(_lowering.Builder, _lowering.Compilation, classTy, layout, _lowering.VisitExpression,
+            return ClassAbi.EmitMint(_lowering.Builder, layout,
                 inst => AggregateAbi.DefaultInitialize(_lowering.Builder, inst, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName),
-                inst => ClassAbi.EmitImplicitCtorChain(_lowering.Builder, _lowering.Compilation, inst, classTy,
-                    _lowering.State.Aggregates.GetLayout, value => VisitClassInitializerExpression(value, classTy), CallBaseCtor),
+                inst => ClassAbi.EmitImplicitCtorChain(
+                    _lowering.Builder, inst, classTy,
+                    _lowering.State.Program.ClassInitializers.Require,
+                    VisitClassInitializerExpression, CallBaseCtor),
                 inst => _lowering.EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));
         }

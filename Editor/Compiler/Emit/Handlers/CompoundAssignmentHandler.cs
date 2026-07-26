@@ -161,7 +161,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         var rightVal = right.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
+            invoke, _lowering.State.Types, _lowering.State.Generics.TypeParamMap);
         _lowering.RequireMulticastSig(sigPart, invoke,
             op.OperatorKind == BinaryOperatorKind.Add
                 ? MulticastOperations.Combine
@@ -307,7 +307,7 @@ public sealed class CompoundAssignmentHandler : IExpressionHandler
         var handlerVal = handler.Leaf;
 
         var sigPart = DelegateAbi.BuildSigPart(
-            invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
+            invoke, _lowering.State.Types, _lowering.State.Generics.TypeParamMap);
         _lowering.RequireMulticastSig(sigPart, invoke,
             op.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
 

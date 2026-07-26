@@ -62,13 +62,38 @@ public readonly struct UdonTypeLowering
     }
 }
 
+public interface IUdonTypeSystem
+{
+    UdonTypeLowering Describe(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
+
+    bool IsFoldedEnum(ITypeSymbol type);
+
+    bool IsRuntimeDistinguishable(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
+
+    string GetUdonTypeName(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
+
+    StorageType GetStorageType(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null);
+}
+
 /// <summary>
 /// Session-bound Roslyn-to-Udon type lowering. This is the only source-symbol
 /// entry point that records verifier facts; installed-SDK facts arrive with the
 /// ABI catalog, while ExternResolver itself remains pure for editor reflection
 /// utilities that do not produce IR.
 /// </summary>
-public sealed class UdonTypeSystem
+public sealed class UdonTypeSystem : IUdonTypeSystem
 {
     readonly UdonTypeFactRegistry _facts;
     readonly ObjectArrayBehaviourAliasCensus _objectArrayBehaviourAliases;

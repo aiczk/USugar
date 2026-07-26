@@ -354,7 +354,7 @@ internal sealed class RecursionAnalysisPass
     string DispatchSigOrWildcard(IMethodSymbol m)
         => SigInvolvesTypeParam(m)
             ? null
-            : DelegateAbi.BuildSigPart(m, _environment.Session.Types);
+            : DelegateAbi.BuildSigPart(m, _environment.Types);
 
     // Two signatures match if equal, or either is WILDCARD (a type-param-involving sig matches anything).
     static bool SigsMatch(string a, string b) => a == null || b == null || a == b;

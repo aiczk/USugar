@@ -36,7 +36,7 @@ public sealed class ReceiverBridgeEmitter
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(
-            member, _context.Session.Types);
+            member, _context.Types);
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void
@@ -97,7 +97,7 @@ public sealed class ReceiverBridgeEmitter
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(
-            member, _context.Session.Types);
+            member, _context.Types);
         var returnType = _convention.Declare(signaturePart, member, null);
         var targetReturnType = member.ReturnsVoid
             ? StorageTypes.Void

@@ -37,7 +37,7 @@ public static class DelegateAbi
     /// params map to SystemObjectArray (bundle references) via the ExternResolver delegate arm.
     /// </summary>
     public static string BuildSigPart(IMethodSymbol invokeOrTarget,
-        UdonTypeSystem types,
+        IUdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
         if (invokeOrTarget == null)
@@ -76,7 +76,7 @@ public static class DelegateAbi
     /// (a lambda's signature is inferred from the delegate type, so it can never be variant).
     /// </summary>
     public static void ValidateDelegateBinding(INamedTypeSymbol delegateType,
-        IMethodSymbol targetMethod, UdonTypeSystem types,
+        IMethodSymbol targetMethod, IUdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null,
         bool varianceResolved = false)
     {

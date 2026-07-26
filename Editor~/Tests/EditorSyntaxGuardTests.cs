@@ -157,6 +157,55 @@ public class EditorSyntaxGuardTests
     }
 
     [Fact]
+    public void BodyLoweringCannotReachLiveSemanticAuthorities()
+    {
+        var packageRoot = FindPackageRoot();
+        var emitRoot = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit");
+        var roots = new[]
+        {
+            Path.Combine(emitRoot, "Handlers"),
+            Path.Combine(emitRoot, "LValueLowerer.cs"),
+            Path.Combine(emitRoot, "LoweringServices.cs"),
+            Path.Combine(emitRoot, "BoundaryChecker.cs"),
+            Path.Combine(emitRoot, "DelegateBridgeEmitter.cs"),
+            Path.Combine(emitRoot, "ReceiverBridgeEmitter.cs"),
+            Path.Combine(emitRoot, "WrapperBridgeEmitter.cs"),
+            Path.Combine(emitRoot, "MulticastDelegateEmitter.cs"),
+        };
+        var forbidden = new[]
+        {
+            ".Session.Types",
+            "MaterializingUdonTypeSystem",
+            "UdonAbiBinder",
+            "UdonAbiCatalog",
+            "ClassifyConversion",
+            "TryGetConstFieldInitializer",
+            "RecordSourceLowering",
+        };
+        var failures = roots.SelectMany(path => Directory.Exists(path)
+                ? Directory.GetFiles(
+                    path, "*.cs", SearchOption.AllDirectories)
+                : new[] { path })
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item => forbidden.Any(token =>
+                    item.line.Contains(
+                        token, StringComparison.Ordinal)))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:"
+                    + $"{item.index + 1}: {item.line.Trim()}"))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body lowering must consume only frozen BoundProgram semantics; "
+            + "live catalog, type-system, and Roslyn classification "
+            + "authorities are planning-only.\n"
+            + string.Join("\n", failures));
+    }
+
+    [Fact]
     public void BodyHandlersCannotMaterializeCallableSpecializations()
     {
         var packageRoot = FindPackageRoot();

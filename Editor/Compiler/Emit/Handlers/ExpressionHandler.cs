@@ -116,11 +116,14 @@ public class ExpressionHandler : IExpressionHandler
         // expression. Each program gets its own copy, which is observationally identical to a true shared
         // static because the value is immutable — so no singleton/shared storage is needed.
         if (fieldRef.Field.IsStatic && fieldRef.Field.IsReadOnly
-            && (fieldRef.ConstantValue.HasValue || EmitPolicy.TryGetConstFieldInitializer(_lowering.Compilation, fieldRef.Field, out _)))
+            && (fieldRef.ConstantValue.HasValue
+                || _lowering.State.Program.Constants.TryGet(
+                    fieldRef.Field, out _)))
         {
             var constType = _lowering.GetStorageTypeName(fieldRef.Field.Type);
             var value = fieldRef.ConstantValue.HasValue ? fieldRef.ConstantValue.Value
-                : (EmitPolicy.TryGetConstFieldInitializer(_lowering.Compilation, fieldRef.Field, out var v) ? v : null);
+                : (_lowering.State.Program.Constants.TryGet(
+                    fieldRef.Field, out var v) ? v : null);
             return _lowering.Const(value, new StorageType(constType));
         }
         if (fieldRef.Field.IsStatic)
@@ -349,9 +352,9 @@ public class ExpressionHandler : IExpressionHandler
             && dst is INamedTypeSymbol dstDlg && dstDlg.DelegateInvokeMethod is { } dstInvoke
             && !SymbolEqualityComparer.Default.Equals(srcDlg, dstDlg)
             && DelegateAbi.BuildSigPart(
-                   srcInvoke, _lowering.State.Session.Types, typeParamMap)
+                   srcInvoke, _lowering.State.Types, typeParamMap)
                != DelegateAbi.BuildSigPart(
-                   dstInvoke, _lowering.State.Session.Types, typeParamMap);
+                   dstInvoke, _lowering.State.Types, typeParamMap);
     }
 
     CLeaf EmitNumericConversion(CLeaf sourceValue, ITypeSymbol sourceType, ITypeSymbol destinationType)
@@ -399,8 +402,7 @@ public class ExpressionHandler : IExpressionHandler
         ITypeSymbol closedDestination, out CLeaf result)
     {
         result = null;
-        var plan = _lowering.State.Conversions.ClassifyClosedObjectCast(
-            conv, source, closedDestination);
+        var plan = _lowering.RequireBoundConversion(conv);
         if (plan.Kind == ClosedConversionKind.None)
             return false;
 
@@ -614,7 +616,7 @@ public class ExpressionHandler : IExpressionHandler
             // rejected form, since the wrapper's own dispatch site is unconditionally Reentrant like the
             // fan-out, sidestepping the sig-filter question entirely for this arm).
             if (DelegateDemandPolicy.TryGetVariantConversion(
-                    _lowering.Compilation, conv, _lowering.State.Session.Types,
+                    _lowering.Compilation, conv, _lowering.State.Types,
                     _lowering.State.Generics.TypeParamMap,
                     out var vDstInvoke, out var vSrcInvoke))
             {
@@ -669,10 +671,10 @@ public class ExpressionHandler : IExpressionHandler
                 // operand whose spec is a same-sig delegate still qualifies).
                 var safeRoundtrip = _lowering.ResolveType(stripped?.Type) is INamedTypeSymbol sDlg && sDlg.DelegateInvokeMethod is { } sInvoke
                     && DelegateAbi.BuildSigPart(
-                           sInvoke, _lowering.State.Session.Types,
+                           sInvoke, _lowering.State.Types,
                            _lowering.State.Generics.TypeParamMap)
                        == DelegateAbi.BuildSigPart(
-                           lInvoke, _lowering.State.Session.Types,
+                           lInvoke, _lowering.State.Types,
                            _lowering.State.Generics.TypeParamMap);
                 if (!isNull && !safeRoundtrip)
                     throw new System.NotSupportedException(
@@ -910,7 +912,7 @@ public class ExpressionHandler : IExpressionHandler
             && arr.Rank == 1
             && arr.ElementType.SpecialType == SpecialType.System_Object;
         if (!stockObjectArray
-            && !_lowering.State.Session.Types.IsRuntimeDistinguishable(
+            && !_lowering.State.Types.IsRuntimeDistinguishable(
                 operand, _lowering.State.Generics.TypeParamMap)
             && !IsDirectComponentQueryArgument(typeOf))
             throw new NotSupportedException(
@@ -1051,13 +1053,13 @@ public class ExpressionHandler : IExpressionHandler
         bool varianceResolved = targetMethodForValidation != null
             && op.Type is INamedTypeSymbol vDelegateType && vDelegateType.DelegateInvokeMethod is { } vInvoke
             && DelegateAbi.BuildSigPart(
-                   vInvoke, _lowering.State.Session.Types,
+                   vInvoke, _lowering.State.Types,
                    _lowering.State.Generics.TypeParamMap)
                != DelegateAbi.BuildSigPart(
-                   targetMethodForValidation, _lowering.State.Session.Types,
+                   targetMethodForValidation, _lowering.State.Types,
                    _lowering.State.Generics.TypeParamMap);
         DelegateAbi.ValidateDelegateBinding(op.Type as INamedTypeSymbol,
-            targetMethodForValidation, _lowering.State.Session.Types,
+            targetMethodForValidation, _lowering.State.Types,
             _lowering.State.Generics.TypeParamMap, varianceResolved);
 
         var thisType = _lowering.GetStorageTypeName(_lowering.ClassSymbol);

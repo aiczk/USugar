@@ -6,13 +6,14 @@ using Microsoft.CodeAnalysis;
 public sealed class LoweringState
 {
     public readonly LoweringEnvironment Environment;
-    public CompilationSession Session => Environment.Session;
     public Compilation Compilation => Environment.Compilation;
     public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
     internal BoundAbiPlan BoundAbi => Program?.Abi
         ?? throw new InvalidOperationException(
             "ABI decisions are unavailable before the bound program is published.");
     public FrozenLayoutPlan Planner => Environment.Planner;
+    internal IUdonTypeSystem Types
+        => Program != null ? Program.Types : Environment.Types;
     internal BoundMethodAnalysisTable MethodAnalyses => Program?.MethodAnalyses
         ?? throw new InvalidOperationException(
             "Method analyses are unavailable before the bound program is published.");
@@ -24,7 +25,6 @@ public sealed class LoweringState
     public readonly CoreBuilder Builder;
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
-    public readonly ConversionLowerer Conversions;
     internal OperationLowerer Operations { get; private set; }
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
@@ -109,7 +109,16 @@ public sealed class LoweringState
 
     public StorageType ResolveStorageType(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
-        => Environment.ResolveStorageType(type, typeParameterMap ?? Generics.TypeParamMap);
+    {
+        var map = typeParameterMap ?? Generics.TypeParamMap;
+        var resolved = TypeEnvironment.CloseType(
+            Compilation, type, map);
+        if (resolved is INamedTypeSymbol
+                { TypeKind: TypeKind.Interface } iface
+            && Planner.InterfaceIsLocalUserClassOnly(iface))
+            return StorageTypes.ObjectArray;
+        return Types.GetStorageType(type, map);
+    }
 
     public string SourceStorageName(ISymbol member) => Environment.SourceStorageName(member);
 
@@ -178,12 +187,13 @@ public sealed class LoweringState
     public LoweringState(LoweringEnvironment environment)
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
-        Module = new StructuredModule(Session.TypeFacts, Environment.AbiCatalog)
+        Module = new StructuredModule(
+            Environment.Session.TypeFacts,
+            Environment.AbiCatalog)
             { ClassName = ClassSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Storage = new StorageContext(Module);
         Boundary = new BoundaryChecker(this);
-        Conversions = new ConversionLowerer(this);
     }
 
 }

@@ -45,6 +45,7 @@ internal sealed class ProgramLoweringPipeline
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
     internal CompilationSession Session => _environment.Session;
+    internal IUdonTypeSystem Types => _state.Types;
     internal IEnumerable<OperationKind> HandledOperationKinds
         => _operations.HandledOperationKinds;
 
@@ -829,13 +830,13 @@ internal sealed class ProgramLoweringPipeline
         // argument/return convention storage. DelegateConventionStorage declares the complete surface,
         // including env, when an actual bridge is emitted.
         var (convArgs, convRet, _) = LoweringServices.GetConventionFieldNames(
-            delegateType, _environment.Session.Types);
+            delegateType, _environment.Types);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _fieldDiscovery.TryDeclareVar(convArgs[ci],
-                _environment.Session.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
+                _environment.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
         if (convRet != null)
             _fieldDiscovery.TryDeclareVar(convRet,
-                _environment.Session.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
+                _environment.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
@@ -1038,7 +1039,10 @@ internal sealed class ProgramLoweringPipeline
             _state.Methods.RegisteredBodies.Select(
                 body => body.Method.OriginalDefinition));
         var methodAnalyses = new BoundMethodAnalysisTable(methodBodies);
-        var boundSource = BindSourceSemantics(discovery, methodBodies);
+        var abiBuilder = new BoundAbiPlanBuilder(
+            _environment.AbiCatalog);
+        var boundSource = BindSourceSemantics(
+            discovery, methodBodies, abiBuilder);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.RecursionContext.SetPlan(recursion);
         var program = new BoundProgram(
@@ -1050,11 +1054,15 @@ internal sealed class ProgramLoweringPipeline
             syntheticDemands,
             boundSource.CallSites,
             boundSource.Initializers,
+            boundSource.ClassInitializers,
             boundSource.Deconstructions,
+            boundSource.Conversions,
+            boundSource.Constants,
             methodBodies,
             methodAnalyses,
             syntheticDispatch,
-            new BoundAbiPlan(_environment.AbiCatalog));
+            abiBuilder.Publish(),
+            _environment.Types.Publish());
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
@@ -1100,16 +1108,34 @@ internal sealed class ProgramLoweringPipeline
 
     (BoundCallSiteTable CallSites,
         BoundInitializerTable Initializers,
-        BoundDeconstructionTable Deconstructions)
+        BoundClassInitializationTable ClassInitializers,
+        BoundDeconstructionTable Deconstructions,
+        BoundConversionTable Conversions,
+        BoundConstantTable Constants)
         BindSourceSemantics(
             ProgramDiscovery discovery,
-            BoundMethodBodyTable methodBodies)
+            BoundMethodBodyTable methodBodies,
+            BoundAbiPlanBuilder abiBuilder)
     {
         var sites = new Dictionary<BoundCallSiteKey, BoundCallSite>();
         var initializers =
             new Dictionary<BoundInitializerKey, BoundInitializer>();
+        var classInitializers = new Dictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>(
+            SymbolEqualityComparer.Default);
         var deconstructions =
             new Dictionary<BoundDeconstructionKey, BoundDeconstruction>();
+        var conversions =
+            new Dictionary<BoundConversionKey, ClosedConversionPlan>();
+        var abiPlanner = new AbiDemandPlanner(
+            _lowering, abiBuilder);
+        var conversionPlanner =
+            new ConversionSemanticPlanner(_lowering);
+        var constantBuilder =
+            new BoundConstantTableBuilder(_compilation);
+        var typePlanner =
+            new TypeDemandPlanner(_environment.Types, _compilation);
 
         void BindTree(
             IOperation operation,
@@ -1120,6 +1146,20 @@ internal sealed class ProgramLoweringPipeline
             if (operation == null) return;
             if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation)
                 return;
+            typePlanner.Plan(operation, typeMap);
+            abiPlanner.Plan(operation);
+            if (operation is IFieldReferenceOperation fieldReference)
+                constantBuilder.Record(fieldReference.Field);
+            if (operation is IConversionOperation conversion)
+            {
+                var conversionKey = new BoundConversionKey(
+                    conversion, scope);
+                if (!conversions.TryAdd(
+                        conversionKey,
+                        conversionPlanner.Plan(conversion)))
+                    throw new InvalidOperationException(
+                        $"Conversion '{operation.Syntax}' was bound twice.");
+            }
             if (operation is IDeconstructionAssignmentOperation
                 && operation.Syntax is AssignmentExpressionSyntax assignment)
             {
@@ -1161,17 +1201,27 @@ internal sealed class ProgramLoweringPipeline
                 BindTree(child, typeMap, scope, false);
         }
 
+        void BindRoot(
+            IOperation operation,
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap,
+            CallSiteBindingScope scope)
+        {
+            using var genericScope =
+                _state.Generics.EnterOverlayScope(typeMap);
+            BindTree(operation, typeMap, scope, true);
+        }
+
         foreach (var body in _state.Methods.RegisteredBodies)
         {
             var methodKey = body.Closure != null
                 ? new SpecializationKey(body.Method, body.Closure.KeyArgs)
                 : SpecializationKey.ForMethod(body.Method);
             var scope = CallSiteBindingScope.ForMethod(methodKey);
-            BindTree(
+            typePlanner.Plan(body.Method, body.TypeParameterMap);
+            BindRoot(
                 methodBodies.Require(body.Method.OriginalDefinition).AnalysisRoot,
                 body.TypeParameterMap,
-                scope,
-                true);
+                scope);
         }
 
         (CallSiteBindingScope Scope,
@@ -1206,7 +1256,7 @@ internal sealed class ProgramLoweringPipeline
                 typeMap);
         }
 
-        void BindInitializer(
+        BoundInitializer BindInitializer(
             IOperation initializer,
             INamedTypeSymbol executionType,
             INamedTypeSymbol mintedKey)
@@ -1215,19 +1265,18 @@ internal sealed class ProgramLoweringPipeline
                 initializer, executionType);
             var key = new BoundInitializerKey(
                 initializer.Syntax, mintedKey);
-            if (!initializers.TryAdd(
-                    key,
-                    new BoundInitializer(
-                        environment.Scope,
-                        environment.TypeMap)))
+            var binding = new BoundInitializer(
+                environment.Scope,
+                environment.TypeMap);
+            if (!initializers.TryAdd(key, binding))
                 throw new InvalidOperationException(
                     $"Initializer '{initializer.Syntax}' was bound twice "
                     + $"for '{mintedKey?.ToDisplayString() ?? "program fields"}'.");
-            BindTree(
+            BindRoot(
                 initializer,
                 environment.TypeMap,
-                environment.Scope,
-                true);
+                environment.Scope);
+            return binding;
         }
 
         foreach (var initializer in discovery.FieldInitOps)
@@ -1242,15 +1291,34 @@ internal sealed class ProgramLoweringPipeline
             for (var owner = mintedClass;
                  owner != null && TypeClassifier.IsUserClass(owner);
                  owner = owner.BaseType)
-                foreach (var initializer in EnumerateClassFieldInitOps(owner))
-                    BindInitializer(
-                        initializer, mintedClass, mintedClass);
+            {
+                if (classInitializers.ContainsKey(owner))
+                    continue;
+                var layout = _state.Aggregates.GetLayout(owner);
+                var planned = new List<BoundClassFieldInitializer>();
+                foreach (var pair in EnumerateClassFieldInitializers(owner))
+                {
+                    if (!layout.TryGetIndex(pair.Field, out var slot))
+                        throw new InvalidOperationException(
+                            $"Initializer field '{pair.Field}' has no "
+                            + $"aggregate slot in '{owner}'.");
+                    var binding = BindInitializer(
+                        pair.Operation, owner, owner);
+                    planned.Add(new BoundClassFieldInitializer(
+                        pair.Operation, slot, binding));
+                }
+                classInitializers.Add(
+                    owner, Array.AsReadOnly(planned.ToArray()));
+            }
         }
 
         return (
             new BoundCallSiteTable(sites),
             new BoundInitializerTable(initializers),
-            new BoundDeconstructionTable(deconstructions));
+            new BoundClassInitializationTable(classInitializers),
+            new BoundDeconstructionTable(deconstructions),
+            new BoundConversionTable(conversions),
+            constantBuilder.Publish());
     }
 
     void PlanSyntheticDemands(ProgramDiscovery plan)
@@ -1392,10 +1460,10 @@ internal sealed class ProgramLoweringPipeline
             {
                 var containingArgPart = string.Join("_",
                     sm.ContainingType.TypeArguments.Select(
-                        type => _environment.Session.Types.GetUdonTypeName(type)));
+                        type => _environment.Types.GetUdonTypeName(type)));
                 var methodArgPart = sm.IsGenericMethod
                     ? "_" + string.Join("_", sm.TypeArguments.Select(
-                        type => _environment.Session.Types.GetUdonTypeName(type)))
+                        type => _environment.Types.GetUdonTypeName(type)))
                     : "";
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }
@@ -1977,6 +2045,11 @@ internal sealed class ProgramLoweringPipeline
     /// them at mint). Static/const fields are excluded (const folds; statics reject). Used to Phase-1-walk
     /// a minted class's initializer expressions for foreign-static / struct-member collection.</summary>
     internal IEnumerable<IOperation> EnumerateClassFieldInitOps(INamedTypeSymbol classTy)
+        => EnumerateClassFieldInitializers(classTy)
+            .Select(initializer => initializer.Operation);
+
+    IEnumerable<(IFieldSymbol Field, IOperation Operation)>
+        EnumerateClassFieldInitializers(INamedTypeSymbol classTy)
     {
         foreach (var member in classTy.GetMembers())
         {
@@ -1991,7 +2064,7 @@ internal sealed class ProgramLoweringPipeline
             };
             if (initValue == null) continue;
             var initOp = _compilation.GetSemanticModel(initValue.SyntaxTree).GetOperation(initValue);
-            if (initOp != null) yield return initOp;
+            if (initOp != null) yield return (f, initOp);
         }
     }
 

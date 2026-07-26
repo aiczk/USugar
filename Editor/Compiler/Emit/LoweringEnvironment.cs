@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 
@@ -14,6 +13,7 @@ public sealed class LoweringEnvironment
     public readonly INamedTypeSymbol ClassSymbol;
     public readonly UdonAbiCatalog AbiCatalog;
     public readonly FrozenLayoutPlan Planner;
+    internal readonly MaterializingUdonTypeSystem Types;
 
     public LoweringEnvironment(CompilationSession session, INamedTypeSymbol classSymbol,
         FrozenLayoutPlan planner)
@@ -23,19 +23,10 @@ public sealed class LoweringEnvironment
         ClassSymbol = classSymbol ?? throw new ArgumentNullException(nameof(classSymbol));
         AbiCatalog = session.AbiCatalog;
         Planner = planner ?? throw new ArgumentNullException(nameof(planner));
+        Types = new MaterializingUdonTypeSystem(session.Types);
         if (!ReferenceEquals(planner.TypeFacts, session.TypeFacts))
             throw new InvalidOperationException(
                 "Frozen layout plan and lowering environment must share one compilation session's type facts.");
-    }
-
-    public StorageType ResolveStorageType(ITypeSymbol type,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
-    {
-        var resolved = TypeEnvironment.CloseType(Compilation, type, typeParameterMap);
-        if (resolved is INamedTypeSymbol { TypeKind: TypeKind.Interface } iface
-            && Planner.InterfaceIsLocalUserClassOnly(iface))
-            return StorageTypes.ObjectArray;
-        return Session.Types.GetStorageType(type, typeParameterMap);
     }
 
     public string SourceStorageName(ISymbol member)

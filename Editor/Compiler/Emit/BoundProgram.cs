@@ -17,11 +17,15 @@ internal sealed class BoundProgram
     public readonly SyntheticDemandPlan SyntheticDemands;
     public readonly BoundCallSiteTable CallSites;
     public readonly BoundInitializerTable Initializers;
+    public readonly BoundClassInitializationTable ClassInitializers;
     public readonly BoundDeconstructionTable Deconstructions;
+    public readonly BoundConversionTable Conversions;
+    public readonly BoundConstantTable Constants;
     public readonly BoundMethodBodyTable MethodBodies;
     public readonly BoundMethodAnalysisTable MethodAnalyses;
     public readonly BoundSyntheticDispatchTable SyntheticDispatch;
     public readonly BoundAbiPlan Abi;
+    public readonly BoundUdonTypeSystem Types;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
     public ReachabilityPlan Reach => Discovery.Reach;
@@ -38,11 +42,15 @@ internal sealed class BoundProgram
         SyntheticDemandPlan syntheticDemands,
         BoundCallSiteTable callSites,
         BoundInitializerTable initializers,
+        BoundClassInitializationTable classInitializers,
         BoundDeconstructionTable deconstructions,
+        BoundConversionTable conversions,
+        BoundConstantTable constants,
         BoundMethodBodyTable methodBodies,
         BoundMethodAnalysisTable methodAnalyses,
         BoundSyntheticDispatchTable syntheticDispatch,
-        BoundAbiPlan abi)
+        BoundAbiPlan abi,
+        BoundUdonTypeSystem types)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
         ClosureIdentities = closureIdentities
@@ -55,8 +63,14 @@ internal sealed class BoundProgram
         CallSites = callSites ?? throw new ArgumentNullException(nameof(callSites));
         Initializers = initializers
             ?? throw new ArgumentNullException(nameof(initializers));
+        ClassInitializers = classInitializers
+            ?? throw new ArgumentNullException(nameof(classInitializers));
         Deconstructions = deconstructions
             ?? throw new ArgumentNullException(nameof(deconstructions));
+        Conversions = conversions
+            ?? throw new ArgumentNullException(nameof(conversions));
+        Constants = constants
+            ?? throw new ArgumentNullException(nameof(constants));
         MethodBodies = methodBodies
             ?? throw new ArgumentNullException(nameof(methodBodies));
         MethodAnalyses = methodAnalyses
@@ -64,5 +78,6 @@ internal sealed class BoundProgram
         SyntheticDispatch = syntheticDispatch
             ?? throw new ArgumentNullException(nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
+        Types = types ?? throw new ArgumentNullException(nameof(types));
     }
 }

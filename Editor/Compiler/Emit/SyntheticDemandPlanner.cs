@@ -19,7 +19,7 @@ internal sealed class SyntheticDemandPlanner
         }
         if (operation is IConversionOperation conversion
             && DelegateDemandPolicy.TryGetVariantConversion(
-                _lowering.Compilation, conversion, _lowering.State.Session.Types,
+                _lowering.Compilation, conversion, _lowering.State.Types,
                 _lowering.State.Generics.TypeParamMap,
                 out var outerInvoke, out var innerInvoke))
         {
@@ -32,7 +32,7 @@ internal sealed class SyntheticDemandPlanner
             && delegateType.DelegateInvokeMethod is { } invoke)
         {
             var signature = DelegateAbi.BuildSigPart(
-                invoke, _lowering.State.Session.Types, _lowering.State.Generics.TypeParamMap);
+                invoke, _lowering.State.Types, _lowering.State.Generics.TypeParamMap);
             _lowering.PlanMulticastSig(signature, invoke,
                 compound.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
@@ -45,7 +45,7 @@ internal sealed class SyntheticDemandPlanner
         {
             _lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
-                    binaryInvoke, _lowering.State.Session.Types,
+                    binaryInvoke, _lowering.State.Types,
                     _lowering.State.Generics.TypeParamMap), binaryInvoke,
                 binary.OperatorKind == BinaryOperatorKind.Add
                     ? MulticastOperations.Combine : MulticastOperations.Remove);
@@ -59,7 +59,7 @@ internal sealed class SyntheticDemandPlanner
         {
             _lowering.PlanMulticastSig(
                 DelegateAbi.BuildSigPart(
-                    eventInvoke, _lowering.State.Session.Types,
+                    eventInvoke, _lowering.State.Types,
                     _lowering.State.Generics.TypeParamMap), eventInvoke,
                 eventAssignment.Adds ? MulticastOperations.Combine : MulticastOperations.Remove);
             return;
@@ -115,7 +115,7 @@ internal sealed class SyntheticDemandPlanner
 internal static class DelegateDemandPolicy
 {
     public static bool TryGetVariantConversion(Compilation compilation,
-        IConversionOperation conversion, UdonTypeSystem types,
+        IConversionOperation conversion, IUdonTypeSystem types,
         System.Collections.Generic.IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
         out IMethodSymbol outerInvoke, out IMethodSymbol innerInvoke)
     {

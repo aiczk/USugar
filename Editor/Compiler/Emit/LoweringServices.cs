@@ -94,6 +94,18 @@ public sealed class LoweringServices
         return _state.Program.Deconstructions.Require(operation, scope);
     }
 
+    internal ClosedConversionPlan RequireBoundConversion(
+        IConversionOperation operation)
+    {
+        if (operation == null)
+            throw new ArgumentNullException(nameof(operation));
+        var scope = _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                $"Conversion '{operation.Syntax}' is being lowered "
+                + "outside a bound semantic scope.");
+        return _state.Program.Conversions.Require(operation, scope);
+    }
+
     /// <summary>
     /// Udon array constructors consume an Int32 length even though C# accepts every integral array
     /// dimension type. Normalize at the allocation choke so UInt32/Int64/etc. never reach the wrapper
@@ -134,7 +146,7 @@ public sealed class LoweringServices
     internal ITypeSymbol ResolveType(ITypeSymbol type)
         => TypeEnvironment.CloseType(_compilation, type, _state.Generics.TypeParamMap);
     internal bool IsFoldedEnum(ITypeSymbol type)
-        => _state.Session.Types.IsFoldedEnum(type);
+        => _state.Types.IsFoldedEnum(ResolveType(type));
     internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     internal string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -215,7 +227,7 @@ public sealed class LoweringServices
             return SlotRef(guarded);
         }
         ClassAbiPolicy.ValidateRuntimeTypeTest(
-            ResolveType(targetType), _state.Generics.TypeParamMap, _state.Session.Types);
+            ResolveType(targetType), _state.Generics.TypeParamMap, _state.Types);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
         return ExternCall(
@@ -1628,7 +1640,7 @@ public sealed class LoweringServices
     /// (sig key via the unified DelegateAbi.BuildSigPart — design §3.2). Pass the type-param map when
     /// resolving inside a generic-spec body so e.g. Func&lt;T&gt; keys on the substituted type.</summary>
     internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(
-        INamedTypeSymbol delegateType, UdonTypeSystem types,
+        INamedTypeSymbol delegateType, IUdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
         => GetConventionFieldNames(
             delegateType.DelegateInvokeMethod, types, typeParamMap);
@@ -1640,7 +1652,7 @@ public sealed class LoweringServices
     /// the round-trip. BuildSigPart only reads Parameters/ReturnsVoid/ReturnType, so any IMethodSymbol
     /// is a valid "invoke" here, not only a genuine DelegateInvokeMethod.</summary>
     internal static (string[] argNames, string retName, string envName) GetConventionFieldNames(
-        IMethodSymbol invoke, UdonTypeSystem types,
+        IMethodSymbol invoke, IUdonTypeSystem types,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap = null)
     {
         var sigPart = DelegateAbi.BuildSigPart(
@@ -1773,9 +1785,9 @@ public sealed class LoweringServices
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(
-                outerInvoke, _state.Session.Types, typeParamMap),
+                outerInvoke, _state.Types, typeParamMap),
             DelegateAbi.BuildSigPart(
-                innerInvoke, _state.Session.Types, typeParamMap));
+                innerInvoke, _state.Types, typeParamMap));
         _state.Synthetics.RegisterWrapper(
             new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
             outerInvoke, innerInvoke, typeParamMap);
@@ -1789,9 +1801,9 @@ public sealed class LoweringServices
     {
         var wrapperName = DelegateAbi.WrapperName(
             DelegateAbi.BuildSigPart(
-                outerInvoke, _state.Session.Types, typeParamMap),
+                outerInvoke, _state.Types, typeParamMap),
             DelegateAbi.BuildSigPart(
-                innerInvoke, _state.Session.Types, typeParamMap));
+                innerInvoke, _state.Types, typeParamMap));
         return _state.Program.SyntheticDemands.RequireWrapper(wrapperName);
     }
 
@@ -1875,6 +1887,78 @@ public sealed class LoweringServices
     internal IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
         => TypeEnvironment.CloseMethod(_compilation, target, _typeParamMap);
 
+    internal (
+        IMethodSymbol Method,
+        string Owner,
+        string[] ParameterOverride)
+        DescribeExternMethodAbi(
+            IMethodSymbol method,
+            ITypeSymbol instanceType = null,
+            string[] parameterOverride = null)
+    {
+        ITypeSymbol containingType = method.ContainingType;
+
+        if (containingType.TypeKind == TypeKind.Interface
+            && instanceType is ITypeParameterSymbol typeParameter
+            && _typeParamMap != null
+            && _typeParamMap.TryGetValue(
+                typeParameter, out var concreteType))
+            containingType = concreteType;
+
+        if (instanceType is ITypeParameterSymbol valueParameter
+            && _typeParamMap != null
+            && _typeParamMap.TryGetValue(
+                valueParameter, out var concreteValue)
+            && method.ContainingType.SpecialType is
+                SpecialType.System_Object
+                or SpecialType.System_ValueType
+                or SpecialType.System_Enum)
+        {
+            if (concreteValue is INamedTypeSymbol aggregate
+                && TypeClassifier.IsAggregateValue(aggregate))
+                throw new NotSupportedException(
+                    $"'{method.Name}' on type parameter "
+                    + $"'{valueParameter.Name}' instantiated with user-defined "
+                    + $"struct '{concreteValue.Name}' is not supported: Udon "
+                    + "has no extern for C# ValueType semantics.");
+            containingType = concreteValue;
+        }
+        else if (instanceType != null
+                 && instanceType is not ITypeParameterSymbol
+                 && method.ContainingType.SpecialType is
+                     SpecialType.System_Object
+                     or SpecialType.System_ValueType
+                     or SpecialType.System_Enum)
+        {
+            containingType = ResolveExternOwnerType(
+                method.ContainingType, instanceType, method.Name);
+        }
+
+        GuardUserStructMemberReachedExtern(
+            containingType, method.Name);
+        var owner = GetStorageTypeName(containingType);
+
+        if (method.IsGenericMethod && owner == "SystemArray")
+            parameterOverride = method.OriginalDefinition.Parameters
+                .Select(parameter =>
+                {
+                    var type = parameter.Type;
+                    string name;
+                    if (type is ITypeParameterSymbol)
+                        name = "SystemObject";
+                    else if (type is IArrayTypeSymbol
+                             { ElementType: ITypeParameterSymbol })
+                        name = "SystemArray";
+                    else
+                        name = GetStorageTypeName(type);
+                    return parameter.RefKind == RefKind.None
+                        ? name
+                        : name + "Ref";
+                }).ToArray();
+
+        return (method, owner, parameterOverride);
+    }
+
     /// <summary>Register a monomorphized generic specialization: StructuredFunction + ordinal param vars +
     /// return slot, queued on PendingGenericSpecs for the post-body emission drain. Idempotent per
     /// constructed symbol. (Moved from InvocationHandler when [W7] gave the delegate-creation path a
@@ -1919,7 +2003,7 @@ public sealed class LoweringServices
         // second-instantiation rejects are retired: closures duplicate per spec.
 
         var typeArgPart = string.Join("_", constructed.TypeArguments.Select(
-            type => _state.Session.Types.GetUdonTypeName(type)));
+            type => _state.Types.GetUdonTypeName(type)));
         var parameters = constructed.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
         var returns = constructed.ReturnsVoid ? Array.Empty<CallableReturnPlan>() : new[]
@@ -1943,7 +2027,7 @@ public sealed class LoweringServices
     void RegisterNamedSpecialization(IMethodSymbol method)
     {
         var typeArgPart = string.Join("_", method.TypeArguments.Select(
-            type => _state.Session.Types.GetUdonTypeName(type)));
+            type => _state.Types.GetUdonTypeName(type)));
         var receiver = !method.IsStatic
             && method.ContainingType is INamedTypeSymbol receiverType
             && TypeClassifier.IsObjectArrayEmulated(receiverType)
@@ -2377,10 +2461,10 @@ public sealed class LoweringServices
             && op.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod is { } delegateInvoke)
         {
             var sigS = DelegateAbi.BuildSigPart(
-                delegateInvoke, _state.Session.Types,
+                delegateInvoke, _state.Types,
                 _state.Generics.TypeParamMap);
             if (sigS != DelegateAbi.BuildSigPart(
-                    targetMethod, _state.Session.Types,
+                    targetMethod, _state.Types,
                     _state.Generics.TypeParamMap))
             {
                 if (targetInstance == null)

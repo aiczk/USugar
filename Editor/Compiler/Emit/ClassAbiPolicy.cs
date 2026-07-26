@@ -14,7 +14,7 @@ internal static class ClassAbiPolicy
 
     public static void ValidateRuntimeTypeTest(ITypeSymbol resolvedTarget,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map,
-        UdonTypeSystem types)
+        IUdonTypeSystem types)
     {
         if (types == null) throw new ArgumentNullException(nameof(types));
         if (types.IsRuntimeDistinguishable(resolvedTarget, map)) return;
