@@ -106,29 +106,3 @@ internal sealed class BoundCallSite
         => Dispatch ?? throw new InvalidOperationException(
             $"Instance callable site '{Callable.Site.Target}' has no bound dispatch plan.");
 }
-
-/// <summary>
-/// Exact specialization-keyed callable and dispatch decisions for every source call site.
-/// </summary>
-internal sealed class BoundCallSiteTable
-{
-    readonly IReadOnlyDictionary<BoundCallSiteKey, BoundCallSite> _sites;
-    public int Count => _sites.Count;
-
-    public BoundCallSiteTable(IDictionary<BoundCallSiteKey, BoundCallSite> sites)
-        => _sites = new ReadOnlyDictionary<BoundCallSiteKey, BoundCallSite>(
-            new Dictionary<BoundCallSiteKey, BoundCallSite>(
-                sites ?? throw new ArgumentNullException(nameof(sites))));
-
-    public BoundCallSite Require(
-        SyntaxNode syntax,
-        CallableSiteKind kind,
-        CallSiteBindingScope? scope)
-    {
-        var key = new BoundCallSiteKey(syntax, kind, scope);
-        if (_sites.TryGetValue(key, out var site)) return site;
-        throw new InvalidOperationException(
-            $"Callable site '{syntax}' ({kind}) "
-            + "was absent from the bound program.");
-    }
-}

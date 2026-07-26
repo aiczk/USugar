@@ -57,66 +57,6 @@ internal readonly struct BoundInitializerKey : IEquatable<BoundInitializerKey>
     }
 }
 
-/// <summary>
-/// Exact lexical generic environment for every initializer execution shape.
-/// A base initializer can have one entry per minted derived type.
-/// </summary>
-internal sealed class BoundInitializerTable
-{
-    readonly IReadOnlyDictionary<BoundInitializerKey, BoundInitializer> _sites;
-    readonly IReadOnlyDictionary<
-        INamedTypeSymbol,
-        IReadOnlyList<BoundClassFieldInitializer>> _classes;
-
-    internal BoundInitializerTable(
-        IDictionary<BoundInitializerKey, BoundInitializer> sites,
-        IDictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>> classes)
-    {
-        _sites = new ReadOnlyDictionary<BoundInitializerKey, BoundInitializer>(
-            new Dictionary<BoundInitializerKey, BoundInitializer>(sites));
-        if (classes == null)
-            throw new ArgumentNullException(nameof(classes));
-        var classCopy = new Dictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>>(
-            SymbolEqualityComparer.Default);
-        foreach (var pair in classes)
-            classCopy.Add(
-                pair.Key,
-                Array.AsReadOnly(
-                    (pair.Value
-                     ?? Array.Empty<BoundClassFieldInitializer>())
-                    .ToArray()));
-        _classes = new ReadOnlyDictionary<
-            INamedTypeSymbol,
-            IReadOnlyList<BoundClassFieldInitializer>>(classCopy);
-    }
-
-    public BoundInitializer Require(
-        IOperation operation,
-        INamedTypeSymbol mintedType = null)
-    {
-        var key = new BoundInitializerKey(operation.Syntax, mintedType);
-        if (_sites.TryGetValue(key, out var binding)) return binding;
-        throw new InvalidOperationException(
-            $"Initializer '{operation.Syntax}' was absent from the bound program "
-            + $"for '{mintedType?.ToDisplayString() ?? "program fields"}'.");
-    }
-
-    public IReadOnlyList<BoundClassFieldInitializer> RequireClass(
-        INamedTypeSymbol type)
-    {
-        if (type != null
-            && _classes.TryGetValue(type, out var plan))
-            return plan;
-        throw new InvalidOperationException(
-            $"Class initializer plan '{type?.ToDisplayString()}' "
-            + "was absent from the bound program.");
-    }
-}
-
 internal sealed class BoundClassFieldInitializer
 {
     public readonly IOperation Operation;

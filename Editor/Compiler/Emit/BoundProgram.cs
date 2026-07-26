@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// Complete immutable semantic input to body lowering. Every callable specialization, closure,
@@ -15,15 +17,24 @@ internal sealed class BoundProgram
     public readonly CaptureScopeAnalysis Captures;
     public readonly RecursionInfo Recursion;
     public readonly SyntheticDemandPlan SyntheticDemands;
-    public readonly BoundCallSiteTable CallSites;
-    public readonly BoundInitializerTable Initializers;
-    public readonly BoundDeconstructionTable Deconstructions;
-    public readonly BoundConversionTable Conversions;
+    readonly IReadOnlyDictionary<
+        BoundCallSiteKey, BoundCallSite> _callSites;
+    readonly IReadOnlyDictionary<
+        BoundInitializerKey, BoundInitializer> _initializers;
+    readonly IReadOnlyDictionary<
+        INamedTypeSymbol,
+        IReadOnlyList<BoundClassFieldInitializer>> _classInitializers;
+    readonly IReadOnlyDictionary<
+        BoundDeconstructionKey, IMethodSymbol> _deconstructions;
+    readonly IReadOnlyDictionary<
+        BoundConversionKey, ClosedConversionPlan> _conversions;
     public readonly BoundConstantTable Constants;
     public readonly BoundMethodBodyTable MethodBodies;
     public readonly BoundValueTable Values;
     public readonly IReadOnlyDictionary<IFieldSymbol, string> SourceStorageNames;
-    public readonly BoundSyntheticDispatchTable SyntheticDispatch;
+    readonly IReadOnlyDictionary<
+        BoundSyntheticDispatchKey, DispatchPlan> _syntheticDispatch;
+    public readonly IMethodSymbol SyntheticObjectToStringSlot;
     public readonly BoundAbiPlan Abi;
     public readonly BoundUdonTypeSystem Types;
     public readonly UdonTypeFactRegistry TypeFacts;
@@ -38,15 +49,22 @@ internal sealed class BoundProgram
         CaptureScopeAnalysis captures,
         RecursionInfo recursion,
         SyntheticDemandPlan syntheticDemands,
-        BoundCallSiteTable callSites,
-        BoundInitializerTable initializers,
-        BoundDeconstructionTable deconstructions,
-        BoundConversionTable conversions,
+        IDictionary<BoundCallSiteKey, BoundCallSite> callSites,
+        IDictionary<BoundInitializerKey, BoundInitializer> initializers,
+        IDictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>> classInitializers,
+        IDictionary<
+            BoundDeconstructionKey, IMethodSymbol> deconstructions,
+        IDictionary<
+            BoundConversionKey, ClosedConversionPlan> conversions,
         BoundConstantTable constants,
         BoundMethodBodyTable methodBodies,
         BoundValueTable values,
         IReadOnlyDictionary<IFieldSymbol, string> sourceStorageNames,
-        BoundSyntheticDispatchTable syntheticDispatch,
+        IMethodSymbol syntheticObjectToStringSlot,
+        IDictionary<
+            BoundSyntheticDispatchKey, DispatchPlan> syntheticDispatch,
         BoundAbiPlan abi,
         BoundUdonTypeSystem types,
         UdonTypeFactRegistry typeFacts,
@@ -64,13 +82,27 @@ internal sealed class BoundProgram
         Recursion = recursion ?? throw new ArgumentNullException(nameof(recursion));
         SyntheticDemands = syntheticDemands
             ?? throw new ArgumentNullException(nameof(syntheticDemands));
-        CallSites = callSites ?? throw new ArgumentNullException(nameof(callSites));
-        Initializers = initializers
-            ?? throw new ArgumentNullException(nameof(initializers));
-        Deconstructions = deconstructions
-            ?? throw new ArgumentNullException(nameof(deconstructions));
-        Conversions = conversions
-            ?? throw new ArgumentNullException(nameof(conversions));
+        _callSites = Freeze(callSites, nameof(callSites));
+        _initializers = Freeze(initializers, nameof(initializers));
+        if (classInitializers == null)
+            throw new ArgumentNullException(nameof(classInitializers));
+        var classCopy = new Dictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>(
+            SymbolEqualityComparer.Default);
+        foreach (var pair in classInitializers)
+            classCopy.Add(
+                pair.Key,
+                Array.AsReadOnly(
+                    (pair.Value
+                     ?? Array.Empty<BoundClassFieldInitializer>())
+                    .ToArray()));
+        _classInitializers = new ReadOnlyDictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>(classCopy);
+        _deconstructions = Freeze(
+            deconstructions, nameof(deconstructions));
+        _conversions = Freeze(conversions, nameof(conversions));
         Constants = constants
             ?? throw new ArgumentNullException(nameof(constants));
         MethodBodies = methodBodies
@@ -81,8 +113,11 @@ internal sealed class BoundProgram
                 sourceStorageNames
                 ?? throw new ArgumentNullException(nameof(sourceStorageNames)),
                 SymbolEqualityComparer.Default));
-        SyntheticDispatch = syntheticDispatch
-            ?? throw new ArgumentNullException(nameof(syntheticDispatch));
+        SyntheticObjectToStringSlot = syntheticObjectToStringSlot
+            ?? throw new ArgumentNullException(
+                nameof(syntheticObjectToStringSlot));
+        _syntheticDispatch = Freeze(
+            syntheticDispatch, nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
         Types = types ?? throw new ArgumentNullException(nameof(types));
         TypeFacts = typeFacts ?? throw new ArgumentNullException(nameof(typeFacts));
@@ -105,5 +140,88 @@ internal sealed class BoundProgram
             return name;
         throw new InvalidOperationException(
             $"Source storage name for '{field?.ToDisplayString()}' was not bound.");
+    }
+
+    public BoundCallSite RequireCallSite(
+        SyntaxNode syntax,
+        CallableSiteKind kind,
+        CallSiteBindingScope? scope)
+    {
+        var key = new BoundCallSiteKey(syntax, kind, scope);
+        if (_callSites.TryGetValue(key, out var site))
+            return site;
+        throw new InvalidOperationException(
+            $"Callable site '{syntax}' ({kind}) "
+            + "was absent from the bound program.");
+    }
+
+    public BoundInitializer RequireInitializer(
+        IOperation operation,
+        INamedTypeSymbol mintedType = null)
+    {
+        var key = new BoundInitializerKey(
+            operation.Syntax, mintedType);
+        if (_initializers.TryGetValue(key, out var binding))
+            return binding;
+        throw new InvalidOperationException(
+            $"Initializer '{operation.Syntax}' was absent from the bound program "
+            + $"for '{mintedType?.ToDisplayString() ?? "program fields"}'.");
+    }
+
+    public IReadOnlyList<BoundClassFieldInitializer>
+        RequireClassInitializers(INamedTypeSymbol type)
+    {
+        if (type != null
+            && _classInitializers.TryGetValue(type, out var plan))
+            return plan;
+        throw new InvalidOperationException(
+            $"Class initializer plan '{type?.ToDisplayString()}' "
+            + "was absent from the bound program.");
+    }
+
+    public IMethodSymbol RequireDeconstruction(
+        IOperation operation,
+        CallSiteBindingScope scope)
+    {
+        var key = new BoundDeconstructionKey(
+            operation.Syntax, scope);
+        if (_deconstructions.TryGetValue(key, out var method))
+            return method;
+        throw new InvalidOperationException(
+            $"Deconstruction '{operation.Syntax}' was absent from the bound program.");
+    }
+
+    public ClosedConversionPlan RequireConversion(
+        IConversionOperation operation,
+        CallSiteBindingScope scope)
+    {
+        var key = new BoundConversionKey(operation, scope);
+        if (_conversions.TryGetValue(key, out var plan))
+            return plan;
+        throw new InvalidOperationException(
+            $"Conversion '{operation?.Syntax}' was absent from the bound program.");
+    }
+
+    public DispatchPlan RequireSyntheticDispatch(
+        INamedTypeSymbol receiverType,
+        IMethodSymbol target)
+    {
+        var key = new BoundSyntheticDispatchKey(
+            receiverType, target);
+        if (_syntheticDispatch.TryGetValue(key, out var dispatch))
+            return dispatch;
+        throw new InvalidOperationException(
+            $"Synthetic dispatch '{receiverType}.{target.Name}' was absent "
+            + "from the bound program.");
+    }
+
+    static IReadOnlyDictionary<TKey, TValue> Freeze<TKey, TValue>(
+        IDictionary<TKey, TValue> source,
+        string parameterName)
+    {
+        if (source == null)
+            throw new ArgumentNullException(parameterName);
+        return new ReadOnlyDictionary<TKey, TValue>(
+            new Dictionary<TKey, TValue>(source));
     }
 }

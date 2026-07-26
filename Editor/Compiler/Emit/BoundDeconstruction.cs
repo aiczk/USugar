@@ -32,26 +32,3 @@ internal readonly struct BoundDeconstructionKey
         }
     }
 }
-
-/// <summary>Deconstruction binding results, closed per specialization.</summary>
-internal sealed class BoundDeconstructionTable
-{
-    readonly IReadOnlyDictionary<BoundDeconstructionKey, IMethodSymbol> _sites;
-
-    internal BoundDeconstructionTable(
-        IDictionary<BoundDeconstructionKey, IMethodSymbol> sites)
-        => _sites = new ReadOnlyDictionary<
-            BoundDeconstructionKey, IMethodSymbol>(
-            new Dictionary<BoundDeconstructionKey, IMethodSymbol>(
-                sites));
-
-    public IMethodSymbol Require(
-        IOperation operation,
-        CallSiteBindingScope scope)
-    {
-        var key = new BoundDeconstructionKey(operation.Syntax, scope);
-        if (_sites.TryGetValue(key, out var method)) return method;
-        throw new InvalidOperationException(
-            $"Deconstruction '{operation.Syntax}' was absent from the bound program.");
-    }
-}

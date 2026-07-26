@@ -215,6 +215,16 @@ public class CompilationPlanningContractTests
             "ProgramDiscoverySeed"));
         Assert.Null(typeof(BoundProgram).Assembly.GetType(
             "CompilationPlanner"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType(
+            "BoundCallSiteTable"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType(
+            "BoundInitializerTable"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType(
+            "BoundDeconstructionTable"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType(
+            "BoundConversionTable"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType(
+            "BoundSyntheticDispatchTable"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),

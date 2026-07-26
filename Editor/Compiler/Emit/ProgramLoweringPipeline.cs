@@ -1205,13 +1205,15 @@ public sealed class UasmEmitter
             syntheticDemands,
             boundSource.CallSites,
             boundSource.Initializers,
+            boundSource.ClassInitializers,
             boundSource.Deconstructions,
             boundSource.Conversions,
             boundSource.Constants,
             methodBodies,
             boundSource.Values,
             boundSource.SourceStorageNames,
-            syntheticDispatch,
+            syntheticDispatch.ObjectToStringSlot,
+            syntheticDispatch.Sites,
             abi,
             types,
             typeFacts,
@@ -1223,7 +1225,9 @@ public sealed class UasmEmitter
         RecursionAnalysis.VerifyRegisteredCallablesAreNodes(bodyGraph);
     }
 
-    BoundSyntheticDispatchTable BindSyntheticDispatch(
+    (IMethodSymbol ObjectToStringSlot,
+        IDictionary<BoundSyntheticDispatchKey, DispatchPlan> Sites)
+        BindSyntheticDispatch(
         SyntheticDemandPlan demands)
     {
         var objectToString = _compilation
@@ -1256,14 +1260,19 @@ public sealed class UasmEmitter
                 Bind(receiver, member);
         }
 
-        return new BoundSyntheticDispatchTable(
-            objectToString, sites);
+        return (objectToString, sites);
     }
 
-    (BoundCallSiteTable CallSites,
-        BoundInitializerTable Initializers,
-        BoundDeconstructionTable Deconstructions,
-        BoundConversionTable Conversions,
+    (IDictionary<BoundCallSiteKey, BoundCallSite> CallSites,
+        IDictionary<BoundInitializerKey, BoundInitializer> Initializers,
+        IDictionary<
+            INamedTypeSymbol,
+            IReadOnlyList<BoundClassFieldInitializer>>
+            ClassInitializers,
+        IDictionary<
+            BoundDeconstructionKey, IMethodSymbol> Deconstructions,
+        IDictionary<
+            BoundConversionKey, ClosedConversionPlan> Conversions,
         BoundConstantTable Constants,
         BoundValueTable Values,
         IReadOnlyDictionary<IFieldSymbol, string> SourceStorageNames)
@@ -1549,11 +1558,11 @@ public sealed class UasmEmitter
         }
 
         return (
-            new BoundCallSiteTable(sites),
-            new BoundInitializerTable(
-                initializers, classInitializers),
-            new BoundDeconstructionTable(deconstructions),
-            new BoundConversionTable(conversions),
+            sites,
+            initializers,
+            classInitializers,
+            deconstructions,
+            conversions,
             BoundConstantTable.Materialize(
                 _compilation, constantFields),
             new BoundValueTable(values, methodPayloads),
@@ -2214,7 +2223,8 @@ public sealed class UasmEmitter
         {
             try
             {
-                var initializer = _state.Program.Initializers.Require(initOp);
+                var initializer =
+                    _state.Program.RequireInitializer(initOp);
                 using var bindingScope = _state.EnterBindingScope(
                     initializer.Scope);
                 using var genericScope = initializer.TypeParameterMap != null

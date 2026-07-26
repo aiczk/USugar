@@ -74,35 +74,6 @@ internal readonly struct BoundConversionKey
 }
 
 /// <summary>
-/// Exact specialization-keyed conversion decisions for every source
-/// conversion. Absence is a compiler error, including decisions whose result
-/// is <see cref="ClosedConversionKind.None"/>.
-/// </summary>
-internal sealed class BoundConversionTable
-{
-    readonly IReadOnlyDictionary<BoundConversionKey, ClosedConversionPlan>
-        _conversions;
-
-    public BoundConversionTable(
-        IDictionary<BoundConversionKey, ClosedConversionPlan> conversions)
-        => _conversions = new ReadOnlyDictionary<
-            BoundConversionKey, ClosedConversionPlan>(
-            new Dictionary<BoundConversionKey, ClosedConversionPlan>(
-                conversions
-                ?? throw new ArgumentNullException(nameof(conversions))));
-
-    public ClosedConversionPlan Require(
-        IConversionOperation operation,
-        CallSiteBindingScope scope)
-    {
-        var key = new BoundConversionKey(operation, scope);
-        if (_conversions.TryGetValue(key, out var plan)) return plan;
-        throw new InvalidOperationException(
-            $"Conversion '{operation?.Syntax}' was absent from the bound program.");
-    }
-}
-
-/// <summary>
 /// Roslyn-facing conversion authority. This object exists only while the
 /// bound program is being built and is never retained by it.
 /// </summary>

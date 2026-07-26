@@ -59,8 +59,9 @@ public sealed class ReceiverBridgeEmitter
 
         _bridge.Dispatch(plan, arguments, runtime: () =>
         {
-            var targets = _context.Program.SyntheticDispatch
-                .Require(member.ContainingType, member).RuntimeTargets;
+            var targets = _context.Program
+                .RequireSyntheticDispatch(
+                    member.ContainingType, member).RuntimeTargets;
             var matched = builder.AllocScratch(StorageTypes.Boolean);
             builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
             var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);

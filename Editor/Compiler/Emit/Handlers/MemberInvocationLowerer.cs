@@ -539,7 +539,7 @@ internal sealed class MemberInvocationLowerer
         // this class has field initializers, a user-class base chain, or an EXPLICIT this/base call.
         bool baseIsUserClass = classTy.BaseType is INamedTypeSymbol bt0 && TypeClassifier.IsUserClass(bt0);
         bool explicitChainCall = initInv != null && !initInv.TargetMethod.IsImplicitlyDeclared;
-        if (_lowering.State.Program.Initializers.RequireClass(classTy).Count == 0
+        if (_lowering.State.Program.RequireClassInitializers(classTy).Count == 0
             && !baseIsUserClass
             && !explicitChainCall)
             return;
@@ -556,7 +556,7 @@ internal sealed class MemberInvocationLowerer
                 if (target.ContainingType is INamedTypeSymbol implBase && TypeClassifier.IsUserClass(implBase))
                     ClassAbi.EmitImplicitCtorChain(
                         _lowering.Builder, inst, implBase,
-                        _lowering.State.Program.Initializers.RequireClass,
+                        _lowering.State.Program.RequireClassInitializers,
                         VisitClassInitializerExpression, CallBaseCtor);
             }
             else
@@ -582,7 +582,7 @@ internal sealed class MemberInvocationLowerer
         if (classTy.BaseType is INamedTypeSymbol cbt && TypeClassifier.IsUserClass(cbt))
             ClassAbi.EmitImplicitCtorChain(
                 _lowering.Builder, inst, cbt,
-                _lowering.State.Program.Initializers.RequireClass,
+                _lowering.State.Program.RequireClassInitializers,
                 VisitClassInitializerExpression, CallBaseCtor);
     }
 
@@ -598,7 +598,7 @@ internal sealed class MemberInvocationLowerer
         => ClassAbi.EmitInstanceFieldInitializers(
             _lowering.Builder,
             instance,
-            _lowering.State.Program.Initializers.RequireClass(owner),
+            _lowering.State.Program.RequireClassInitializers(owner),
             VisitClassInitializerExpression);
 
     CLeaf VisitClassInitializerExpression(
@@ -632,7 +632,7 @@ internal sealed class MemberInvocationLowerer
                 {
                     ClassAbi.EmitImplicitCtorChain(
                         _lowering.Builder, instance, classTy,
-                        _lowering.State.Program.Initializers.RequireClass,
+                        _lowering.State.Program.RequireClassInitializers,
                         VisitClassInitializerExpression, CallBaseCtor);
                     return;
                 }
@@ -686,7 +686,7 @@ internal sealed class MemberInvocationLowerer
                 inst => AggregateAbi.DefaultInitialize(_lowering.Builder, inst, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName),
                 inst => ClassAbi.EmitImplicitCtorChain(
                     _lowering.Builder, inst, classTy,
-                    _lowering.State.Program.Initializers.RequireClass,
+                    _lowering.State.Program.RequireClassInitializers,
                     VisitClassInitializerExpression, CallBaseCtor),
                 inst => _lowering.EmitAggregateObjectInitializer(inst, layout, op.Initializer),
                 TypeObjWrite(classTy));

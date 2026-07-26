@@ -79,7 +79,7 @@ internal sealed class LoweringServices
             ?? throw new InvalidOperationException(
                 $"Callable site '{operation.Syntax}' is being lowered "
                 + "outside a bound semantic scope.");
-        return _state.Program.CallSites.Require(
+        return _state.Program.RequireCallSite(
             operation.Syntax, kind, scope);
     }
 
@@ -103,7 +103,8 @@ internal sealed class LoweringServices
             ?? throw new InvalidOperationException(
                 $"Deconstruction '{operation.Syntax}' is being lowered "
                 + "outside a bound semantic scope.");
-        return _state.Program.Deconstructions.Require(operation, scope);
+        return _state.Program.RequireDeconstruction(
+            operation, scope);
     }
 
     internal ClosedConversionPlan RequireBoundConversion(
@@ -115,7 +116,8 @@ internal sealed class LoweringServices
             ?? throw new InvalidOperationException(
                 $"Conversion '{operation.Syntax}' is being lowered "
                 + "outside a bound semantic scope.");
-        return _state.Program.Conversions.Require(operation, scope);
+        return _state.Program.RequireConversion(
+            operation, scope);
     }
 
     /// <summary>
@@ -2680,9 +2682,10 @@ internal sealed class LoweringServices
     internal CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
         bool nullIsError, bool useOverrides)
     {
-        var slot = _state.Program.SyntheticDispatch.ObjectToStringSlot;
-        var targets = _state.Program.SyntheticDispatch
-            .Require(recvTy, slot).RuntimeTargets;
+        var slot = _state.Program.SyntheticObjectToStringSlot;
+        var targets = _state.Program
+            .RequireSyntheticDispatch(
+                recvTy, slot).RuntimeTargets;
         AssertClosedVirtualDispatch(recvTy, targets, slot);
 
         var recvSlot = _state.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
