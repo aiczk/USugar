@@ -57,7 +57,6 @@ internal sealed class LoweringServices
     internal Dictionary<string, string> _fieldChangeCallbacks => _state.Initializers.FieldChangeCallbacks;
     internal Stack<CLeaf> _conditionalAccessStack => _state.ControlFlow.ConditionalAccessStack;
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _state.ControlFlow.UsingDisposableStack;
-    internal HashSet<string> _delegateFields => _state.Synthetics.DelegateFields;
     internal List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
     internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
         => _state.Recursion.IsRecursiveEdge(caller, callee);
@@ -1685,7 +1684,7 @@ internal sealed class LoweringServices
         IMethodSymbol invoke,
         MulticastOperations operation)
     {
-        _state.Synthetics.RegisterMulticast(
+        _state.SyntheticDemandPlanner.RegisterMulticast(
             sigPart, invoke, _state.Generics.TypeParamMap, operation);
     }
 
@@ -1734,7 +1733,7 @@ internal sealed class LoweringServices
     {
         var enumType = ClassifyEnumToStringDemand(type, rejectFlags);
         if (enumType != null)
-            _state.Synthetics.RegisterEnumToString(enumType);
+            _state.SyntheticDemandPlanner.RegisterEnumToString(enumType);
         return enumType;
     }
 
@@ -1753,7 +1752,7 @@ internal sealed class LoweringServices
         var resolved = ResolveType(type) as INamedTypeSymbol;
         if (resolved == null || !TypeClassifier.IsUserClass(resolved))
             return null;
-        _state.Synthetics.RegisterClassToString(resolved);
+        _state.SyntheticDemandPlanner.RegisterClassToString(resolved);
         return resolved;
     }
 
@@ -1788,7 +1787,7 @@ internal sealed class LoweringServices
                 outerInvoke, _state.Types, typeParamMap),
             DelegateAbi.BuildSigPart(
                 innerInvoke, _state.Types, typeParamMap));
-        _state.Synthetics.RegisterWrapper(
+        _state.SyntheticDemandPlanner.RegisterWrapper(
             new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
             outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
@@ -1813,7 +1812,7 @@ internal sealed class LoweringServices
         var kind = method.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction
             ? DelegateBindingKind.Closure : DelegateBindingKind.Direct;
         var binding = new DelegateBindingPlan(kind, method, bridgeName);
-        _state.Synthetics.RegisterDelegateBridge(binding, typeParamMap);
+        _state.SyntheticDemandPlanner.RegisterDelegateBridge(binding, typeParamMap);
         return binding;
     }
 
@@ -2094,15 +2093,14 @@ internal sealed class LoweringServices
         var site = DelegateDemandCensus.SiteKey(
             op.Syntax, _state.Methods.CurrentOwnerSpecs);
         var plan = _state.Program.SyntheticDemands.RequireDelegateBinding(site);
-        _state.Synthetics.RecordDelegateBinding(
-            site, plan);
+        _state.RecordEmittedDelegateSite(site);
         return MaterializeDelegateBinding(op, plan);
     }
 
     internal DelegateBindingPlan PlanDelegateBridge(IDelegateCreationOperation op)
     {
         var binding = PlanDelegateBridgeCore(op).Plan;
-        _state.Synthetics.PlanDelegateBinding(
+        _state.SyntheticDemandPlanner.PlanDelegateBinding(
             DelegateDemandCensus.SiteKey(op.Syntax, _state.Methods.CurrentOwnerSpecs), binding);
         return binding;
     }
@@ -2210,7 +2208,7 @@ internal sealed class LoweringServices
             var recvLeaf = Const(null, StorageTypes.ObjectArray);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, member, recvBridgeName);
-            _state.Synthetics.RegisterReceiverBridge(binding);
+            _state.SyntheticDemandPlanner.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
                 binding,
                 FuncRef(recvBridgeName), null, recvLeaf);
@@ -2228,7 +2226,7 @@ internal sealed class LoweringServices
             var localBridge = DelegateAbi.BridgeName(
                 LayoutPlanBuilder.InterfaceDispatchName(targetMethod, interfaceLayout));
             var binding = new DelegateBindingPlan(DelegateBindingKind.Receiver, targetMethod, localBridge);
-            _state.Synthetics.RegisterReceiverBridge(binding);
+            _state.SyntheticDemandPlanner.RegisterReceiverBridge(binding);
             return new MaterializedDelegateBinding(
                 binding,
                 FuncRef(localBridge), null, targetInstance);
@@ -2296,7 +2294,8 @@ internal sealed class LoweringServices
                 throw new System.InvalidOperationException($"Lambda/local function '{targetMethod.Name}' not registered.");
             bridgeExportName = DelegateAbi.BridgeName(targetSlot.VarPrefix);
             if (bridgeClosure != null)
-                _state.Synthetics.RegisterClosureBridge(bridgeExportName, bridgeClosure.Function);
+                _state.SyntheticDemandPlanner.RegisterClosureBridge(
+                    bridgeExportName, bridgeClosure.Function);
             // Carry the current type-param map by reference — it is immutable and per-EmitMethod fresh, so
             // it stays valid for the drain (which runs after generic-method emit clears the ambient map).
             PlanDelegateDemand(targetMethod, bridgeExportName, _state.Generics.TypeParamMap);
@@ -2418,7 +2417,7 @@ internal sealed class LoweringServices
                     var adapterName = DelegateAbi.SigAdapterName(targetKey, sigS);
                     // SS2B: a closure target's func was registered under the plain bridge name above;
                     // the adapter drain resolves by name, so alias it under the adapter name too.
-                    _state.Synthetics.RegisterClosureBridgeAlias(
+                    _state.SyntheticDemandPlanner.RegisterClosureBridgeAlias(
                         bridgeExportName, adapterName);
                     // [X1] leaf mapping, adapter flavor (C3 stage 2): a this-receiver VIRTUAL method
                     // group statically binds the BASE declaration, but the adapter's InternalCall must
@@ -2435,7 +2434,7 @@ internal sealed class LoweringServices
                         : targetMethod;
                     var adapterBinding = new DelegateBindingPlan(
                         DelegateBindingKind.SignatureAdapter, adapterTarget, adapterName);
-                    _state.Synthetics.RegisterSigAdapter(
+                    _state.SyntheticDemandPlanner.RegisterSigAdapter(
                         adapterBinding, delegateInvoke, _state.Generics.TypeParamMap);
                     return new MaterializedDelegateBinding(
                         adapterBinding,

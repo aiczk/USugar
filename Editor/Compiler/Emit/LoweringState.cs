@@ -34,7 +34,14 @@ internal sealed class LoweringState
     public ClassTypeObjectContext ClassTypes
         { get; private set; } = new ClassTypeObjectContext();
 
-    public readonly SyntheticContext Synthetics = new SyntheticContext();
+    SyntheticDemandPlanner _syntheticDemandPlanner = new();
+    readonly HashSet<string> _emittedDelegateSites =
+        new(StringComparer.Ordinal);
+    bool _syntheticEmissionVerified;
+    internal SyntheticDemandPlanner SyntheticDemandPlanner
+        => _syntheticDemandPlanner
+           ?? throw new InvalidOperationException(
+               "Synthetic demands were already published.");
     public readonly ControlFlowContext ControlFlow = new ControlFlowContext();
     public readonly InitializationContext Initializers = new InitializationContext();
     public readonly DiagnosticContext DiagnosticState = new DiagnosticContext();
@@ -68,6 +75,36 @@ internal sealed class LoweringState
                 "The recursion plan was set twice.");
         Recursion = recursion
             ?? throw new ArgumentNullException(nameof(recursion));
+    }
+
+    internal SyntheticDemandPlan PublishSyntheticDemands()
+    {
+        var planner = SyntheticDemandPlanner;
+        var plan = planner.PublishPlan();
+        _syntheticDemandPlanner = null;
+        return plan;
+    }
+
+    internal void RecordEmittedDelegateSite(string site)
+    {
+        RequireProgram().SyntheticDemands
+            .RequireDelegateBinding(site);
+        _emittedDelegateSites.Add(site);
+    }
+
+    internal void VerifySyntheticEmissionComplete()
+    {
+        if (_syntheticEmissionVerified)
+            throw new InvalidOperationException(
+                "Synthetic demand emission was verified twice.");
+        foreach (var site in RequireProgram()
+                     .SyntheticDemands.DelegateSites)
+            if (!_emittedDelegateSites.Contains(site))
+                throw new InvalidOperationException(
+                    $"Planned delegate site '{site}' was not emitted "
+                    + "during body emission.");
+        _emittedDelegateSites.Clear();
+        _syntheticEmissionVerified = true;
     }
 
     internal void PublishBoundProgram(BoundProgram program)

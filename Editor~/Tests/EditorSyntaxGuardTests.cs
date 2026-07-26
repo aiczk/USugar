@@ -304,7 +304,7 @@ public class EditorSyntaxGuardTests
             "PlanMulticastSig(",
             "PlanWrapperSig(",
             "PlanEnumToStringDemand(",
-            ".Synthetics.Register",
+            ".SyntheticDemandPlanner.Register",
         };
         var failures = Directory.GetFiles(
                 handlers, "*.cs", SearchOption.AllDirectories)

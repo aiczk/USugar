@@ -14,9 +14,6 @@ internal sealed class SyntheticDemandPlan
     readonly IReadOnlyDictionary<string, DelegateBindingPlan> _delegateBindings;
     readonly HashSet<INamedTypeSymbol> _enumToStringTypes;
     readonly HashSet<INamedTypeSymbol> _classToStringTypes;
-    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _receiverBridges;
-    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _delegateBridges;
-    readonly IReadOnlyDictionary<string, DelegateBridgeDemand> _signatureAdapterBridges;
 
     public readonly IReadOnlyCollection<DelegateBridgeDemand> ReceiverBridges;
     public readonly IReadOnlyCollection<DelegateBridgeDemand> DelegateBridges;
@@ -52,9 +49,6 @@ internal sealed class SyntheticDemandPlan
         var receiverBridgeArray = receiverBridges.ToArray();
         var delegateBridgeArray = delegateBridges.ToArray();
         var signatureAdapterArray = signatureAdapterBridges.ToArray();
-        _receiverBridges = ByBridgeName(receiverBridgeArray);
-        _delegateBridges = ByBridgeName(delegateBridgeArray);
-        _signatureAdapterBridges = ByBridgeName(signatureAdapterArray);
         ReceiverBridges = Array.AsReadOnly(receiverBridgeArray);
         DelegateBridges = Array.AsReadOnly(delegateBridgeArray);
         MulticastSignatures = CopyMap(multicastSignatures);
@@ -72,20 +66,6 @@ internal sealed class SyntheticDemandPlan
 
     public bool TryGetClosureBridge(string name, out string functionName)
         => _closureBridgeTargets.TryGetValue(name, out functionName);
-
-    public void RequireClosureBridge(
-        string bridgeName,
-        string functionName)
-    {
-        if (_closureBridgeTargets.TryGetValue(
-                bridgeName, out var planned)
-            && string.Equals(
-                planned, functionName, StringComparison.Ordinal))
-            return;
-        throw new InvalidOperationException(
-            $"Closure bridge '{bridgeName}' targeting '{functionName}' "
-            + "was absent from the bound program.");
-    }
 
     public DelegateBindingPlan RequireDelegateBinding(string site)
         => _delegateBindings.TryGetValue(site, out var binding)
@@ -126,35 +106,9 @@ internal sealed class SyntheticDemandPlan
             $"Delegate wrapper '{wrapperName}' was absent from the bound program.");
     }
 
-    public DelegateBridgeDemand RequireReceiverBridge(string bridgeName)
-        => RequireBridge(_receiverBridges, bridgeName, "receiver bridge");
-
-    public DelegateBridgeDemand RequireDelegateBridge(string bridgeName)
-        => RequireBridge(_delegateBridges, bridgeName, "delegate bridge");
-
-    public DelegateBridgeDemand RequireSignatureAdapter(string bridgeName)
-        => RequireBridge(_signatureAdapterBridges, bridgeName, "signature adapter");
-
-    static DelegateBridgeDemand RequireBridge(
-        IReadOnlyDictionary<string, DelegateBridgeDemand> bridges,
-        string bridgeName,
-        string category)
-    {
-        if (bridges.TryGetValue(bridgeName, out var demand))
-            return demand;
-        throw new InvalidOperationException(
-            $"Synthetic {category} '{bridgeName}' was absent from the bound program.");
-    }
-
     static IReadOnlyDictionary<string, TValue> CopyMap<TValue>(
         IDictionary<string, TValue> source)
         => new ReadOnlyDictionary<string, TValue>(
             new Dictionary<string, TValue>(source, StringComparer.Ordinal));
 
-    static IReadOnlyDictionary<string, DelegateBridgeDemand> ByBridgeName(
-        IEnumerable<DelegateBridgeDemand> demands)
-        => new ReadOnlyDictionary<string, DelegateBridgeDemand>(
-            demands.ToDictionary(
-                demand => demand.Binding.BridgeName,
-                StringComparer.Ordinal));
 }

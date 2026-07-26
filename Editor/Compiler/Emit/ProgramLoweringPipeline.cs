@@ -249,8 +249,8 @@ internal sealed class ProgramLoweringPipeline
             }
 
             // First-class delegate field (design §2.1): ONE SystemObjectArray heap var holding the bundle
-            // reference, null-initialized in UASM data. Private fields are bundled too (assign/invoke route
-            // on _delegateFields set-membership, not accessibility). Intercepted BEFORE the generic
+            // reference, null-initialized in UASM data. Private fields are bundled too; assign/invoke
+            // lowering is type-directed rather than accessibility-directed. Intercepted BEFORE the generic
             // sync/flags block (M4 [T2]) so a [UdonSynced] delegate field hits the delegate-specific
             // reject in DeclareDelegateField — the single choke point shared with the base-class path.
             // Flags/syncMode were never used for delegate fields, so this reorder changes no output.
@@ -330,7 +330,7 @@ internal sealed class ProgramLoweringPipeline
 
         // Field-like events (design §2.1, A-M2): materialize each as a private multicast delegate field
         // via the SAME DeclareDelegateField choke point plain delegate fields use (heap var = event
-        // name, DelegateFields registration, __dlgc_{sig} conv globals, sync/NetworkCallable/tuple-
+        // name, __dlgc_{sig} conv globals, sync/NetworkCallable/tuple-
         // return/ref-out reject all inherited for free). The compiler-synthesized backing IFieldSymbol
         // stays IsImplicitlyDeclared and is skipped by the field loop above — materialize here instead,
         // so it never double-declares.
@@ -821,7 +821,6 @@ internal sealed class ProgramLoweringPipeline
         _state.Boundary.RequireCanDeclareDelegateSurface(member, delegateType);
 
         _fieldDiscovery.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
-        _fieldDiscovery.DelegateFields.Add(storageName);
 
         // Declare the signature-keyed __dlgc_ convention vars for this delegate signature (§3.2).
         var invoke = delegateType.DelegateInvokeMethod;
@@ -1032,10 +1031,10 @@ internal sealed class ProgramLoweringPipeline
             _compilation,
             _state.Methods.RegisteredBodies.Select(
                 body => body.Method.OriginalDefinition));
-        _state.Synthetics.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
+        _state.SyntheticDemandPlanner.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
             _state.Methods.RegisteredBodies, methodBodies, discovery.FieldInitOps));
         PlanSyntheticDemands(discovery, methodBodies);
-        var syntheticDemands = _state.Synthetics.PublishPlan();
+        var syntheticDemands = _state.PublishSyntheticDemands();
         var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var abiBuilder = new BoundAbiPlanBuilder(
             _environment.AbiCatalog);
@@ -1411,7 +1410,6 @@ internal sealed class ProgramLoweringPipeline
         ProgramDiscovery plan,
         BoundMethodBodyTable methodBodies)
     {
-        var planner = new SyntheticDemandPlanner(_lowering);
         foreach (var body in _state.Methods.RegisteredBodies.ToArray())
         {
             var method = body.Method;
@@ -1428,21 +1426,25 @@ internal sealed class ProgramLoweringPipeline
             PlanSyntheticDemands(
                 methodBodies.Require(method.OriginalDefinition).AnalysisRoot,
                 true,
-                planner);
+                _lowering);
         }
 
         using var fieldMethodScope = _state.Methods.EnterCallableScope(
             null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         foreach (var initializer in plan.FieldInitOps)
-            PlanSyntheticDemands(initializer, true, planner);
+            PlanSyntheticDemands(initializer, true, _lowering);
     }
 
-    static void PlanSyntheticDemands(IOperation operation, bool root, SyntheticDemandPlanner planner)
+    static void PlanSyntheticDemands(
+        IOperation operation,
+        bool root,
+        LoweringServices lowering)
     {
         if (operation == null) return;
         if (!root && operation is ILocalFunctionOperation or IAnonymousFunctionOperation) return;
-        planner.PlanOperation(operation);
-        foreach (var child in operation.ChildOps()) PlanSyntheticDemands(child, false, planner);
+        SyntheticDemandPlanner.PlanOperation(operation, lowering);
+        foreach (var child in operation.ChildOps())
+            PlanSyntheticDemands(child, false, lowering);
     }
 
     void RegisterProgram(ProgramDiscovery plan)
@@ -1689,7 +1691,7 @@ internal sealed class ProgramLoweringPipeline
             throw new InvalidOperationException(
                 "Body lowering discovered callable bodies absent from ProgramDiscovery.");
 
-        _state.Synthetics.VerifyEmissionComplete();
+        _state.VerifySyntheticEmissionComplete();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
         new DelegateBridgeEmitter(

@@ -451,22 +451,27 @@ class C
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var planned = compilation.GetTypeByMetadataName("Planned");
         var late = compilation.GetTypeByMetadataName("Late");
-        var context = new SyntheticContext();
-        context.SetExpectedDelegateSites(Array.Empty<string>());
-        context.RegisterEnumToString(planned);
+        var planner = new SyntheticDemandPlanner();
+        planner.SetExpectedDelegateSites(Array.Empty<string>());
+        planner.RegisterEnumToString(planned);
 
-        var plan = context.PublishPlan();
+        var plan = planner.PublishPlan();
 
         Assert.Equal(planned, Assert.Single(plan.EnumToStringTypes));
         Assert.All(
-            typeof(SyntheticContext).GetFields(
+            typeof(SyntheticDemandPlanner).GetFields(
                     BindingFlags.Instance | BindingFlags.Public
                     | BindingFlags.NonPublic)
-                .Select(field => field.GetValue(context))
+                .Select(field => field.GetValue(planner))
                 .OfType<System.Collections.ICollection>(),
             collection => Assert.Empty(collection));
-        Assert.Throws<InvalidOperationException>(() => context.RegisterEnumToString(late));
-        context.VerifyEmissionComplete();
+        Assert.DoesNotContain(
+            typeof(SyntheticDemandPlanner).GetFields(
+                BindingFlags.Instance | BindingFlags.Public
+                | BindingFlags.NonPublic),
+            field => field.FieldType == typeof(SyntheticDemandPlan));
+        Assert.Throws<InvalidOperationException>(
+            () => planner.RegisterEnumToString(late));
     }
 
     static bool ContainsType(Type candidate, Type forbidden)

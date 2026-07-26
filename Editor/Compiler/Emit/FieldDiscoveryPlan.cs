@@ -28,7 +28,6 @@ internal sealed class FieldDiscoveryPlan
     public readonly IReadOnlyList<FieldInitializerPlan> Initializers;
     public readonly IReadOnlyList<FieldInitializerPlan> StaticInitializers;
     public readonly IReadOnlyList<(string FieldName, INamedTypeSymbol AggregateType)> AggregateDefaults;
-    public readonly IReadOnlyCollection<string> DelegateFields;
     public readonly IReadOnlyDictionary<string, string> FieldChangeCallbacks;
 
     public FieldDiscoveryPlan(
@@ -36,15 +35,12 @@ internal sealed class FieldDiscoveryPlan
         IEnumerable<FieldInitializerPlan> initializers,
         IEnumerable<FieldInitializerPlan> staticInitializers,
         IEnumerable<(string FieldName, INamedTypeSymbol AggregateType)> aggregateDefaults,
-        IEnumerable<string> delegateFields,
         IReadOnlyDictionary<string, string> fieldChangeCallbacks)
     {
         Declarations = Array.AsReadOnly(declarations.Select(Clone).ToArray());
         Initializers = Array.AsReadOnly(initializers.ToArray());
         StaticInitializers = Array.AsReadOnly(staticInitializers.ToArray());
         AggregateDefaults = Array.AsReadOnly(aggregateDefaults.ToArray());
-        DelegateFields = Array.AsReadOnly(delegateFields.OrderBy(
-            name => name, StringComparer.Ordinal).ToArray());
         FieldChangeCallbacks = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new Dictionary<string, string>(fieldChangeCallbacks, StringComparer.Ordinal));
     }
@@ -83,8 +79,6 @@ internal static class FieldPlanEmitter
                 initializer.FieldName, initializer.Operation, initializer.FieldType));
         foreach (var pair in plan.FieldChangeCallbacks)
             state.Initializers.FieldChangeCallbacks.Add(pair.Key, pair.Value);
-        foreach (var delegateField in plan.DelegateFields)
-            state.Synthetics.DelegateFields.Add(delegateField);
     }
 
     static FieldDecl Clone(FieldDecl source)
@@ -105,7 +99,6 @@ internal sealed class FieldDiscoveryPlanBuilder
     public readonly List<FieldInitializerPlan> InstanceInitializers = new();
     public readonly List<FieldInitializerPlan> StaticInitializers = new();
     public readonly List<(string FieldName, INamedTypeSymbol AggregateType)> AggregateDefaults = new();
-    public readonly HashSet<string> DelegateFields = new(StringComparer.Ordinal);
     public readonly Dictionary<string, string> FieldChangeCallbacks = new(StringComparer.Ordinal);
 
     public string DeclareField(string name, StorageType type, FieldFlags flags = FieldFlags.None,
@@ -139,7 +132,6 @@ internal sealed class FieldDiscoveryPlanBuilder
             InstanceInitializers,
             StaticInitializers,
             AggregateDefaults,
-            DelegateFields,
             FieldChangeCallbacks);
 
     void Declare(FieldDecl declaration)
