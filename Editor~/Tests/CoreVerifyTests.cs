@@ -102,7 +102,7 @@ public class CoreVerifyTests
         builder.EmitAssign(slot, builder.Const(42, StorageTypes.Int32));
         builder.EmitReturn(builder.SlotRef(slot));
 
-        var flat = CoreFlatten.Lower(func, TestHelper.RegistryFacts);
+        var flat = CoreFlatten.Lower(func, TestHelper.BoundRegistryFacts);
 
         CoreVerify.Verify(module);
         Assert.NotSame(func, (object)flat);

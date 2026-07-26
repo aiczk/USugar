@@ -9,6 +9,8 @@ public static class TestHelper
 {
     public static readonly UdonAbiCatalog RegistryFacts
         = ExternRegistry.LoadTypedCatalog();
+    internal static readonly BoundAbiPlan BoundRegistryFacts
+        = BoundAbiPlan.ExactCatalog(RegistryFacts);
 
     public static BoundExtern BindExtern(string signature)
         => UdonAbiCatalog.FromNamesForTests(new[] { signature }).Require(AbiKey(signature));

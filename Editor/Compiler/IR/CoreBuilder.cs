@@ -252,10 +252,7 @@ public sealed class CoreBuilder
     }
 
     BoundExtern RequireExtern(UdonAbiKey signature)
-        => (_module.AbiCatalog
-            ?? throw new InvalidOperationException(
-                "CoreBuilder cannot emit an extern without a Udon ABI catalog."))
-            .Require(signature);
+        => _module.RequireAbi().RequireExact(signature);
 
     public void EmitInternalVoid(string funcName, List<CLeaf> args, bool reentrant = false)
     {

@@ -29,7 +29,9 @@ public sealed class LoweringState
     public readonly GenericContext Generics = new GenericContext();
     public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
-    public readonly AggregateContext Aggregates = new AggregateContext();
+    readonly AggregateLayoutTable _aggregateLayouts = new AggregateLayoutTable();
+    internal AggregateLayoutTable Aggregates
+        => Program?.Aggregates ?? _aggregateLayouts;
     public readonly ClassTypeObjectContext ClassTypes = new ClassTypeObjectContext();
 
     /// <summary>CA-v2b-2: virtual-call lowering authority (dispatch set + devirt). Set by UasmEmitter after
@@ -58,6 +60,7 @@ public sealed class LoweringState
             || !ReferenceEquals(RecursionContext.Info, program.Recursion))
             throw new InvalidOperationException(
                 "Lowering contexts do not match the bound program's analysis artifacts.");
+        Module.PublishSemantics(program.Abi, program.TypeFacts);
         Program = program;
     }
 
@@ -187,9 +190,7 @@ public sealed class LoweringState
     public LoweringState(LoweringEnvironment environment)
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
-        Module = new StructuredModule(
-            Environment.Session.TypeFacts,
-            Environment.AbiCatalog)
+        Module = new StructuredModule()
             { ClassName = ClassSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);
         Storage = new StorageContext(Module);

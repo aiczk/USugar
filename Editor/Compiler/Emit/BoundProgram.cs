@@ -26,6 +26,8 @@ internal sealed class BoundProgram
     public readonly BoundSyntheticDispatchTable SyntheticDispatch;
     public readonly BoundAbiPlan Abi;
     public readonly BoundUdonTypeSystem Types;
+    public readonly UdonTypeFactRegistry TypeFacts;
+    public readonly AggregateLayoutTable Aggregates;
 
     public CallableDefinitionPlan Callables => Discovery.Callables;
     public ReachabilityPlan Reach => Discovery.Reach;
@@ -50,7 +52,9 @@ internal sealed class BoundProgram
         BoundMethodAnalysisTable methodAnalyses,
         BoundSyntheticDispatchTable syntheticDispatch,
         BoundAbiPlan abi,
-        BoundUdonTypeSystem types)
+        BoundUdonTypeSystem types,
+        UdonTypeFactRegistry typeFacts,
+        AggregateLayoutTable aggregates)
     {
         Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
         ClosureIdentities = closureIdentities
@@ -79,5 +83,12 @@ internal sealed class BoundProgram
             ?? throw new ArgumentNullException(nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
         Types = types ?? throw new ArgumentNullException(nameof(types));
+        TypeFacts = typeFacts ?? throw new ArgumentNullException(nameof(typeFacts));
+        if (!TypeFacts.IsFrozen)
+            throw new ArgumentException(
+                "A bound program requires frozen type facts.",
+                nameof(typeFacts));
+        Aggregates = aggregates
+            ?? throw new ArgumentNullException(nameof(aggregates));
     }
 }

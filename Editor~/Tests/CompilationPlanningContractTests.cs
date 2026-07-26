@@ -145,6 +145,8 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(BoundSyntheticDispatchTable));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundAbiPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundUdonTypeSystem));
+        Assert.Contains(fields, field => field.FieldType == typeof(UdonTypeFactRegistry));
+        Assert.Contains(fields, field => field.FieldType == typeof(AggregateLayoutTable));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
@@ -207,6 +209,47 @@ public class CompilationPlanningContractTests
                 compilation.GetSpecialType(
                     SpecialType.System_Int32)));
 
+        Assert.Contains(
+            "absent from the bound program",
+            error.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FrozenTypeFacts_AreDetachedAndRejectWrites()
+    {
+        var source = new UdonTypeFactRegistry();
+        source.RecordForTest(
+            "FrozenKnownType", isEnum: true, isValueType: true);
+
+        var snapshot = source.FreezeCopy();
+        source.RecordForTest(
+            "LaterSessionType", isEnum: false, isValueType: false);
+
+        Assert.True(snapshot.IsEnumFact("FrozenKnownType"));
+        Assert.Null(snapshot.IsEnumFact("LaterSessionType"));
+        Assert.Throws<InvalidOperationException>(() =>
+            snapshot.RecordForTest(
+                "ForbiddenWrite", isEnum: false, isValueType: false));
+    }
+
+    [Fact]
+    public void FrozenAggregateLayouts_RejectAnUnplannedQuestion()
+    {
+        var compilation = TestHelper.BuildCompilation(
+            "struct PlannedAggregate { public int Value; } "
+            + "struct MissingAggregate { public int Value; }",
+            "PlannedAggregate",
+            out _);
+        var planned = compilation.GetTypeByMetadataName("PlannedAggregate");
+        var missing = compilation.GetTypeByMetadataName("MissingAggregate");
+        var layouts = new AggregateLayoutTable();
+
+        layouts.GetLayout(planned);
+        layouts.Publish();
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            layouts.GetLayout(missing));
         Assert.Contains(
             "absent from the bound program",
             error.Message,

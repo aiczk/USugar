@@ -83,8 +83,6 @@ internal static class FieldPlanEmitter
                 initializer.FieldName, initializer.Operation, initializer.FieldType));
         foreach (var pair in plan.FieldChangeCallbacks)
             state.Initializers.FieldChangeCallbacks.Add(pair.Key, pair.Value);
-        foreach (var aggregateDefault in plan.AggregateDefaults)
-            state.Aggregates.FieldDefaults.Add(aggregateDefault);
         foreach (var delegateField in plan.DelegateFields)
             state.Synthetics.DelegateFields.Add(delegateField);
     }

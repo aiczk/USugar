@@ -5,9 +5,10 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
-/// Deeply frozen ABI input to body lowering. Exact registry entries and every
-/// semantic query result are copied before <see cref="BoundProgram"/> is
-/// published; no catalog or binder survives this boundary.
+/// Frozen ABI input to body lowering. The immutable installed-SDK schema is
+/// shared, while every program-specific semantic query result is copied before
+/// <see cref="BoundProgram"/> is published; no catalog or binder survives this
+/// boundary.
 /// </summary>
 internal sealed class BoundAbiPlan
 {
@@ -16,14 +17,11 @@ internal sealed class BoundAbiPlan
     readonly IReadOnlyDictionary<string, string> _missingFeatures;
 
     internal BoundAbiPlan(
-        IDictionary<string, UdonExternPrototype> exact,
+        IReadOnlyDictionary<string, UdonExternPrototype> exact,
         IDictionary<string, BoundExtern> decisions,
         IDictionary<string, string> missingFeatures)
     {
-        _exact = new ReadOnlyDictionary<string, UdonExternPrototype>(
-            new Dictionary<string, UdonExternPrototype>(
-                exact ?? throw new ArgumentNullException(nameof(exact)),
-                StringComparer.Ordinal));
+        _exact = exact ?? throw new ArgumentNullException(nameof(exact));
         _decisions = new ReadOnlyDictionary<string, BoundExtern>(
             new Dictionary<string, BoundExtern>(
                 decisions ?? throw new ArgumentNullException(nameof(decisions)),
@@ -33,6 +31,15 @@ internal sealed class BoundAbiPlan
                 missingFeatures
                 ?? throw new ArgumentNullException(nameof(missingFeatures)),
                 StringComparer.Ordinal));
+    }
+
+    internal static BoundAbiPlan ExactCatalog(UdonAbiCatalog catalog)
+    {
+        if (catalog == null) throw new ArgumentNullException(nameof(catalog));
+        return new BoundAbiPlan(
+            catalog.ExactPrototypes,
+            new Dictionary<string, BoundExtern>(StringComparer.Ordinal),
+            new Dictionary<string, string>(StringComparer.Ordinal));
     }
 
     internal bool ContainsExact(UdonAbiKey key)
@@ -283,9 +290,7 @@ internal sealed class BoundAbiPlanBuilder
         RequireMutable();
         _published = true;
         return new BoundAbiPlan(
-            _catalog.Prototypes.ToDictionary(
-                prototype => prototype.RegisteredName,
-                StringComparer.Ordinal),
+            _catalog.ExactPrototypes,
             _decisions,
             _missingFeatures);
     }

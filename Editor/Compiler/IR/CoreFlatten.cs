@@ -12,20 +12,19 @@ public static class CoreFlatten
     public static FlatModule Lower(StructuredModule module)
     {
         if (module == null) throw new ArgumentNullException(nameof(module));
-        var abiCatalog = module.AbiCatalog
-            ?? throw new InvalidOperationException("Core flattening requires a Udon ABI catalog.");
+        var abi = module.RequireAbi();
         var result = new FlatModule(module);
         foreach (var function in module.Functions)
-            result.Functions.Add(Lower(function, abiCatalog));
+            result.Functions.Add(Lower(function, abi));
         return result;
     }
 
-    public static FlatFunction Lower(StructuredFunction f, UdonAbiCatalog abiCatalog)
+    internal static FlatFunction Lower(StructuredFunction f, BoundAbiPlan abi)
     {
         if (f == null) throw new ArgumentNullException(nameof(f));
-        if (abiCatalog == null) throw new ArgumentNullException(nameof(abiCatalog));
+        if (abi == null) throw new ArgumentNullException(nameof(abi));
         var output = new FlatFunction(f);
-        var ctx = new Ctx(output, abiCatalog);
+        var ctx = new Ctx(output, abi);
         ctx.Current = ctx.NewBlock();
 
         PreScanLabels(f.Body, ctx);
@@ -435,20 +434,21 @@ public static class CoreFlatten
     sealed class Ctx
     {
         public readonly FlatFunction Func;
-        public readonly UdonAbiCatalog AbiCatalog;
+        public readonly BoundAbiPlan Abi;
         public readonly Stack<(FlatBlock Exit, FlatBlock Continue)> LoopStack =
             new Stack<(FlatBlock, FlatBlock)>();
         public readonly Dictionary<string, FlatBlock> LabelBlocks =
             new Dictionary<string, FlatBlock>();
         public FlatBlock Current;
 
-        public Ctx(FlatFunction f, UdonAbiCatalog abiCatalog)
+        public Ctx(FlatFunction f, BoundAbiPlan abi)
         {
             Func = f;
-            AbiCatalog = abiCatalog;
+            Abi = abi;
         }
 
-        public BoundExtern Bind(UdonAbiKey signature) => AbiCatalog.Require(signature);
+        public BoundExtern Bind(UdonAbiKey signature)
+            => Abi.RequireExact(signature);
 
         public FlatBlock NewBlock() => Func.NewBlock();
 

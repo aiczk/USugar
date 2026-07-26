@@ -81,7 +81,7 @@ public sealed class FlatModule
     public readonly List<FlatFunction> Functions = new List<FlatFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
     public readonly UdonTypeFactRegistry TypeFacts;
-    public readonly UdonAbiCatalog AbiCatalog;
+    internal readonly BoundAbiPlan Abi;
     public readonly string ClassName;
 
     internal FlatModule(StructuredModule source)
@@ -95,7 +95,7 @@ public sealed class FlatModule
                 SyncMode = field.SyncMode,
             });
         TypeFacts = source.TypeFacts;
-        AbiCatalog = source.AbiCatalog;
+        Abi = source.RequireAbi();
         ClassName = source.ClassName;
     }
 
@@ -103,7 +103,8 @@ public sealed class FlatModule
         string className = null)
     {
         TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
-        AbiCatalog = abiCatalog;
+        if (abiCatalog != null)
+            Abi = BoundAbiPlan.ExactCatalog(abiCatalog);
         ClassName = className;
     }
 
@@ -218,7 +219,6 @@ public sealed class VerifiedFlatModule
     public IReadOnlyList<VerifiedFlatFunction> Functions { get; }
     public IReadOnlyList<VerifiedFieldDecl> Fields { get; }
     public UdonTypeFactRegistry TypeFacts { get; }
-    public UdonAbiCatalog AbiCatalog { get; }
     public string ClassName { get; }
 
     VerifiedFlatModule(FlatModule source)
@@ -228,7 +228,6 @@ public sealed class VerifiedFlatModule
         Fields = Array.AsReadOnly(source.Fields
             .Select(field => new VerifiedFieldDecl(field)).ToArray());
         TypeFacts = source.TypeFacts;
-        AbiCatalog = source.AbiCatalog;
         ClassName = source.ClassName;
     }
 

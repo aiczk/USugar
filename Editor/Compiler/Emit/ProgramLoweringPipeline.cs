@@ -1045,6 +1045,10 @@ internal sealed class ProgramLoweringPipeline
             discovery, methodBodies, abiBuilder);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.RecursionContext.SetPlan(recursion);
+        var abi = abiBuilder.Publish();
+        var types = _environment.Types.Publish();
+        var typeFacts = _environment.Session.TypeFacts.FreezeCopy();
+        var aggregates = _state.Aggregates.Publish();
         var program = new BoundProgram(
             discovery,
             closureIdentities,
@@ -1061,8 +1065,10 @@ internal sealed class ProgramLoweringPipeline
             methodBodies,
             methodAnalyses,
             syntheticDispatch,
-            abiBuilder.Publish(),
-            _environment.Types.Publish());
+            abi,
+            types,
+            typeFacts,
+            aggregates);
         _state.PublishBoundProgram(program);
         _state.BeginBodyEmission();
         EmitRegisteredBodies(program);
@@ -1135,7 +1141,11 @@ internal sealed class ProgramLoweringPipeline
         var constantBuilder =
             new BoundConstantTableBuilder(_compilation);
         var typePlanner =
-            new TypeDemandPlanner(_environment.Types, _compilation);
+            new TypeDemandPlanner(
+                _environment.Types, _compilation, _state.Aggregates);
+
+        foreach (var aggregateDefault in discovery.Fields.AggregateDefaults)
+            typePlanner.Plan(aggregateDefault.AggregateType, null);
 
         void BindTree(
             IOperation operation,
@@ -1565,7 +1575,7 @@ internal sealed class ProgramLoweringPipeline
         // barrier and later prepend it to every export; tying these operations to _start leaves a
         // receiver observably half-constructed during cross-behaviour startup calls.
         bool hasProgramInitializers = _fieldInitOps.Count > 0 || _fieldChangeCallbacks.Count > 0
-            || _state.Aggregates.FieldDefaults.Count > 0;
+            || _state.Program.Fields.AggregateDefaults.Count > 0;
         if (hasProgramInitializers)
         {
             var initialization = new ProgramInitializationEmitter(_state);
@@ -1949,7 +1959,7 @@ internal sealed class ProgramLoweringPipeline
         _state.Methods.CurrentOwnerSpecs = System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty;
         // Default-init aggregate (struct/tuple) fields with no explicit initializer FIRST, so any explicit
         // initializer that references one sees a non-null backing array (C# default-then-initializer order).
-        foreach (var (fieldId, aggType) in _state.Aggregates.FieldDefaults)
+        foreach (var (fieldId, aggType) in _state.Program.Fields.AggregateDefaults)
             _bridge.Store(fieldId, AggregateAbi.MintDefault(_builder, _state.Aggregates.GetLayout(aggType),
                 _state.Aggregates.GetLayout, GetStorageTypeName));
 

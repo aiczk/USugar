@@ -283,6 +283,8 @@ public sealed class UdonAbiCatalog
         out UdonTypeDescriptor descriptor)
         => _types.TryGetValue(id, out descriptor);
     internal IReadOnlyCollection<UdonExternPrototype> Prototypes => _externs.Values;
+    internal IReadOnlyDictionary<string, UdonExternPrototype> ExactPrototypes
+        => _externs;
     internal IReadOnlyList<KeyValuePair<string, UdonTypeFactRegistry.TypeFact>> TypeFacts
         => _types.Values
             .Where(descriptor => descriptor.TryGetFact(out _))

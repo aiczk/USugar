@@ -88,17 +88,21 @@ internal sealed class TypeDemandPlanner
 {
     readonly IUdonTypeSystem _types;
     readonly Compilation _compilation;
+    readonly AggregateLayoutTable _aggregates;
     readonly HashSet<string> _recording =
         new(StringComparer.Ordinal);
 
     public TypeDemandPlanner(
         IUdonTypeSystem types,
-        Compilation compilation)
+        Compilation compilation,
+        AggregateLayoutTable aggregates)
     {
         _types = types
             ?? throw new ArgumentNullException(nameof(types));
         _compilation = compilation
             ?? throw new ArgumentNullException(nameof(compilation));
+        _aggregates = aggregates
+            ?? throw new ArgumentNullException(nameof(aggregates));
         var intrinsicTypes = new[]
         {
             SpecialType.System_Object,
@@ -204,6 +208,12 @@ internal sealed class TypeDemandPlanner
             Record(argument, typeParameterMap);
     }
 
+    public void Plan(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap)
+        => Record(type, typeParameterMap);
+
     void Record(
         ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
@@ -211,12 +221,24 @@ internal sealed class TypeDemandPlanner
     {
         if (type == null || type.SpecialType == SpecialType.System_Void)
             return;
-        if (type is INamedTypeSymbol { IsAnonymousType: true })
-            return;
         var key = BoundTypeKey.Create(type, typeParameterMap);
         if (!_recording.Add(key)) return;
         try
         {
+            if (type is INamedTypeSymbol sourceAggregate
+                && (sourceAggregate.IsAnonymousType
+                    || TypeClassifier.IsObjectArrayEmulated(sourceAggregate)))
+                PlanAggregate(sourceAggregate, typeParameterMap);
+            var resolved = TypeEnvironment.CloseType(
+                _compilation, type, typeParameterMap);
+            if (resolved is INamedTypeSymbol aggregate
+                && (aggregate.IsAnonymousType
+                    || TypeClassifier.IsObjectArrayEmulated(aggregate))
+                && !SymbolEqualityComparer.Default.Equals(
+                    aggregate, type))
+                PlanAggregate(aggregate, typeParameterMap);
+            if (type is INamedTypeSymbol { IsAnonymousType: true })
+                return;
             _types.Describe(type, typeParameterMap);
             if (typeParameterMap != null
                 && type is INamedTypeSymbol openNamed
@@ -259,6 +281,16 @@ internal sealed class TypeDemandPlanner
         {
             _recording.Remove(key);
         }
+    }
+
+    void PlanAggregate(
+        INamedTypeSymbol aggregate,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap)
+    {
+        var layout = _aggregates.GetLayout(aggregate);
+        foreach (var field in layout.Fields)
+            Record(field.Type, typeParameterMap);
     }
 }
 

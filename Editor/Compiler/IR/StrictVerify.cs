@@ -44,10 +44,13 @@ public sealed class UdonTypeFactRegistry
 
 
     // Values are deterministic per name (Udon storage name ↔ representation category is 1:1), so
-    // installed-SDK seeding and concurrent source-minting races during Phase-2 emit are benign.
+    // installed-SDK seeding and concurrent source-minting races during materialization are benign.
     readonly ConcurrentDictionary<UdonTypeId, TypeFact> _facts = new();
     readonly ConcurrentDictionary<AssignabilityFact, byte> _assignability
         = new();
+    bool _frozen;
+
+    internal bool IsFrozen => _frozen;
 
     /// <summary>Record the minted name's facts. Names covered by a STRUCTURAL rule (primitives, arrays,
     /// the fold tags) are skipped: a folded name's runtime representation is fixed by the fold itself,
@@ -55,6 +58,7 @@ public sealed class UdonTypeFactRegistry
     /// must not poison the registry with IsValueType=true).</summary>
     public void Record(string udonName, ITypeSymbol symbol)
     {
+        RequireMutable();
         if (string.IsNullOrEmpty(udonName) || symbol == null) return;
         RecordSourceLowering(
             UdonTypeIdentity.FromCanonicalStorageName(udonName), symbol);
@@ -68,6 +72,7 @@ public sealed class UdonTypeFactRegistry
     internal void RecordSourceLowering(UdonTypeId storageType,
         ITypeSymbol symbol)
     {
+        RequireMutable();
         if (symbol == null) return;
         RecordHierarchy(storageType, symbol);
         Record(storageType,
@@ -81,6 +86,7 @@ public sealed class UdonTypeFactRegistry
     /// because the expected name did not originate in Roslyn source.</summary>
     internal void Record(string udonName, Type type)
     {
+        RequireMutable();
         if (string.IsNullOrEmpty(udonName) || type == null) return;
         if (type.IsByRef) type = type.GetElementType();
         if (type == null || type.IsGenericParameter) return;
@@ -94,6 +100,7 @@ public sealed class UdonTypeFactRegistry
 
     internal void Import(IEnumerable<KeyValuePair<string, TypeFact>> facts, string source)
     {
+        RequireMutable();
         if (facts == null) return;
         foreach (var pair in facts)
         {
@@ -106,6 +113,7 @@ public sealed class UdonTypeFactRegistry
     internal void ImportAssignability(
         IEnumerable<AssignabilityFact> facts)
     {
+        RequireMutable();
         if (facts == null) return;
         foreach (var fact in facts)
             _assignability.TryAdd(fact, 0);
@@ -119,6 +127,15 @@ public sealed class UdonTypeFactRegistry
 
     internal AssignabilityFact[] AssignabilitySnapshot()
         => _assignability.Keys.ToArray();
+
+    internal UdonTypeFactRegistry FreezeCopy()
+    {
+        var copy = new UdonTypeFactRegistry();
+        copy.Import(Snapshot(), "bound program snapshot");
+        copy.ImportAssignability(AssignabilitySnapshot());
+        copy._frozen = true;
+        return copy;
+    }
 
     public bool IsAssignableTo(string actual, string expected)
     {
@@ -137,9 +154,12 @@ public sealed class UdonTypeFactRegistry
 
     internal void RecordAssignableForTest(
         string actual, string expected)
-        => RecordAssignable(
+    {
+        RequireMutable();
+        RecordAssignable(
             UdonTypeIdentity.FromCanonicalStorageName(actual),
             UdonTypeIdentity.FromCanonicalStorageName(expected));
+    }
 
     void Record(UdonTypeId type, TypeFact requested, string source)
     {
@@ -214,8 +234,18 @@ public sealed class UdonTypeFactRegistry
             new AssignabilityFact(actual, expected), 0);
 
     internal void RecordForTest(string udonName, bool isEnum, bool isValueType)
-        => _facts[UdonTypeIdentity.FromCanonicalStorageName(udonName)]
+    {
+        RequireMutable();
+        _facts[UdonTypeIdentity.FromCanonicalStorageName(udonName)]
             = new TypeFact(isEnum, isValueType);
+    }
+
+    void RequireMutable()
+    {
+        if (_frozen)
+            throw new InvalidOperationException(
+                "The Udon type-fact snapshot is frozen.");
+    }
 
     /// <summary>FACT: is the name an enum tag (Int32-compatible)? true/false when known, null when the
     /// neither authoritative boundary supplied it — an unknown name is exactly what the relaxed check

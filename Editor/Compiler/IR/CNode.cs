@@ -269,14 +269,35 @@ public sealed class StructuredModule
 {
     public readonly List<StructuredFunction> Functions = new List<StructuredFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
-    public readonly UdonTypeFactRegistry TypeFacts;
-    public readonly UdonAbiCatalog AbiCatalog;
+    public UdonTypeFactRegistry TypeFacts { get; private set; }
+    BoundAbiPlan _abi;
     public string ClassName;
 
     public StructuredModule(UdonTypeFactRegistry typeFacts = null, UdonAbiCatalog abiCatalog = null)
     {
         TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
-        AbiCatalog = abiCatalog;
+        if (abiCatalog != null)
+            _abi = BoundAbiPlan.ExactCatalog(abiCatalog);
+    }
+
+    internal BoundAbiPlan RequireAbi()
+        => _abi ?? throw new InvalidOperationException(
+            "The structured module ABI was not published.");
+
+    internal void PublishSemantics(
+        BoundAbiPlan abi,
+        UdonTypeFactRegistry typeFacts)
+    {
+        if (_abi != null)
+            throw new InvalidOperationException(
+                "The structured module semantics were published twice.");
+        if (typeFacts == null)
+            throw new ArgumentNullException(nameof(typeFacts));
+        if (!typeFacts.IsFrozen)
+            throw new InvalidOperationException(
+                "Structured IR requires a frozen type-fact snapshot.");
+        _abi = abi ?? throw new ArgumentNullException(nameof(abi));
+        TypeFacts = typeFacts;
     }
 
     public StructuredFunction AddFunction(string name, string exportName = null)
