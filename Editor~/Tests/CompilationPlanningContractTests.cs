@@ -40,14 +40,15 @@ public class CompilationPlanningContractTests
     }
 
     [Fact]
-    public void UasmEmitter_IsAThinPipelineFacade()
+    public void UasmEmitter_OwnsTheCompilerPipeline()
     {
-        var fields = typeof(UasmEmitter).GetFields(
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-
-        var pipeline = Assert.Single(fields);
-        Assert.Equal("_pipeline", pipeline.Name);
-        Assert.Equal(typeof(ProgramLoweringPipeline), pipeline.FieldType);
+        var assembly = typeof(UasmEmitter).Assembly;
+        Assert.Null(assembly.GetType("ProgramLoweringPipeline"));
+        Assert.DoesNotContain(
+            typeof(UasmEmitter).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic
+                | BindingFlags.DeclaredOnly),
+            field => field.Name == "_pipeline");
     }
 
     [Fact]

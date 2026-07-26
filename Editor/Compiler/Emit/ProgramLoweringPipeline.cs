@@ -6,7 +6,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class ProgramLoweringPipeline
+public sealed class UasmEmitter
 {
     readonly CompilationSession _session;
     readonly MaterializingUdonTypeSystem _materializingTypes;
@@ -54,14 +54,14 @@ internal sealed class ProgramLoweringPipeline
 
     static Dictionary<string, string> UdonEventNames => LayoutPlanBuilder.UdonEventNames;
 
-    internal ProgramLoweringPipeline(Compilation compilation, INamedTypeSymbol classSymbol,
+    public UasmEmitter(Compilation compilation, INamedTypeSymbol classSymbol,
         FrozenLayoutPlan planner = null,
         UdonAbiCatalog externRegistry = null)
         : this(CreateSession(compilation, externRegistry), classSymbol, planner)
     {
     }
 
-    internal ProgramLoweringPipeline(CompilationSession session, INamedTypeSymbol classSymbol,
+    public UasmEmitter(CompilationSession session, INamedTypeSymbol classSymbol,
         FrozenLayoutPlan planner = null)
     {
         if (session == null) throw new ArgumentNullException(nameof(session));

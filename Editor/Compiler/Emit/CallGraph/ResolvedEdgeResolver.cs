@@ -18,9 +18,9 @@ using Microsoft.CodeAnalysis.Operations;
 /// Built per-class — thread-safe (no shared mutable state beyond the emitter it reads).</summary>
 public sealed class ResolvedEdgeResolver
 {
-    readonly ProgramLoweringPipeline _emitter;
+    readonly UasmEmitter _emitter;
 
-    internal ResolvedEdgeResolver(ProgramLoweringPipeline emitter) { _emitter = emitter; }
+    internal ResolvedEdgeResolver(UasmEmitter emitter) { _emitter = emitter; }
 
     internal IEnumerable<INamedTypeSymbol> EnumeratePortableClassTypes()
     {
