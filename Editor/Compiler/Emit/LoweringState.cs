@@ -5,9 +5,8 @@ using Microsoft.CodeAnalysis;
 
 internal sealed class LoweringState
 {
-    readonly LoweringEnvironment Environment;
-    public Compilation Compilation => Environment.Compilation;
-    public INamedTypeSymbol ClassSymbol => Environment.ClassSymbol;
+    public Compilation Compilation { get; }
+    public INamedTypeSymbol ClassSymbol { get; }
     internal BoundAbiPlan BoundAbi
         => RequireProgram().Abi;
     public FrozenLayoutPlan Planner { get; private set; }
@@ -294,11 +293,20 @@ internal sealed class LoweringState
     // (VM-proven: loop-var reads after a mutating call 1112 vs CLR 102). MEMBERSHIP-ONLY set (§1.5).
     public readonly HashSet<ILocalSymbol> ForeachIterationLocals = new(SymbolEqualityComparer.Default);
 
-    public LoweringState(LoweringEnvironment environment)
+    public LoweringState(
+        Compilation compilation,
+        INamedTypeSymbol classSymbol,
+        FrozenLayoutPlan planner,
+        IUdonTypeSystem types)
     {
-        Environment = environment ?? throw new ArgumentNullException(nameof(environment));
-        Planner = Environment.Planner;
-        Types = Environment.Types;
+        Compilation = compilation
+            ?? throw new ArgumentNullException(nameof(compilation));
+        ClassSymbol = classSymbol
+            ?? throw new ArgumentNullException(nameof(classSymbol));
+        Planner = planner
+            ?? throw new ArgumentNullException(nameof(planner));
+        Types = types
+            ?? throw new ArgumentNullException(nameof(types));
         Module = new StructuredModule()
             { ClassName = ClassSymbol.ToDisplayString() };
         Builder = new CoreBuilder(Module);

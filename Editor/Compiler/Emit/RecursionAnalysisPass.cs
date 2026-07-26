@@ -7,19 +7,19 @@ using Microsoft.CodeAnalysis.Operations;
 /// <summary>Derives the immutable recursion facts consumed by body lowering.</summary>
 internal sealed class RecursionAnalysisPass
 {
-    readonly LoweringEnvironment _environment;
+    readonly IUdonTypeSystem _types;
     readonly LoweringState _state;
     readonly FrozenLayoutPlan _planner;
     readonly INamedTypeSymbol _classSymbol;
     readonly ResolvedEdgeResolver _edgeResolver;
 
     internal RecursionAnalysisPass(
-        LoweringEnvironment environment,
+        IUdonTypeSystem types,
         LoweringState state,
         FrozenLayoutPlan planner,
         ResolvedEdgeResolver edgeResolver)
     {
-        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _types = types ?? throw new ArgumentNullException(nameof(types));
         _state = state ?? throw new ArgumentNullException(nameof(state));
         _planner = planner ?? throw new ArgumentNullException(nameof(planner));
         _edgeResolver = edgeResolver ?? throw new ArgumentNullException(nameof(edgeResolver));
@@ -354,7 +354,7 @@ internal sealed class RecursionAnalysisPass
     string DispatchSigOrWildcard(IMethodSymbol m)
         => SigInvolvesTypeParam(m)
             ? null
-            : DelegateAbi.BuildSigPart(m, _environment.Types);
+            : DelegateAbi.BuildSigPart(m, _types);
 
     // Two signatures match if equal, or either is WILDCARD (a type-param-involving sig matches anything).
     static bool SigsMatch(string a, string b) => a == null || b == null || a == b;

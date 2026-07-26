@@ -57,17 +57,9 @@ public class CompilationPlanningContractTests
         Assert.Null(assembly.GetType("EmitContext"));
         Assert.Null(assembly.GetType("LoweringDispatch"));
 
-        var environmentFields = typeof(LoweringEnvironment).GetFields(
-            BindingFlags.Instance | BindingFlags.Public | BindingFlags.DeclaredOnly);
-        Assert.NotEmpty(environmentFields);
-        Assert.All(environmentFields, field => Assert.True(field.IsInitOnly, field.Name));
-
         var stateFields = typeof(LoweringState).GetFields(
             BindingFlags.Instance | BindingFlags.Public
             | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-        Assert.Contains(stateFields,
-            field => field.Name == "Environment"
-                     && field.FieldType == typeof(LoweringEnvironment));
         var operations = typeof(LoweringState).GetProperty(
             "Operations", BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(operations);
@@ -78,7 +70,6 @@ public class CompilationPlanningContractTests
             field => typeof(Delegate).IsAssignableFrom(field.FieldType));
         Assert.DoesNotContain(stateFields, field =>
             field.FieldType == typeof(CompilationSession)
-            || field.FieldType == typeof(Compilation)
             || field.FieldType == typeof(LayoutPlanBuilder)
             || field.FieldType == typeof(UdonAbiCatalog));
     }
@@ -133,7 +124,6 @@ public class CompilationPlanningContractTests
     {
         var implementationTypes = new[]
         {
-            typeof(LoweringEnvironment),
             typeof(LoweringState),
             typeof(LoweringServices),
             typeof(OperationLowerer),
@@ -193,7 +183,6 @@ public class CompilationPlanningContractTests
             typeof(MaterializingUdonTypeSystem),
             typeof(CallableBodyGraph),
             typeof(StructuredFunction),
-            typeof(LoweringEnvironment),
             typeof(LoweringState),
         };
         Assert.DoesNotContain(fields, field =>
@@ -227,10 +216,6 @@ public class CompilationPlanningContractTests
             property => Assert.Null(property.SetMethod));
 
         Assert.Null(typeof(LoweringState).GetProperty("Abi"));
-        Assert.DoesNotContain(
-            typeof(LoweringEnvironment).GetFields(
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
-            field => field.FieldType == typeof(UdonAbiBinder));
         Assert.Null(typeof(LoweringServices).GetMethod(
             "RegisterGenericSpecialization",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));

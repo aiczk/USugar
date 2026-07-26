@@ -8,7 +8,8 @@ using Microsoft.CodeAnalysis.Operations;
 
 internal sealed class ProgramLoweringPipeline
 {
-    readonly LoweringEnvironment _environment;
+    readonly CompilationSession _session;
+    readonly MaterializingUdonTypeSystem _materializingTypes;
     readonly LoweringState _state;
     readonly OperationLowerer _operations;
     readonly SyntheticBridgeBuilder _bridge;
@@ -19,7 +20,7 @@ internal sealed class ProgramLoweringPipeline
     VirtualDispatch _virtualDispatch;
 
 
-    // Phase-local projections; immutable services remain on _environment.
+    // Phase-local projections; immutable services remain on the session.
     Compilation _compilation => _state.Compilation;
     INamedTypeSymbol _classSymbol => _state.ClassSymbol;
     StructuredModule _module => _state.Module;
@@ -45,7 +46,7 @@ internal sealed class ProgramLoweringPipeline
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
-    internal CompilationSession Session => _environment.Session;
+    internal CompilationSession Session => _session;
     internal IUdonTypeSystem Types => _state.Types;
     internal IEnumerable<OperationKind> HandledOperationKinds
         => _operations.HandledOperationKinds;
@@ -63,9 +64,17 @@ internal sealed class ProgramLoweringPipeline
         FrozenLayoutPlan planner = null)
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
-        _environment = new LoweringEnvironment(
-            session, classSymbol, planner ?? new LayoutPlanBuilder(session).Build());
-        _state = new LoweringState(_environment);
+        _session = session;
+        var layouts =
+            planner ?? new LayoutPlanBuilder(session).Build();
+        _materializingTypes =
+            new MaterializingUdonTypeSystem(
+                session.Types, layouts, session.Compilation);
+        _state = new LoweringState(
+            session.Compilation,
+            classSymbol,
+            layouts,
+            _materializingTypes);
         _operations = new OperationLowerer(_state);
         _lowering = _operations.Services;
         _bridge = new SyntheticBridgeBuilder(_state.Builder);
@@ -80,6 +89,46 @@ internal sealed class ProgramLoweringPipeline
             throw new ArgumentNullException(nameof(externRegistry),
                 "USugar compilation requires the installed SDK's Udon ABI catalog.");
         return new CompilationSession(compilation, externRegistry);
+    }
+
+    string SourceStorageName(ISymbol member)
+    {
+        if (member is IPropertySymbol explicitProperty
+            && explicitProperty.ExplicitInterfaceImplementations.Length > 0)
+            return "__ifaceprop_"
+                   + NameAllocator.Sanitize(
+                       ClassTypeObjectContext.SpecKey(
+                           explicitProperty.ContainingType))
+                   + "_"
+                   + NameAllocator.Sanitize(
+                       explicitProperty.MetadataName);
+        if (member == null
+            || member.ContainingType == null
+            || SymbolEqualityComparer.Default.Equals(
+                member.ContainingType, _classSymbol))
+            return member?.Name;
+        for (var type = _classSymbol;
+             type != null
+             && !SymbolEqualityComparer.Default.Equals(
+                 type, member.ContainingType);
+             type = type.BaseType)
+            if (type.GetMembers(member.Name).Any(candidate =>
+                    candidate is IFieldSymbol or IPropertySymbol
+                    && !candidate.IsStatic))
+                return member is IPropertySymbol
+                    ? "__baseprop_"
+                      + NameAllocator.Sanitize(
+                          ClassTypeObjectContext.SpecKey(
+                              member.ContainingType))
+                      + "_"
+                      + NameAllocator.Sanitize(member.MetadataName)
+                    : "__basefield_"
+                      + NameAllocator.Sanitize(
+                          ClassTypeObjectContext.SpecKey(
+                              member.ContainingType))
+                      + "_"
+                      + NameAllocator.Sanitize(member.MetadataName);
+        return member.Name;
     }
 
     // Type name resolution helper
@@ -116,7 +165,11 @@ internal sealed class ProgramLoweringPipeline
     ResolvedEdgeResolver _edgeResolver;
     internal ResolvedEdgeResolver EdgeResolver => _edgeResolver ??= new ResolvedEdgeResolver(this);
     RecursionAnalysisPass RecursionAnalysis => _recursionAnalysis ??=
-        new RecursionAnalysisPass(_environment, _state, _planner, EdgeResolver);
+        new RecursionAnalysisPass(
+            _materializingTypes,
+            _state,
+            _planner,
+            EdgeResolver);
     internal ResolvedEdgeResolver DebugBuildResolver() => EdgeResolver; // test entry (post-Emit state)
 
     // C4: the seeded-context reads the relocated CallEdge classifier consumes (null/empty before Emit
@@ -436,7 +489,7 @@ internal sealed class ProgramLoweringPipeline
             var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            var storageName = _environment.SourceStorageName(prop);
+            var storageName = SourceStorageName(prop);
             _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                 isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
         }
@@ -524,7 +577,7 @@ internal sealed class ProgramLoweringPipeline
                             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                             if (constValue == null)
                                 _fieldDiscovery.InstanceInitializers.Add(new FieldInitializerPlan(
-                                    _environment.SourceStorageName(member), initOp, member.Type));
+                                    SourceStorageName(member), initOp, member.Type));
                         }
                     }
                 }
@@ -538,7 +591,7 @@ internal sealed class ProgramLoweringPipeline
                 // the field compiled clean but shipped unsynced (networking silently dead on device).
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                var memberStorageName = _environment.SourceStorageName(member);
+                var memberStorageName = SourceStorageName(member);
                 _fieldDiscovery.DeclareField(
                     memberStorageName,
                     new StorageType(udonType),
@@ -598,8 +651,8 @@ internal sealed class ProgramLoweringPipeline
                     // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
                     if (isAuto)
                         _fieldDiscovery.DeclareGeneratedField(
-                            _environment.SourceStorageName(prop), GetStorageType(prop.Type),
-                            ResolveAutoPropInitializer(_environment.SourceStorageName(prop), prop));
+                            SourceStorageName(prop), GetStorageType(prop.Type),
+                            ResolveAutoPropInitializer(SourceStorageName(prop), prop));
                     continue;
                 }
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
@@ -607,7 +660,7 @@ internal sealed class ProgramLoweringPipeline
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                var storageName = _environment.SourceStorageName(prop);
+                var storageName = SourceStorageName(prop);
                 _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                     isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
             }
@@ -909,13 +962,15 @@ internal sealed class ProgramLoweringPipeline
         // argument/return convention storage. DelegateConventionStorage declares the complete surface,
         // including env, when an actual bridge is emitted.
         var (convArgs, convRet, _) = LoweringServices.GetConventionFieldNames(
-            delegateType, _environment.Types);
+            delegateType, _materializingTypes);
         for (int ci = 0; ci < convArgs.Length; ci++)
             _fieldDiscovery.TryDeclareVar(convArgs[ci],
-                _environment.Types.GetStorageType(invoke.Parameters[ci].Type, _typeParamMap));
+                _materializingTypes.GetStorageType(
+                    invoke.Parameters[ci].Type, _typeParamMap));
         if (convRet != null)
             _fieldDiscovery.TryDeclareVar(convRet,
-                _environment.Types.GetStorageType(invoke.ReturnType, _typeParamMap));
+                _materializingTypes.GetStorageType(
+                    invoke.ReturnType, _typeParamMap));
 
         if (member.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
             is VariableDeclaratorSyntax { Initializer: not null } dlgDeclarator)
@@ -986,7 +1041,7 @@ internal sealed class ProgramLoweringPipeline
             foreach (var p in t.GetMembers(autoProp.Name).OfType<IPropertySymbol>())
                 if (IsOverrideChainAncestor(p, autoProp))
                     return BaseAutoPropBackingName(autoProp);
-        return _environment.SourceStorageName(autoProp);
+        return SourceStorageName(autoProp);
     }
 
     /// <summary>Round-8 [R2]: auto-property initializers (IPropertyInitializerOperation) were
@@ -1126,7 +1181,7 @@ internal sealed class ProgramLoweringPipeline
         var syntheticDemands = _state.PublishSyntheticDemands();
         var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var abiBuilder = new BoundAbiPlanBuilder(
-            _environment.AbiCatalog);
+            _session.AbiCatalog);
         var boundSource = BindSourceSemantics(
             fields,
             reach,
@@ -1136,8 +1191,8 @@ internal sealed class ProgramLoweringPipeline
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.SetRecursionPlan(recursion);
         var abi = abiBuilder.Publish();
-        var types = _environment.Types.Publish();
-        var typeFacts = _environment.Session.TypeFacts.FreezeCopy();
+        var types = _materializingTypes.Publish();
+        var typeFacts = _session.TypeFacts.FreezeCopy();
         var aggregates = _state.Aggregates.Publish();
         var classTypes = _state.ClassTypes.Publish();
         var program = new BoundProgram(
@@ -1247,7 +1302,9 @@ internal sealed class ProgramLoweringPipeline
                 SymbolEqualityComparer.Default);
         var typePlanner =
             new TypeDemandPlanner(
-                _environment.Types, _compilation, _state.Aggregates);
+                _materializingTypes,
+                _compilation,
+                _state.Aggregates);
 
         foreach (var aggregateDefault in fields.AggregateDefaults)
             typePlanner.Plan(aggregateDefault.AggregateType, null);
@@ -1275,7 +1332,7 @@ internal sealed class ProgramLoweringPipeline
             if (operation is IFieldReferenceOperation fieldReference)
             {
                 constantFields.Add(fieldReference.Field);
-                var storageName = _environment.SourceStorageName(
+                var storageName = SourceStorageName(
                     fieldReference.Field);
                 if (sourceStorageNames.TryGetValue(
                         fieldReference.Field, out var existingName))
@@ -1653,10 +1710,10 @@ internal sealed class ProgramLoweringPipeline
             {
                 var containingArgPart = string.Join("_",
                     sm.ContainingType.TypeArguments.Select(
-                        type => _environment.Types.GetUdonTypeName(type)));
+                        type => _materializingTypes.GetUdonTypeName(type)));
                 var methodArgPart = sm.IsGenericMethod
                     ? "_" + string.Join("_", sm.TypeArguments.Select(
-                        type => _environment.Types.GetUdonTypeName(type)))
+                        type => _materializingTypes.GetUdonTypeName(type)))
                     : "";
                 typeArgSuffix = $"_{containingArgPart}{methodArgPart}";
             }

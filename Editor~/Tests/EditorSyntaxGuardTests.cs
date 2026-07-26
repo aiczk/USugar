@@ -240,12 +240,10 @@ public class EditorSyntaxGuardTests
             "Program?.",
             "Program != null ?",
             "Program == null ?",
-            "?? Environment.",
             "_plannedClosure",
             "_plannedCapture",
             "_plannedRecursion",
             "TypeEnvironment.CloseType",
-            "Environment.SourceStorageName",
         };
         var failures = forbidden.Where(token =>
             source.Contains(token, StringComparison.Ordinal))
