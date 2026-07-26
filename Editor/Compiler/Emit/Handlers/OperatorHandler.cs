@@ -144,7 +144,7 @@ internal sealed class OperatorHandler
         if (op.IsLifted
             && (EmitPolicy.IsNullableT(op.LeftOperand.Type, out _) || EmitPolicy.IsNullableT(op.RightOperand.Type, out _)))
         {
-            return EmitLiftedBinary(op, operatorMethod);
+            return EmitLiftedBinary(op);
         }
 
         // ── Aggregate (tuple) structural equality ──
@@ -217,7 +217,8 @@ internal sealed class OperatorHandler
         // long/ulong/uint % : Udon has no op_Remainder extern for these; lower to a - (a / b) * b via the
         // shared polyfill (uint included — it has Division/Multiplication/Subtraction but no Remainder).
         if (op.OperatorKind == BinaryOperatorKind.Remainder && LoweringServices.RemainderNeedsPolyfill(resultType))
-            return _lowering.EmitRemainderViaDivision(leftVal, rightVal, resultType);
+            return _lowering.EmitRemainderViaDivision(
+                op, leftVal, rightVal, resultType);
 
         // Udon has no byte/sbyte/short/ushort operators. C# promotes a plain small int to int before the op, but
         // a small-int-backed ENUM keeps its underlying width (enum|enum stays enum, etc.), so the result type is
@@ -229,23 +230,15 @@ internal sealed class OperatorHandler
             var rightU = UnderlyingUdon(op.RightOperand.Type);
             var li = leftU == "SystemInt32" ? leftVal : _lowering.EmitNarrowingConvert(leftVal, leftU, "SystemInt32");
             var ri = rightU == "SystemInt32" ? rightVal : _lowering.EmitNarrowingConvert(rightVal, rightU, "SystemInt32");
-            var int32 = _lowering.Compilation.GetSpecialType(SpecialType.System_Int32);
             var raw = _lowering.ExternCall(
-                ExternResolver.ResolveBuiltInBinaryExtern(op.OperatorKind,
-                    _lowering.ResolveType(int32), _lowering.ResolveType(int32),
-                    _lowering.ResolveType(int32), _lowering.GetStorageTypeName),
+                _lowering.RequireBoundAbi(
+                    op, BoundAbiRole.Operator),
                 new List<CLeaf> { li, ri }, StorageTypes.Int32);
             return _lowering.EmitNarrowingConvert(raw, "SystemInt32", resultType);
         }
 
-        var sig = operatorMethod != null
-            ? _lowering.RequireBoundAbi(
-                op, BoundAbiRole.Operator)
-            : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
-                op.OperatorKind,
-                _lowering.ResolveType(op.LeftOperand.Type),
-                _lowering.ResolveType(op.RightOperand.Type),
-                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
+        var sig = _lowering.RequireBoundAbi(
+            op, BoundAbiRole.Operator);
 
         // UnityEngineObject equality/inequality: cast operands to UnityEngineObject temps
         if (operatorMethod != null
@@ -302,7 +295,7 @@ internal sealed class OperatorHandler
             op.OperatorKind);
 
     // Lifted binary operator on Nullable<T> (null propagation) — see LoweringServices.EmitLiftedBinaryCore.
-    CLeaf EmitLiftedBinary(IBinaryOperation op, IMethodSymbol operatorMethod)
+    CLeaf EmitLiftedBinary(IBinaryOperation op)
     {
         var leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out var lu);
         var rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out var ru);
@@ -312,7 +305,7 @@ internal sealed class OperatorHandler
             op,
             leftVal, leftNullable, leftNullable ? lu : op.LeftOperand.Type,
             rightVal, rightNullable, rightNullable ? ru : op.RightOperand.Type,
-            op.OperatorKind, operatorMethod, op.Type);
+            op.OperatorKind, op.Type);
     }
 
     CLeaf VisitConditionalAnd(IBinaryOperation op)
@@ -395,10 +388,8 @@ internal sealed class OperatorHandler
         var operandVal = _lowering.VisitExpression(op.Operand);
         var resultType = _lowering.GetStorageTypeName(op.Type);
 
-        var sig = operatorMethod != null && !ExternResolver.IsNumericType(op.Operand.Type)
-            ? _lowering.RequireBoundAbi(
-                op, BoundAbiRole.Operator)
-            : _lowering.State.BoundAbi.RequireExact(BuildBuiltinUnaryKey(op));
+        var sig = _lowering.RequireBoundAbi(
+            op, BoundAbiRole.Operator);
 
         return _lowering.ExternCall(sig, new List<CLeaf> { operandVal }, new StorageType(resultType));
     }
@@ -429,11 +420,13 @@ internal sealed class OperatorHandler
                 op,
                 _lowering.VisitExpression(op.Operand), true, opUnderlying,
                 _lowering.Const(allBitsValue, new StorageType(resU)), false, resUnderlying,
-                BinaryOperatorKind.ExclusiveOr, null, op.Type);
+                BinaryOperatorKind.ExclusiveOr, op.Type);
         }
 
         return NullableAbi.EmitLiftedUnary(_lowering.Builder, _lowering.VisitExpression(op.Operand),
-            opUnderlying, resUnderlying, op.OperatorKind, _lowering.GetStorageTypeName,
+            opUnderlying, resUnderlying,
+            _lowering.RequireBoundAbi(op, BoundAbiRole.Operator),
+            _lowering.GetStorageTypeName,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_lowering.Builder, boxed, underlying,
                 _lowering.Compilation.GetSpecialType(SpecialType.System_Int32), _lowering.GetStorageTypeName));
     }
@@ -457,7 +450,9 @@ internal sealed class OperatorHandler
             or SpecialType.System_Int16 or SpecialType.System_UInt16)
         {
             var asInt = operandType == "SystemInt32" ? operandVal : _lowering.EmitNarrowingConvert(operandVal, operandType, "SystemInt32");
-            var xored = _lowering.ExternCall(UdonAbiKey.Method("SystemInt32", "op_LogicalXor", new[] { "SystemInt32", "SystemInt32" }, "SystemInt32"),
+            var xored = _lowering.ExternCall(
+                _lowering.RequireBoundAbi(
+                    op, BoundAbiRole.Operator),
                 new List<CLeaf> { asInt, _lowering.Const(-1, StorageTypes.Int32) }, StorageTypes.Int32);
             return resultType == "SystemInt32" ? xored : _lowering.EmitNarrowingConvert(xored, "SystemInt32", resultType);
         }
@@ -474,10 +469,8 @@ internal sealed class OperatorHandler
         var allBitsConst = _lowering.Const(allBitsValue, new StorageType(operandType));
 
         return _lowering.ExternCall(
-            ExternResolver.ResolveBuiltInBinaryExtern(
-                BinaryOperatorKind.ExclusiveOr,
-                _lowering.ResolveType(op.Operand.Type), _lowering.ResolveType(op.Operand.Type),
-                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName),
+            _lowering.RequireBoundAbi(
+                op, BoundAbiRole.Operator),
             new List<CLeaf> { operandVal, allBitsConst },
             new StorageType(resultType));
     }
@@ -911,28 +904,6 @@ internal sealed class OperatorHandler
             _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenTrue)),
             _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenFalse)));
         return _lowering.SlotRef(resultSlot);
-    }
-
-    // ── Extern signature helpers ──
-
-    static readonly Dictionary<UnaryOperatorKind, string> UnaryOpNames = new()
-    {
-        [UnaryOperatorKind.Minus] = "op_UnaryMinus",
-        [UnaryOperatorKind.Not] = "op_UnaryNegation",
-    };
-
-    UdonAbiKey BuildBuiltinUnaryKey(IUnaryOperation op)
-    {
-        var operandType = _lowering.GetStorageTypeName(op.Operand.Type);
-        var returnType = _lowering.GetStorageTypeName(op.Type);
-        if (!UnaryOpNames.TryGetValue(op.OperatorKind, out var opName))
-            throw new System.NotSupportedException(
-                $"Unsupported unary operator: {op.OperatorKind} on type {_lowering.GetStorageTypeName(op.Operand.Type)}");
-        // Decimal uses C# method name: op_UnaryNegation (not op_UnaryMinus)
-        if (operandType == "SystemDecimal" && op.OperatorKind == UnaryOperatorKind.Minus)
-            opName = "op_UnaryNegation";
-        return UdonAbiKey.Method(operandType, opName,
-            new[] { operandType }, returnType);
     }
 
     static string GetDefaultConstValue(string udonType) => udonType switch

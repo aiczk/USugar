@@ -87,7 +87,7 @@ internal sealed class CompoundAssignmentHandler
                 op,
                 leftVal, true, tUnderlying,
                 rightVal, rNullable, rNullable ? vUnderlying : op.Value.Type,
-                op.OperatorKind, operatorMethod, op.Type);
+                op.OperatorKind, op.Type);
             lv.Write(lifted);
             return lifted;
         }
@@ -97,7 +97,8 @@ internal sealed class CompoundAssignmentHandler
         // long/ulong/uint %= : no Udon op_Remainder extern; polyfill a - (a/b)*b (shared with the binary path).
         if (op.OperatorKind == BinaryOperatorKind.Remainder && LoweringServices.RemainderNeedsPolyfill(resultType))
         {
-            var rem = _lowering.EmitRemainderViaDivision(leftVal, rightVal, resultType);
+            var rem = _lowering.EmitRemainderViaDivision(
+                op, leftVal, rightVal, resultType);
             lv.Write(rem);
             return rem;
         }
@@ -118,13 +119,8 @@ internal sealed class CompoundAssignmentHandler
         if (ExternResolver.IsSmallIntOrChar(rightType))
             rightVal = PromoteToInt32(rightVal, rightType);
 
-        var sig = operatorMethod != null
-            ? _lowering.RequireBoundAbi(
-                op, BoundAbiRole.Operator)
-            : _lowering.State.BoundAbi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(
-                op.OperatorKind,
-                _lowering.ResolveType(op.Target.Type), _lowering.ResolveType(op.Value.Type),
-                _lowering.ResolveType(op.Type), _lowering.GetStorageTypeName));
+        var sig = _lowering.RequireBoundAbi(
+            op, BoundAbiRole.Operator);
         CLeaf resultVal = _lowering.ExternCall(sig, new List<CLeaf> { leftVal, rightVal }, new StorageType(opResultType));
 
         // Narrow back to original type if promoted (C#-unchecked wrap, not checked Convert)
@@ -365,7 +361,7 @@ internal sealed class CompoundAssignmentHandler
                 op,
                 targetVal, true, incUnderlying,
                 _lowering.Const(1, _lowering.GetStorageType(incUnderlying)), false, incUnderlying,
-                kind, null, op.Type);
+                kind, op.Type);
             lv.Write(lifted);
             // Postfix returns the OLD value: targetVal (= lv.Value) is a single-assignment scratch leaf bound
             // before the write-back, which stores to the target's heap id and never touches this scratch.
@@ -379,14 +375,11 @@ internal sealed class CompoundAssignmentHandler
         if (ExternResolver.IsSmallIntOrChar(opType))
             opType = "SystemInt32";
 
-        var operandType = _lowering.ResolveType(op.Type);
-        var sig = ExternResolver.ResolveBuiltInBinaryExtern(
-            op.Kind == OperationKind.Increment
-                ? BinaryOperatorKind.Add
-                : BinaryOperatorKind.Subtract,
-            operandType, operandType, operandType, _lowering.GetStorageTypeName);
+        var sig = _lowering.RequireBoundAbi(
+            op, BoundAbiRole.Operator);
 
-        var oneConst = _lowering.Const(1, new StorageType(sig.ParameterTypes[1]));
+        var oneConst = _lowering.Const(
+            1, new StorageType(sig.Key.ParameterTypes[1]));
 
         // Explicit operand promotion to match the int extern signature.
         if (ExternResolver.IsSmallIntOrChar(udonType))

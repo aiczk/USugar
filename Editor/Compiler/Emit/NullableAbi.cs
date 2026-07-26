@@ -205,13 +205,13 @@ public static class NullableAbi
         return builder.SlotRef(resultSlot);
     }
 
-    internal static CLeaf EmitLiftedBinaryCore(CoreBuilder builder, BoundAbiPlan abi,
+    internal static CLeaf EmitLiftedBinaryCore(CoreBuilder builder,
         CValue leftValue, bool leftNullable, ITypeSymbol leftUnderlying,
         CValue rightValue, bool rightNullable, ITypeSymbol rightUnderlying,
-        BinaryOperatorKind kind, IMethodSymbol operatorMethod,
+        BinaryOperatorKind kind,
         BoundExtern operatorExtern,
         ITypeSymbol resultType, ITypeSymbol int32Type,
-        Func<ITypeSymbol, string> getUdonType, Func<ITypeSymbol, ITypeSymbol> resolveType,
+        Func<ITypeSymbol, string> getUdonType,
         Func<CLeaf, ITypeSymbol, (CLeaf Value, ITypeSymbol EffectiveType)> promoteBoxed,
         Func<CLeaf, string, string, CLeaf> narrowConvert)
     {
@@ -231,22 +231,19 @@ public static class NullableAbi
             else inner(builder);
         }
 
-        CValue ValueOp(BinaryOperatorKind opKind)
+        CValue ValueOp()
         {
             var resultUnder = resultNullable ? resultUnderlying : resultType;
-            var (leftOperand, leftEffective) = promoteBoxed(builder.SlotRef(aSlot), leftUnderlying);
-            var (rightOperand, rightEffective) = promoteBoxed(builder.SlotRef(bSlot), rightUnderlying);
+            var (leftOperand, _) = promoteBoxed(
+                builder.SlotRef(aSlot), leftUnderlying);
+            var (rightOperand, _) = promoteBoxed(
+                builder.SlotRef(bSlot), rightUnderlying);
             bool resultPromotes = ExternResolver.IsSmallIntOrChar(getUdonType(resultUnder));
             var resultEffective = resultPromotes ? int32Type : resultUnder;
-            var bound = operatorMethod != null
-                ? operatorExtern
-                  ?? throw new InvalidOperationException(
-                      $"Lifted operator '{operatorMethod}' has no bound extern.")
-                : abi.RequireExact(ExternResolver.ResolveBuiltInBinaryExtern(opKind,
-                    resolveType(leftEffective), resolveType(rightEffective),
-                    resolveType(resultEffective), getUdonType));
             var raw = builder.ExternCall(
-                bound,
+                operatorExtern
+                ?? throw new InvalidOperationException(
+                    "Lifted operator has no bound extern."),
                 new List<CLeaf> { leftOperand, rightOperand }, new StorageType(getUdonType(resultEffective)));
             return resultPromotes && getUdonType(resultUnder) != "SystemInt32"
                 ? narrowConvert(raw, "SystemInt32", getUdonType(resultUnder))
@@ -257,7 +254,7 @@ public static class NullableAbi
         {
             var resultSlot = builder.AllocScratch(new StorageType(StorageType));
             builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
-            IfBothPresent(_ => builder.EmitAssign(resultSlot, ValueOp(kind)));
+            IfBothPresent(_ => builder.EmitAssign(resultSlot, ValueOp()));
             return builder.SlotRef(resultSlot);
         }
 
@@ -269,7 +266,7 @@ public static class NullableAbi
                 builder.EmitIf(IsNull(builder, builder.SlotRef(aSlot)),
                     _ => builder.EmitIf(IsNull(builder, builder.SlotRef(bSlot)),
                         __ => builder.EmitAssign(eqSlot, builder.Const(true, StorageTypes.Boolean))));
-            IfBothPresent(_ => builder.EmitAssign(eqSlot, ValueOp(BinaryOperatorKind.Equals)));
+            IfBothPresent(_ => builder.EmitAssign(eqSlot, ValueOp()));
             if (kind == BinaryOperatorKind.NotEquals)
                 return builder.ExternCall(UdonAbi.BooleanNot,
                     new List<CLeaf> { builder.SlotRef(eqSlot) }, StorageTypes.Boolean);
@@ -278,22 +275,17 @@ public static class NullableAbi
 
         var relSlot = builder.AllocScratch(StorageTypes.Boolean);
         builder.EmitAssign(relSlot, builder.Const(false, StorageTypes.Boolean));
-        IfBothPresent(_ => builder.EmitAssign(relSlot, ValueOp(kind)));
+        IfBothPresent(_ => builder.EmitAssign(relSlot, ValueOp()));
         return builder.SlotRef(relSlot);
     }
 
     public static CLeaf EmitLiftedUnary(CoreBuilder builder, CValue operandValue,
-        ITypeSymbol operandUnderlying, ITypeSymbol resultUnderlying, UnaryOperatorKind kind,
+        ITypeSymbol operandUnderlying, ITypeSymbol resultUnderlying,
+        BoundExtern operatorExtern,
         Func<ITypeSymbol, string> getUdonType,
         Func<CLeaf, ITypeSymbol, (CLeaf Value, ITypeSymbol EffectiveType)> promoteBoxed)
     {
         var resultUdonType = getUdonType(resultUnderlying);
-        var opName = kind switch
-        {
-            UnaryOperatorKind.Not => "op_UnaryNegation",
-            UnaryOperatorKind.Minus => resultUdonType == "SystemDecimal" ? "op_UnaryNegation" : "op_UnaryMinus",
-            _ => throw new NotSupportedException($"Unsupported lifted unary operator: {kind}")
-        };
 
         var nullableSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(nullableSlot, operandValue);
@@ -303,8 +295,9 @@ public static class NullableAbi
         {
             var (value, _) = promoteBoxed(builder.SlotRef(nullableSlot), operandUnderlying);
             var computed = builder.ExternCall(
-                UdonAbiKey.Method(resultUdonType, opName,
-                    new[] { resultUdonType }, resultUdonType),
+                operatorExtern
+                ?? throw new InvalidOperationException(
+                    "Lifted unary operator has no bound extern."),
                 new List<CLeaf> { value }, new StorageType(resultUdonType));
             builder.EmitAssign(resultSlot, computed);
         });

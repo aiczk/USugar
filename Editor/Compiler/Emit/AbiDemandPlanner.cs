@@ -44,16 +44,16 @@ internal sealed class AbiDemandPlanner
                 PlanProperty(property, scope);
                 break;
             case IBinaryOperation binary:
-                PlanOperator(
-                    binary, binary.OperatorMethod, scope);
+                PlanBinary(binary, scope);
                 break;
             case IUnaryOperation unary:
-                PlanOperator(
-                    unary, unary.OperatorMethod, scope);
+                PlanUnary(unary, scope);
                 break;
             case ICompoundAssignmentOperation compound:
-                PlanOperator(
-                    compound, compound.OperatorMethod, scope);
+                PlanCompoundAssignment(compound, scope);
+                break;
+            case IIncrementOrDecrementOperation increment:
+                PlanIncrementOrDecrement(increment, scope);
                 break;
         }
     }
@@ -264,20 +264,216 @@ internal sealed class AbiDemandPlanner
         }
     }
 
-    void PlanOperator(
+    void PlanBinary(
+        IBinaryOperation operation,
+        CallSiteBindingScope scope)
+    {
+        if (PlanMethodOperator(
+                operation, operation.OperatorMethod, scope))
+            return;
+
+        var resultName = TypeName(operation.Type);
+        if (operation.OperatorKind == BinaryOperatorKind.Remainder
+            && LoweringServices.RemainderNeedsPolyfill(resultName))
+        {
+            PlanRemainderPolyfill(operation, scope, resultName);
+            return;
+        }
+
+        var leftNullable = EmitPolicy.IsNullableT(
+            operation.LeftOperand.Type, out var leftUnderlying);
+        var rightNullable = EmitPolicy.IsNullableT(
+            operation.RightOperand.Type, out var rightUnderlying);
+        if (operation.IsLifted
+            && (leftNullable || rightNullable))
+        {
+            var left = leftNullable
+                ? leftUnderlying
+                : operation.LeftOperand.Type;
+            var right = rightNullable
+                ? rightUnderlying
+                : operation.RightOperand.Type;
+            var result = EmitPolicy.IsNullableT(
+                operation.Type, out var resultUnderlying)
+                ? resultUnderlying
+                : operation.Type;
+            PlanBuiltInBinary(
+                operation, scope,
+                operation.OperatorKind == BinaryOperatorKind.NotEquals
+                    ? BinaryOperatorKind.Equals
+                    : operation.OperatorKind,
+                left, right, result);
+            return;
+        }
+
+        PlanBuiltInBinary(
+            operation, scope, operation.OperatorKind,
+            operation.LeftOperand.Type,
+            operation.RightOperand.Type,
+            operation.Type);
+    }
+
+    void PlanUnary(
+        IUnaryOperation operation,
+        CallSiteBindingScope scope)
+    {
+        if (operation.OperatorMethod?.ContainingType
+                is INamedTypeSymbol aggregate
+            && TypeClassifier.IsObjectArrayEmulated(aggregate))
+            return;
+
+        if (operation.OperatorKind
+            == UnaryOperatorKind.BitwiseNegation)
+        {
+            var operand = EmitPolicy.IsNullableT(
+                operation.Operand.Type, out var operandUnderlying)
+                ? operandUnderlying
+                : operation.Operand.Type;
+            var result = EmitPolicy.IsNullableT(
+                operation.Type, out var resultUnderlying)
+                ? resultUnderlying
+                : operation.Type;
+            PlanBuiltInBinary(
+                operation, scope, BinaryOperatorKind.ExclusiveOr,
+                operand, operand, result);
+            return;
+        }
+
+        if (operation.OperatorMethod != null
+            && !ExternResolver.IsNumericType(operation.Operand.Type)
+            && PlanMethodOperator(
+                operation, operation.OperatorMethod, scope))
+            return;
+
+        var effectiveOperand = operation.Operand.Type;
+        var effectiveResult = operation.Type;
+        if (operation.IsLifted
+            && EmitPolicy.IsNullableT(
+                operation.Type, out var liftedResult))
+        {
+            effectiveOperand = liftedResult;
+            effectiveResult = liftedResult;
+        }
+        Bind(
+            operation, scope, BoundAbiRole.Operator,
+            () => _abi.BindExact(
+                ExternResolver.ResolveBuiltInUnaryExtern(
+                    operation.OperatorKind,
+                    _lowering.ResolveType(effectiveOperand),
+                    _lowering.ResolveType(effectiveResult),
+                    TypeName)));
+    }
+
+    void PlanCompoundAssignment(
+        ICompoundAssignmentOperation operation,
+        CallSiteBindingScope scope)
+    {
+        if (PlanMethodOperator(
+                operation, operation.OperatorMethod, scope))
+            return;
+
+        if (EmitPolicy.IsNullableT(
+                operation.Target.Type, out var targetUnderlying))
+        {
+            var right = EmitPolicy.IsNullableT(
+                operation.Value.Type, out var valueUnderlying)
+                ? valueUnderlying
+                : operation.Value.Type;
+            var result = EmitPolicy.IsNullableT(
+                operation.Type, out var resultUnderlying)
+                ? resultUnderlying
+                : operation.Type;
+            PlanBuiltInBinary(
+                operation, scope, operation.OperatorKind,
+                targetUnderlying, right, result);
+            return;
+        }
+
+        var resultName = TypeName(operation.Type);
+        if (operation.OperatorKind == BinaryOperatorKind.Remainder
+            && LoweringServices.RemainderNeedsPolyfill(resultName))
+        {
+            PlanRemainderPolyfill(operation, scope, resultName);
+            return;
+        }
+        PlanBuiltInBinary(
+            operation, scope, operation.OperatorKind,
+            operation.Target.Type,
+            operation.Value.Type,
+            operation.Type);
+    }
+
+    void PlanIncrementOrDecrement(
+        IIncrementOrDecrementOperation operation,
+        CallSiteBindingScope scope)
+    {
+        if (operation.OperatorMethod?.ContainingType
+                is INamedTypeSymbol aggregate
+            && TypeClassifier.IsObjectArrayEmulated(aggregate))
+            return;
+        var operand = EmitPolicy.IsNullableT(
+            operation.Type, out var underlying)
+            ? underlying
+            : operation.Type;
+        PlanBuiltInBinary(
+            operation, scope,
+            operation.Kind == OperationKind.Increment
+                ? BinaryOperatorKind.Add
+                : BinaryOperatorKind.Subtract,
+            operand, operand, operand);
+    }
+
+    bool PlanMethodOperator(
         IOperation operation,
         IMethodSymbol rawMethod,
         CallSiteBindingScope scope)
     {
-        if (rawMethod == null) return;
+        if (rawMethod == null) return false;
         var method = _lowering.CloseMethodForPlanning(rawMethod);
         if (method.ContainingType is INamedTypeSymbol aggregate
             && TypeClassifier.IsObjectArrayEmulated(aggregate))
-            return;
+            return true;
         Bind(
             operation, scope, BoundAbiRole.Operator,
             () => _abi.BindExact(
                 AbiDecisionKey.Operator(method, TypeName)));
+        return true;
+    }
+
+    void PlanBuiltInBinary(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        BinaryOperatorKind kind,
+        ITypeSymbol left,
+        ITypeSymbol right,
+        ITypeSymbol result)
+        => Bind(
+            operation, scope, BoundAbiRole.Operator,
+            () => _abi.BindExact(
+                ExternResolver.ResolveBuiltInBinaryExtern(
+                    kind,
+                    _lowering.ResolveType(left),
+                    _lowering.ResolveType(right),
+                    _lowering.ResolveType(result),
+                    TypeName)));
+
+    void PlanRemainderPolyfill(
+        IOperation operation,
+        CallSiteBindingScope scope,
+        string type)
+    {
+        Bind(
+            operation, scope, BoundAbiRole.RemainderDivision,
+            () => _abi.BindExact(UdonAbiKey.Binary(
+                type, "op_Division", type, type, type)));
+        Bind(
+            operation, scope, BoundAbiRole.RemainderMultiplication,
+            () => _abi.BindExact(UdonAbiKey.Binary(
+                type, "op_Multiplication", type, type, type)));
+        Bind(
+            operation, scope, BoundAbiRole.RemainderSubtraction,
+            () => _abi.BindExact(UdonAbiKey.Binary(
+                type, "op_Subtraction", type, type, type)));
     }
 
     string Owner(

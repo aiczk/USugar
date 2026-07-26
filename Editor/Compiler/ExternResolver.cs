@@ -477,6 +477,33 @@ public static class ExternResolver
         [BinaryOperatorKind.RightShift] = "op_RightShift",
     };
 
+    static readonly Dictionary<UnaryOperatorKind, string> UnaryOperatorNames = new()
+    {
+        [UnaryOperatorKind.Minus] = "op_UnaryMinus",
+        [UnaryOperatorKind.Not] = "op_UnaryNegation",
+    };
+
+    public static UdonAbiKey ResolveBuiltInUnaryExtern(
+        UnaryOperatorKind operatorKind,
+        ITypeSymbol operandType,
+        ITypeSymbol resultType,
+        Func<ITypeSymbol, string> getUdonType)
+    {
+        if (getUdonType == null)
+            throw new ArgumentNullException(nameof(getUdonType));
+        var operand = getUdonType(operandType);
+        var result = getUdonType(resultType);
+        if (!UnaryOperatorNames.TryGetValue(operatorKind, out var opName))
+            throw new NotSupportedException(
+                $"Unary operator kind '{operatorKind}' has no Udon "
+                + $"extern mapping for '{operand}'.");
+        if (operand == "SystemDecimal"
+            && operatorKind == UnaryOperatorKind.Minus)
+            opName = "op_UnaryNegation";
+        return UdonAbiKey.Method(
+            operand, opName, new[] { operand }, result);
+    }
+
     public static UdonAbiKey ResolveBuiltInBinaryExtern(
         BinaryOperatorKind operatorKind,
         ITypeSymbol leftType, ITypeSymbol rightType, ITypeSymbol resultType,

@@ -567,15 +567,25 @@ internal sealed class LoweringServices
     /// `a % b` to `a - (a / b) * b` using the matching signed/unsigned Division/Multiplication/Subtraction.
     /// Truncate-toward-zero (signed) / floor (unsigned) division makes this exact for every case, including
     /// unsigned dividends above int.MaxValue. Shared by the binary and compound paths.</summary>
-    internal CLeaf EmitRemainderViaDivision(CLeaf left, CLeaf right, string t)
+    internal CLeaf EmitRemainderViaDivision(
+        IOperation operation,
+        CLeaf left,
+        CLeaf right,
+        string t)
     {
         // left/right are CLeaf params — stable single-assignment leaves under ANF; the intermediate
         // ExternCall results each bind their own fresh scratch, so neither operand is mutated here.
-        var quot = ExternCall(UdonAbiKey.Binary(t, "op_Division", t, t, t),
+        var quot = ExternCall(
+            RequireBoundAbi(
+                operation, BoundAbiRole.RemainderDivision),
             new List<CLeaf> { left, right }, new StorageType(t));
-        var prod = ExternCall(UdonAbiKey.Binary(t, "op_Multiplication", t, t, t),
+        var prod = ExternCall(
+            RequireBoundAbi(
+                operation, BoundAbiRole.RemainderMultiplication),
             new List<CLeaf> { quot, right }, new StorageType(t));
-        return ExternCall(UdonAbiKey.Binary(t, "op_Subtraction", t, t, t),
+        return ExternCall(
+            RequireBoundAbi(
+                operation, BoundAbiRole.RemainderSubtraction),
             new List<CLeaf> { left, prod }, new StorageType(t));
     }
 
@@ -657,16 +667,15 @@ internal sealed class LoweringServices
         IOperation operation,
         CValue leftVal, bool leftNullable, ITypeSymbol ltUnderlying,
         CValue rightVal, bool rightNullable, ITypeSymbol rtUnderlying,
-        Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind, IMethodSymbol operatorMethod, ITypeSymbol resultType)
-        => NullableAbi.EmitLiftedBinaryCore(_builder, _state.BoundAbi,
+        Microsoft.CodeAnalysis.Operations.BinaryOperatorKind kind,
+        ITypeSymbol resultType)
+        => NullableAbi.EmitLiftedBinaryCore(_builder,
             leftVal, leftNullable, ltUnderlying,
             rightVal, rightNullable, rtUnderlying,
-            kind, operatorMethod,
-            operatorMethod == null
-                ? null
-                : RequireBoundAbi(operation, BoundAbiRole.Operator),
+            kind,
+            RequireBoundAbi(operation, BoundAbiRole.Operator),
             resultType, _compilation.GetSpecialType(SpecialType.System_Int32),
-            GetStorageTypeName, ResolveType,
+            GetStorageTypeName,
             (boxed, underlying) => NullableAbi.PromoteBoxedToInt32(_builder, boxed, underlying,
                 _compilation.GetSpecialType(SpecialType.System_Int32), GetStorageTypeName),
             EmitNarrowingConvert);
