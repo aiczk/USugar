@@ -81,7 +81,7 @@ public class StatementHandler : IOperationHandler
                         var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                         // Stage 2 §4.1: captured using-local → read the disposable ref from its env
                         // cell (using-locals are readonly, so the read-now leaf stays valid).
-                        var dispRef = _lowering.State.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                        var dispRef = _lowering.State.TryGetEnvBinding(declarator.Symbol, out _)
                             ? EnvEmit.Read(_lowering.Builder, _lowering.State, declarator.Symbol, new StorageType(localType))
                             : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub) ? ub.Id : declarator.Symbol.Name, new StorageType(localType));
                         _lowering.UsingDisposableStack.Peek().Add((dispRef, declarator.Symbol.Type));
@@ -98,7 +98,7 @@ public class StatementHandler : IOperationHandler
         // scope; re-entering it re-allocates the env (per-iteration freshness inside loops). The
         // method's OWN outer block is NOT a recorded Block scope (its statements live in MethodEntry),
         // so ScopeFor returns null there and Alloc no-ops.
-        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(block, CaptureScopeKind.Block));
+        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(block, CaptureScopeKind.Block));
         _lowering.UsingDisposableStack.Push(new List<(CLeaf, ITypeSymbol)>());
         foreach (var stmt in block.Operations)
             _lowering.VisitOperation(stmt);
@@ -410,7 +410,7 @@ public class StatementHandler : IOperationHandler
                 {
                     var localType = _lowering.GetStorageTypeName(declarator.Symbol.Type);
                     // Stage 2 §4.1: captured using-statement local → env cell read (readonly, so safe).
-                    var dispRef2 = _lowering.State.Closures.TryGetEnvBinding(declarator.Symbol, out _)
+                    var dispRef2 = _lowering.State.TryGetEnvBinding(declarator.Symbol, out _)
                         ? EnvEmit.Read(_lowering.Builder, _lowering.State, declarator.Symbol, new StorageType(localType))
                         : _lowering.LoadField(_lowering.LocalBindings.TryGetValue(declarator.Symbol, out var ub2) ? ub2.Id : declarator.Symbol.Name, new StorageType(localType));
                     disposableVars.Add((dispRef2, declarator.Symbol.Type));
@@ -491,7 +491,7 @@ public class StatementHandler : IOperationHandler
             // already clones aggregate values, so value semantics are preserved); an uninitialized
             // aggregate pre-allocates its default object[] (incl. nested sub-arrays) like the flat
             // path, since C# definite assignment permits field writes before any whole-value read.
-            if (_lowering.State.Closures.TryGetEnvBinding(local, out _))
+            if (_lowering.State.TryGetEnvBinding(local, out _))
             {
                 var envInit = declarator.Initializer;
                 if (envInit != null)

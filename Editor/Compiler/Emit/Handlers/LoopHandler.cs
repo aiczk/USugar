@@ -31,7 +31,7 @@ public class LoopHandler : IOperationHandler
             // so a captured out-var/pattern in the condition writes into a live per-iteration env.
             _lowering.Builder.EmitWhile(() =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return _lowering.VisitExpression(op.Condition);
             }, _ =>
             {
@@ -55,7 +55,7 @@ public class LoopHandler : IOperationHandler
             // captures and any closure the (later) condition creates over an Iteration-scoped var.
             _lowering.Builder.EmitWhile(() => _lowering.VisitExpression(op.Condition), _ =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Iteration));
                 _lowering.State.ControlFlow.SwitchBreakLabels.Push(null); // sentinel: loop break should not target switch
                 try
                 {
@@ -80,7 +80,7 @@ public class LoopHandler : IOperationHandler
                 // init-clause declarations write their captured loop vars into it. A captured
                 // `for (int i…)` variable therefore shares ONE cell across all iterations — the
                 // classic C# for-loop capture semantics (every lambda sees the final i).
-                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.ForInit));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.ForInit));
                 // Init: variable declarations register locals in _localBindings
                 foreach (var init in op.Before)
                     _lowering.VisitOperation(init);
@@ -92,7 +92,7 @@ public class LoopHandler : IOperationHandler
             // body-declared captured local still gets its per-iteration freshness.
             () =>
             {
-                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Iteration));
                 return op.Condition != null ? _lowering.VisitExpression(op.Condition) : null;
             },
             _ =>
@@ -151,7 +151,7 @@ public class LoopHandler : IOperationHandler
         // Stage 2 §3: a CAPTURED foreach control var has no flat slot — it is owned by the Iteration
         // scope (fresh per iteration in C#), so its element value is written into the per-iteration
         // env cell at body top (below), not a flat field. Skip the flat bind entirely for it.
-        bool loopVarCaptured = _lowering.State.Closures.TryGetEnvBinding(loopLocal, out _);
+        bool loopVarCaptured = _lowering.State.TryGetEnvBinding(loopLocal, out _);
         string loopVarId = null;
         if (!loopVarCaptured)
         {
@@ -196,7 +196,7 @@ public class LoopHandler : IOperationHandler
             {
                 // Stage 2 §3 INV-1: fresh per-iteration Iteration env at body top, BEFORE the control
                 // var's element value is written into its (now-live) env cell.
-                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Iteration));
+                EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Iteration));
                 // Body: loopVar = arr[idx]; <body>
                 CLeaf elemVal = _lowering.ExternCall(
                     UdonAbi.ArrayGet(arrayType, elemAccessorType),

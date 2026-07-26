@@ -1044,7 +1044,7 @@ internal sealed class ExternInvocationLowerer
         // (`return M(m-1, ref w);` — a tail call) bypassed the reject and silently corrupted the
         // outer frame's copy-back (VM-proven 21021 vs CLR 9021). Self-threading stays legal and
         // tail (no new spills).
-        bool recursiveEdge = _lowering.State.RecursionContext.IsCycleEdge(_lowering.CurrentMethod, target);
+        bool recursiveEdge = _lowering.State.Recursion.IsCycleEdge(_lowering.CurrentMethod, target);
         List<ISymbol> refRoots = null;
         for (int i = 0; i < arguments.Count; i++)
         {
@@ -1086,7 +1086,7 @@ internal sealed class ExternInvocationLowerer
             // reverts the callee's direct field writes (VM-proven 19 vs CLR 59 / 1 vs 5). Loud per
             // §8-3. Callees that never touch the field keep the pinned convention (Inc/Swap).
             var aliasedField = LoweringServices.TryGetThisRootedRefStorage(a);
-            if (aliasedField != null && _lowering.State.RecursionContext.CalleeTouchesThisField(target, aliasedField))
+            if (aliasedField != null && _lowering.State.Recursion.CalleeTouchesThisField(target, aliasedField))
                 throw new System.NotSupportedException(
                     $"'{p.RefKind.ToString().ToLowerInvariant()} {p.Name}' of '{target.Name}' is passed "
                     + $"this-field '{aliasedField.Name}', which the callee (or a method it calls) also "
@@ -1254,13 +1254,13 @@ internal sealed class ExternInvocationLowerer
             // variable reference has no side-effecting legs to double-evaluate; route through the same
             // env cell EnvEmit.Read/Write use elsewhere so this shape shares the ONE prepared mechanism
             // instead of a second read-then-AssignToLValue path.
-            case ILocalReferenceOperation envLocalRef when _lowering.State.Closures.TryGetEnvBinding(envLocalRef.Local, out _):
+            case ILocalReferenceOperation envLocalRef when _lowering.State.TryGetEnvBinding(envLocalRef.Local, out _):
             {
                 var envType = _lowering.GetStorageTypeName(envLocalRef.Type);
                 return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, envLocalRef.Local, new StorageType(envType)),
                     v => EnvEmit.Write(_lowering.Builder, _lowering.State, envLocalRef.Local, v));
             }
-            case IParameterReferenceOperation envParamRef when _lowering.State.Closures.TryGetEnvBinding(envParamRef.Parameter, out _):
+            case IParameterReferenceOperation envParamRef when _lowering.State.TryGetEnvBinding(envParamRef.Parameter, out _):
             {
                 var envType = _lowering.GetStorageTypeName(envParamRef.Type);
                 return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, envParamRef.Parameter, new StorageType(envType)),
@@ -1270,7 +1270,7 @@ internal sealed class ExternInvocationLowerer
             // invoked for an Out param, kept for symmetry with the Ref cases above).
             case IDeclarationExpressionOperation declExpr
                 when declExpr.Expression is ILocalReferenceOperation declLocal
-                     && _lowering.State.Closures.TryGetEnvBinding(declLocal.Local, out _):
+                     && _lowering.State.TryGetEnvBinding(declLocal.Local, out _):
             {
                 var envType = _lowering.GetStorageTypeName(declLocal.Type);
                 return (() => EnvEmit.Read(_lowering.Builder, _lowering.State, declLocal.Local, new StorageType(envType)),
@@ -1409,7 +1409,7 @@ internal sealed class ExternInvocationLowerer
         // trailing REAL argument (positional copy-in binds it to the callee's __envp param field) —
         // env resolved in the caller's frame via the binding-scope chain. Tail/spill classification
         // treats it like any argument (no new statement-form tail shape).
-        if (_lowering.State.Closures.CaptureScope != null && _lowering.State.Closures.CaptureScope.IsCapturingClosure(target.OriginalDefinition))
+        if (_lowering.State.Captures != null && _lowering.State.Captures.IsCapturingClosure(target.OriginalDefinition))
             args.Add(_lowering.ClosureEnvLeaf(target));
 
         // Under A-normal form EmitCallToMethod already materialized the call (a non-void call returns a CSlotRef
@@ -1449,17 +1449,17 @@ internal sealed class ExternInvocationLowerer
             // the caller's generic path stages a temp and copies back through the lvalue-store arms
             // (which route captured symbols into their env cells).
             case ILocalReferenceOperation localRef:
-                if (_lowering.State.Closures.TryGetEnvBinding(localRef.Local, out _)) return null;
+                if (_lowering.State.TryGetEnvBinding(localRef.Local, out _)) return null;
                 return _lowering.LocalBindings.TryGetValue(localRef.Local, out var rb) ? rb.Id : null;
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return _lowering.State.SourceStorageName(fieldRef.Field);
             case IParameterReferenceOperation paramRef:
-                if (_lowering.State.Closures.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
+                if (_lowering.State.TryGetEnvBinding(paramRef.Parameter, out _)) return null;
                 return _lowering.GetParamVarId(paramRef.Parameter);
             case IDeclarationExpressionOperation declExpr:
                 if (declExpr.Expression is ILocalReferenceOperation declLocal)
                 {
-                    if (_lowering.State.Closures.TryGetEnvBinding(declLocal.Local, out _)) return null;
+                    if (_lowering.State.TryGetEnvBinding(declLocal.Local, out _)) return null;
                     var type = _lowering.GetStorageTypeName(declLocal.Type);
                     var localId = _lowering.State.Storage.DeclareLocal(declLocal.Local.Name, new StorageType(type));
                     _lowering.LocalBindings[declLocal.Local] = new LocalBinding(localId);

@@ -34,7 +34,7 @@ public class SwitchHandler : IOperationHandler
         // Stage 2 §3: one Switch env per switch (shared by all sections), allocated before any case
         // pattern/section local is written — a case-label pattern var is bound while the case
         // CONDITION is built (below), so the env cell must already exist.
-        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Closures.CaptureScope?.ScopeFor(op, CaptureScopeKind.Switch));
+        EnvEmit.Alloc(_lowering.Builder, _lowering.State, _lowering.State.Captures?.ScopeFor(op, CaptureScopeKind.Switch));
 
         var endLabel = _lowering.State.ControlFlow.NextSwitchEndLabel();
         _lowering.State.ControlFlow.SwitchBreakLabels.Push(endLabel);

@@ -87,8 +87,8 @@ public sealed class DelegateBridgeEmitter
             : _context.ResolveStorageType(closureCheckMethod.ReturnType, typeParameterMap);
 
         var conventionReturn = returnType != null ? DelegateAbi.ConvRetName(signaturePart) : null;
-        var capturing = _context.Closures.CaptureScope != null
-            && _context.Closures.CaptureScope.IsCapturingClosure(closureCheckMethod);
+        var capturing = _context.Captures != null
+            && _context.Captures.IsCapturingClosure(closureCheckMethod);
         var argumentAdapters = new List<BridgeArgumentAdapter>();
         for (int i = 0; i < signatureMethod.Parameters.Length; i++)
             argumentAdapters.Add(new BridgeArgumentAdapter(

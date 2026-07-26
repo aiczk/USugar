@@ -109,7 +109,7 @@ internal sealed class ProgramLoweringPipeline
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
     /// consumed by nothing yet — see LoweringState.CaptureScope).</summary>
-    public CaptureScopeAnalysis CaptureScope => _state.Closures.CaptureScope;
+    public CaptureScopeAnalysis CaptureScope => _state.Captures;
     public Compilation Compilation => _state.Compilation;
     public INamedTypeSymbol ClassSymbol => _state.ClassSymbol;
 
@@ -133,7 +133,7 @@ internal sealed class ProgramLoweringPipeline
     // ThisFieldTouches, ReentrantDispatchSites, TailSparedDirectCallSites) post-Emit, so
     // RecursionFacetEquivalenceTests can census the legacy BuildRecursionInfo product and diff it
     // against the worklist-produced facets before the M5b swap. Unused by production emission.
-    internal RecursionInfo DebugRecursionInfo => _state.RecursionContext.Info;
+    internal RecursionInfo DebugRecursionInfo => _state.Recursion;
     internal IReadOnlyList<string> DebugStaticInitializerOrder
         => _staticFieldInitOps.Select(x => x.fieldName).ToArray();
 
@@ -169,8 +169,7 @@ internal sealed class ProgramLoweringPipeline
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
         var captures = CaptureScopeAnalysis.Build(
             _compilation, _classSymbol, plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps);
-        _state.Closures.SetIdentityPlan(closureIdentities);
-        _state.Closures.SetCaptureScope(captures);
+        _state.SetClosurePlans(closureIdentities, captures);
         BindAndEmitMethods(plan, bodyGraph, closureIdentities, captures);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.Run(_module);
@@ -1021,7 +1020,7 @@ internal sealed class ProgramLoweringPipeline
             specializationRegistrar.Register(specialization);
         foreach (var closure in discovery.Callables.ClosureSpecializations)
         {
-            var definition = _state.Closures.IdentityPlan.CanonicalDefinition(closure.Method);
+            var definition = _state.ClosureIdentities.CanonicalDefinition(closure.Method);
             var method = closure.Method.IsGenericMethod
                 && !closure.Method.TypeArguments.Any(ClassTypeObjectContext.ContainsTypeParameter)
                 ? definition.Construct(closure.Method.TypeArguments.ToArray())
@@ -1043,7 +1042,7 @@ internal sealed class ProgramLoweringPipeline
         var boundSource = BindSourceSemantics(
             discovery, methodBodies, abiBuilder);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
-        _state.RecursionContext.SetPlan(recursion);
+        _state.SetRecursionPlan(recursion);
         var abi = abiBuilder.Publish();
         var types = _environment.Types.Publish();
         var typeFacts = _environment.Session.TypeFacts.FreezeCopy();
@@ -1053,7 +1052,6 @@ internal sealed class ProgramLoweringPipeline
             discovery,
             closureIdentities,
             captures,
-            bodyGraph,
             recursion,
             syntheticDemands,
             boundSource.CallSites,
@@ -1172,7 +1170,7 @@ internal sealed class ProgramLoweringPipeline
                 ValueClassifier.ClassifyStable(
                     operation,
                     new TypeClassifierContext(typeMap),
-                    _state.Closures.CaptureScope,
+                    _state.Captures,
                     body?.StableLocalInitializers)));
             abiPlanner.Plan(operation);
             if (operation is IFieldReferenceOperation fieldReference)
@@ -1841,12 +1839,12 @@ internal sealed class ProgramLoweringPipeline
             // Node is the lambda/LF body, not this bodyOp); a root method via ScopeFor(bodyOp).
             // No-ops on a null / non-capture-bearing scope, so the call is unconditional.
             CaptureScope entryScope = null;
-            if (_state.Closures.CaptureScope != null)
+            if (_state.Captures != null)
             {
                 if (IsHoistedClosureMethod(method))
-                    _state.Closures.CaptureScope.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
+                    _state.Captures.ClosureScopes.TryGetValue(method.OriginalDefinition, out entryScope);
                 else
-                    entryScope = _state.Closures.CaptureScope.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
+                    entryScope = _state.Captures.ScopeFor(bodyOp, CaptureScopeKind.MethodEntry);
             }
             EnvEmit.Alloc(_builder, _state, entryScope);
 
@@ -1854,9 +1852,9 @@ internal sealed class ProgramLoweringPipeline
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
             var entryParamIds = closureSpec?.ParamVarIds;
             if (entryParamIds == null) _methodParamVarIds.TryGetValue(method, out entryParamIds);
-            if (_state.Closures.CaptureScope != null && entryParamIds != null)
+            if (_state.Captures != null && entryParamIds != null)
                 foreach (var p in method.Parameters)
-                    if (p.Ordinal < entryParamIds.Length && _state.Closures.TryGetEnvBinding(p, out _))
+                    if (p.Ordinal < entryParamIds.Length && _state.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _state, p,
                             _bridge.Load(entryParamIds[p.Ordinal], GetStorageType(p.Type)));
 
@@ -1864,10 +1862,10 @@ internal sealed class ProgramLoweringPipeline
             // env cell exactly like a captured parameter — after __tco_ + EnvAlloc, so a self-tail
             // loopback re-seeds each logical activation's fresh env. Null CurrentStructReceiverParamId
             // (behaviour methods, hoisted closures) and an uncaptured receiver both skip.
-            if (_state.Closures.CaptureScope != null
+            if (_state.Captures != null
                 && _state.Methods.CurrentStructReceiverParamId is { } rcvParamId
                 && LambdaCaptureAnalyzer.ReceiverCaptureKey(method) is { } rcvKey
-                && _state.Closures.TryGetEnvBinding(rcvKey, out _))
+                && _state.TryGetEnvBinding(rcvKey, out _))
                 EnvEmit.Write(_builder, _state, rcvKey, _bridge.Load(rcvParamId, new StorageType(AggregateAbi.ArrayType)));
 
             if (bodyOp is IMethodBodyOperation methodBody)

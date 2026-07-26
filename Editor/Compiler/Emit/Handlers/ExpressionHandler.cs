@@ -22,7 +22,7 @@ public class ExpressionHandler : IExpressionHandler
         ILiteralOperation op => VisitLiteral(op),
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
-        ILocalReferenceOperation localRef when _lowering.State.Closures.TryGetEnvBinding(localRef.Local, out _)
+        ILocalReferenceOperation localRef when _lowering.State.TryGetEnvBinding(localRef.Local, out _)
             => _lowering.ResolveType(localRef.Type) is INamedTypeSymbol eaggT && TypeClassifier.IsAggregateValue(eaggT)
                    ? AggregateAbi.DeepClone(_lowering.Builder, EnvEmit.Read(_lowering.Builder, _lowering.State, localRef.Local, new StorageType(AggregateAbi.ArrayType)),
                        eaggT, _lowering.State.Aggregates.GetLayout)
@@ -35,7 +35,7 @@ public class ExpressionHandler : IExpressionHandler
                                                  : throw new InvalidOperationException($"Cannot resolve local variable '{localRef.Local.Name}' in method '{_lowering.CurrentMethod?.Name ?? "(none)"}'."),
         IFieldReferenceOperation op => VisitFieldReference(op),
         IEventReferenceOperation op => VisitEventReference(op),
-        IParameterReferenceOperation paramRef when _lowering.State.Closures.TryGetEnvBinding(paramRef.Parameter, out _)
+        IParameterReferenceOperation paramRef when _lowering.State.TryGetEnvBinding(paramRef.Parameter, out _)
             => _lowering.ResolveType(paramRef.Type) is INamedTypeSymbol epaggT && TypeClassifier.IsAggregateValue(epaggT)
                    ? AggregateAbi.DeepClone(_lowering.Builder, EnvEmit.Read(_lowering.Builder, _lowering.State, paramRef.Parameter, new StorageType(AggregateAbi.ArrayType)),
                        epaggT, _lowering.State.Aggregates.GetLayout)
@@ -60,7 +60,7 @@ public class ExpressionHandler : IExpressionHandler
         // field read/write/compound, instance call, property, indexer — funnels here through
         // LoadInstanceRaw's fallthrough, so no second arm exists anywhere.
         IInstanceReferenceOperation when LambdaCaptureAnalyzer.ReceiverCaptureKey(_lowering.State.Methods.CurrentMethod) is { } rcvKey
-                                         && _lowering.State.Closures.TryGetEnvBinding(rcvKey, out _)
+                                         && _lowering.State.TryGetEnvBinding(rcvKey, out _)
             => EnvEmit.Read(_lowering.Builder, _lowering.State, rcvKey, new StorageType(AggregateAbi.ArrayType)),
         IInstanceReferenceOperation => _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(_lowering.GetStorageType(_lowering.ClassSymbol)), _lowering.GetStorageType(_lowering.ClassSymbol)),
         IConversionOperation op => VisitConversion(op),
@@ -1019,7 +1019,7 @@ public class ExpressionHandler : IExpressionHandler
         // pattern-binding stores go through AssignToLValue / TryEmitEnvStore arms). Registering the
         // staging field in _localBindings is WRONG for captured symbols (reads would bypass the env),
         // so captured declarations get a staging slot WITHOUT a binding.
-        if (_lowering.State.Closures.TryGetEnvBinding(localRef2.Local, out _))
+        if (_lowering.State.TryGetEnvBinding(localRef2.Local, out _))
         {
             var stagingId = _lowering.State.Storage.DeclareLocal(localRef2.Local.Name, new StorageType(udonType));
             return _lowering.LoadField(stagingId, new StorageType(udonType));

@@ -28,8 +28,8 @@ static class EnvEmit
     /// inside an ordinary method / field initializer (then every env scope must be frame-local).</summary>
     static IMethodSymbol CurrentClosure(LoweringState ctx)
         => ctx.Methods.CurrentMethod is IMethodSymbol m
-           && ctx.Closures.CaptureScope != null
-           && ctx.Closures.CaptureScope.ClosureScopes.ContainsKey(m.OriginalDefinition)
+           && ctx.Captures != null
+           && ctx.Captures.ClosureScopes.ContainsKey(m.OriginalDefinition)
             ? m : null;
 
     /// <summary>Allocate the env record for a capture-bearing scope at its entry point and register
@@ -41,7 +41,7 @@ static class EnvEmit
         if (scope == null || !scope.IsCaptureBearing) return;
         var env = b.ExternCall(CtorSig,
             new List<CLeaf> { new CConst(EnvAbi.RecordSize(scope.OwnedCaptures.Count), StorageTypes.Int32) }, new StorageType(EnvType));
-        var parent = ctx.Closures.CaptureScope.EffectiveParent(scope);
+        var parent = ctx.Captures.EffectiveParent(scope);
         var parentLeaf = parent != null
             ? Leaf(b, ctx, parent)
             : (CLeaf)new CConst(null, StorageTypes.Object);
@@ -71,11 +71,11 @@ static class EnvEmit
         if (envpField == null)
             throw new InvalidOperationException(
                 $"Closure '{currentClosure.Name}' reads captured state but has no __envp parameter registered.");
-        if (!ctx.Closures.CaptureScope.ClosureScopes.TryGetValue(def, out var ownScope) || ownScope.BindingScope == null)
+        if (!ctx.Captures.ClosureScopes.TryGetValue(def, out var ownScope) || ownScope.BindingScope == null)
             throw new InvalidOperationException(
                 $"Closure '{currentClosure.Name}' has no binding scope to chain env scope #{scope.Id} from.");
 
-        var hops = ctx.Closures.CaptureScope.HopDistance(ownScope.BindingScope, scope);
+        var hops = ctx.Captures.HopDistance(ownScope.BindingScope, scope);
         CLeaf cur = b.LoadField(envpField, new StorageType(EnvType));
         for (int i = 0; i < hops; i++)
             cur = b.ExternCall(GetSig, new List<CLeaf> { cur, new CConst(EnvAbi.Parent, StorageTypes.Int32) }, new StorageType(EnvType));
@@ -85,7 +85,7 @@ static class EnvEmit
     /// <summary>Read a captured variable out of its owning scope's env record into a typed slot.</summary>
     public static CLeaf Read(CoreBuilder b, LoweringState ctx, ISymbol symbol, StorageType udonType)
     {
-        if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
+        if (!ctx.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         return b.ExternCall(GetSig,
@@ -95,7 +95,7 @@ static class EnvEmit
     /// <summary>Write a value into a captured variable's env cell.</summary>
     public static void Write(CoreBuilder b, LoweringState ctx, ISymbol symbol, CLeaf value)
     {
-        if (!ctx.Closures.TryGetEnvBinding(symbol, out var binding))
+        if (!ctx.TryGetEnvBinding(symbol, out var binding))
             throw new InvalidOperationException($"'{symbol.Name}' has no env binding.");
         var env = Leaf(b, ctx, binding.Scope);
         b.EmitExternVoid(SetSig,

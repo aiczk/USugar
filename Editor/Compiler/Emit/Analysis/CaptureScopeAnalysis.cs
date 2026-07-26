@@ -48,21 +48,25 @@ public sealed class CaptureScope
 
     /// <summary>Non-null only for a MethodEntry scope that represents a lambda or local function's
     /// OWN body scope (null for the class-level root scope of an ordinary method/field initializer).</summary>
-    public IMethodSymbol ClosureSymbol;
+    public IMethodSymbol ClosureSymbol { get; internal set; }
 
     /// <summary>Set only when <see cref="ClosureSymbol"/> is non-null: the nearest enclosing (inclusive
     /// of scopes at the closure's own declaration site) capture-bearing scope — where this closure's
     /// hidden __envp parameter chains to (design §2 BindingScope). Null when the closure's entire
     /// enclosing chain owns no captures (no env needed for this closure).</summary>
-    public CaptureScope BindingScope;
+    public CaptureScope BindingScope { get; internal set; }
 
     /// <summary>Every local/parameter declared directly in this scope, in declaration (source) order.</summary>
-    public readonly List<ISymbol> DeclaredSymbols = new();
+    readonly List<ISymbol> _declaredSymbols = new();
+    public IReadOnlyList<ISymbol> DeclaredSymbols
+        => _declaredSymbols;
 
     /// <summary>The subset of <see cref="DeclaredSymbols"/> that is captured by some closure, in the
     /// SAME relative order. Slot values here are logical 1-based capture slots; EnvAbi maps them to
     /// physical env-record indices after the tag/parent header.</summary>
-    public readonly List<ISymbol> OwnedCaptures = new();
+    readonly List<ISymbol> _ownedCaptures = new();
+    public IReadOnlyList<ISymbol> OwnedCaptures
+        => _ownedCaptures;
 
     public bool IsCaptureBearing => OwnedCaptures.Count > 0;
 
@@ -72,6 +76,15 @@ public sealed class CaptureScope
         Kind = kind;
         Parent = parent;
         Node = node;
+    }
+
+    internal void AddDeclaredSymbol(ISymbol symbol)
+        => _declaredSymbols.Add(symbol);
+
+    internal int AddOwnedCapture(ISymbol symbol)
+    {
+        _ownedCaptures.Add(symbol);
+        return _ownedCaptures.Count;
     }
 
     public override string ToString() => $"#{Id}:{Kind}" + (ClosureSymbol != null ? $"({ClosureSymbol.Name})" : "");
@@ -116,10 +129,17 @@ public sealed class CaptureScopeAnalysis
         Dictionary<IMethodSymbol, CaptureScope> closureScopes,
         HashSet<IMethodSymbol> capturingClosures)
     {
-        Scopes = scopes;
-        CapturedSlots = capturedSlots;
-        ClosureScopes = closureScopes;
-        _capturingClosures = capturingClosures;
+        Scopes = Array.AsReadOnly(scopes.ToArray());
+        CapturedSlots = new System.Collections.ObjectModel
+            .ReadOnlyDictionary<ISymbol, (CaptureScope Scope, int Slot)>(
+                new Dictionary<ISymbol, (CaptureScope Scope, int Slot)>(
+                    capturedSlots, SymbolEqualityComparer.Default));
+        ClosureScopes = new System.Collections.ObjectModel
+            .ReadOnlyDictionary<IMethodSymbol, CaptureScope>(
+                new Dictionary<IMethodSymbol, CaptureScope>(
+                    closureScopes, SymbolEqualityComparer.Default));
+        _capturingClosures = new HashSet<IMethodSymbol>(
+            capturingClosures, SymbolEqualityComparer.Default);
 
         _scopeByNodeKind = new Dictionary<(SyntaxNode, CaptureScopeKind), CaptureScope>();
         foreach (var scope in scopes)
@@ -293,7 +313,7 @@ public sealed class CaptureScopeAnalysis
             if (symbol == null || scope == null) return;
             if (_declaringScope.ContainsKey(symbol)) return; // already declared — defensive, shouldn't happen for well-formed C#
             _declaringScope[symbol] = scope;
-            scope.DeclaredSymbols.Add(symbol);
+            scope.AddDeclaredSymbol(symbol);
         }
 
         /// <summary>Walk a scope-owning construct's body WITHOUT pushing an extra scope for its own
@@ -486,8 +506,7 @@ public sealed class CaptureScopeAnalysis
                 foreach (var sym in scope.DeclaredSymbols)
                 {
                     if (!captured.Contains(sym)) continue;
-                    var slot = scope.OwnedCaptures.Count + 1;
-                    scope.OwnedCaptures.Add(sym);
+                    var slot = scope.AddOwnedCapture(sym);
                     capturedSlots[sym] = (scope, slot);
                 }
             }

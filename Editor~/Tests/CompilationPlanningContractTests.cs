@@ -130,7 +130,6 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(ProgramDiscovery));
         Assert.Contains(fields, field => field.FieldType == typeof(ClosureIdentityPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(CaptureScopeAnalysis));
-        Assert.Contains(fields, field => field.FieldType == typeof(CallableBodyGraph));
         Assert.Contains(fields, field => field.FieldType == typeof(RecursionInfo));
         Assert.Contains(fields, field => field.FieldType == typeof(SyntheticDemandPlan));
         Assert.Contains(fields, field => field.FieldType == typeof(BoundCallSiteTable));
@@ -149,6 +148,9 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(AggregateLayoutTable));
         Assert.Contains(fields, field => field.FieldType == typeof(ClassTypeObjectContext));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysis"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType("BoundMethodAnalysisTable"));
+        Assert.Null(typeof(BoundProgram).Assembly.GetType("RecursionContext"));
         Assert.DoesNotContain(
             typeof(BoundProgram).GetMethods(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
@@ -193,6 +195,19 @@ public class CompilationPlanningContractTests
             || field.FieldType == typeof(Compilation)
             || field.FieldType == typeof(UdonAbiCatalog)
             || field.FieldType == typeof(UdonAbiBinder));
+
+        Assert.DoesNotContain(
+            typeof(CaptureScope).GetFields(
+                BindingFlags.Instance | BindingFlags.Public),
+            field => typeof(System.Collections.IList)
+                .IsAssignableFrom(field.FieldType));
+        Assert.All(
+            typeof(CaptureScope).GetProperties(
+                BindingFlags.Instance | BindingFlags.Public),
+            property => Assert.True(
+                property.SetMethod == null
+                || !property.SetMethod.IsPublic,
+                property.Name));
     }
 
     [Fact]

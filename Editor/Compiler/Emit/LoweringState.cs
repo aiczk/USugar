@@ -16,6 +16,15 @@ public sealed class LoweringState
         => Program != null ? Program.Types : Environment.Types;
     internal BoundProgram Program { get; private set; }
     internal CallSiteBindingScope? CurrentBindingScope { get; private set; }
+    ClosureIdentityPlan _plannedClosureIdentities;
+    CaptureScopeAnalysis _plannedCaptures;
+    RecursionInfo _plannedRecursion;
+    internal ClosureIdentityPlan ClosureIdentities
+        => Program?.ClosureIdentities ?? _plannedClosureIdentities;
+    internal CaptureScopeAnalysis Captures
+        => Program?.Captures ?? _plannedCaptures;
+    internal RecursionInfo Recursion
+        => Program?.Recursion ?? _plannedRecursion;
 
     // Mutable output and lowering state.
     public readonly StructuredModule Module;
@@ -24,7 +33,6 @@ public sealed class LoweringState
     public readonly BoundaryChecker Boundary;
     internal OperationLowerer Operations { get; private set; }
     public readonly GenericContext Generics = new GenericContext();
-    public readonly RecursionContext RecursionContext = new RecursionContext();
     public readonly ClosureContext Closures = new ClosureContext();
     readonly AggregateLayoutTable _aggregateLayouts = new AggregateLayoutTable();
     internal AggregateLayoutTable Aggregates
@@ -50,18 +58,46 @@ public sealed class LoweringState
         Operations = operations ?? throw new ArgumentNullException(nameof(operations));
     }
 
+    internal void SetClosurePlans(
+        ClosureIdentityPlan identities,
+        CaptureScopeAnalysis captures)
+    {
+        if (_plannedClosureIdentities != null
+            || _plannedCaptures != null)
+            throw new InvalidOperationException(
+                "Closure plans were set twice.");
+        _plannedClosureIdentities = identities
+            ?? throw new ArgumentNullException(nameof(identities));
+        _plannedCaptures = captures
+            ?? throw new ArgumentNullException(nameof(captures));
+    }
+
+    internal void SetRecursionPlan(RecursionInfo recursion)
+    {
+        if (_plannedRecursion != null)
+            throw new InvalidOperationException(
+                "The recursion plan was set twice.");
+        _plannedRecursion = recursion
+            ?? throw new ArgumentNullException(nameof(recursion));
+    }
+
     internal void PublishBoundProgram(BoundProgram program)
     {
         if (Program != null)
             throw new InvalidOperationException("Bound program was published twice.");
         if (program == null) throw new ArgumentNullException(nameof(program));
-        if (!ReferenceEquals(Closures.IdentityPlan, program.ClosureIdentities)
-            || !ReferenceEquals(Closures.CaptureScope, program.Captures)
-            || !ReferenceEquals(RecursionContext.Info, program.Recursion))
+        if (!ReferenceEquals(
+                _plannedClosureIdentities,
+                program.ClosureIdentities)
+            || !ReferenceEquals(_plannedCaptures, program.Captures)
+            || !ReferenceEquals(_plannedRecursion, program.Recursion))
             throw new InvalidOperationException(
-                "Lowering contexts do not match the bound program's analysis artifacts.");
+                "Planned analyses do not match the bound program.");
         Module.PublishSemantics(program.Abi, program.TypeFacts);
         Program = program;
+        _plannedClosureIdentities = null;
+        _plannedCaptures = null;
+        _plannedRecursion = null;
     }
 
     internal void BeginBodyEmission()
@@ -125,6 +161,45 @@ public sealed class LoweringState
 
     public string SourceStorageName(ISymbol member) => Environment.SourceStorageName(member);
 
+    public bool TryGetEnvBinding(
+        ISymbol symbol,
+        out (CaptureScope Scope, int Slot) binding)
+    {
+        binding = default;
+        var captures = Captures;
+        if (captures == null || symbol == null) return false;
+        if (captures.CapturedSlots.TryGetValue(
+                symbol, out var direct))
+        {
+            binding = direct;
+            return true;
+        }
+        if (symbol is IMethodSymbol receiverMethod
+            && captures.CapturedSlots.TryGetValue(
+                receiverMethod.OriginalDefinition,
+                out var receiverBinding))
+        {
+            binding = receiverBinding;
+            return true;
+        }
+        if (symbol is IParameterSymbol parameter
+            && parameter.ContainingSymbol is IMethodSymbol method
+            && !ReferenceEquals(method, method.OriginalDefinition))
+        {
+            var definitionParameters =
+                method.OriginalDefinition.Parameters;
+            if (parameter.Ordinal < definitionParameters.Length
+                && captures.CapturedSlots.TryGetValue(
+                    definitionParameters[parameter.Ordinal],
+                    out var reKeyed))
+            {
+                binding = reKeyed;
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Composite key args for a hoisted-closure registration or lookup (2026-07-11 pre-fuzz
     /// audit HIGH fix): the closure's own type args ⊕ the args of its LEXICAL enclosing generic
     /// owners (declaration chain), each resolved against the current emission's owner chain
@@ -149,7 +224,7 @@ public sealed class LoweringState
         var b = System.Collections.Immutable.ImmutableArray.CreateBuilder<ITypeSymbol>();
         var owners = System.Collections.Immutable.ImmutableArray.CreateBuilder<IMethodSymbol>();
         if (closure.TypeArguments.Length > 0) b.AddRange(closure.TypeArguments);
-        var identityPlan = Closures.IdentityPlan
+        var identityPlan = ClosureIdentities
             ?? throw new InvalidOperationException("Closure identity plan was not frozen before emission.");
         foreach (var ownerDef in identityPlan.GetLexicalOwners(closure))
         {

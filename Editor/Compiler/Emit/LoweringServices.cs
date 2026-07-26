@@ -59,7 +59,8 @@ public sealed class LoweringServices
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> _usingDisposableStack => _state.ControlFlow.UsingDisposableStack;
     internal HashSet<string> _delegateFields => _state.Synthetics.DelegateFields;
     internal List<EmitDiagnostic> _diagnostics => _state.DiagnosticState.Diagnostics;
-    internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee) => _state.RecursionContext.IsRecursiveEdge(caller, callee);
+    internal bool IsRecursiveEdge(IMethodSymbol caller, IMethodSymbol callee)
+        => _state.Recursion.IsRecursiveEdge(caller, callee);
 
     // Recursive descent has one concrete owner.
     internal void VisitOperation(IOperation op) => _state.Operations.VisitOperation(op);
@@ -698,12 +699,12 @@ public sealed class LoweringServices
         {
             // Stage 2 §4.1: captured locals/params live in env records — raw (no-clone) loads read
             // the env cell directly so mutation hits the live storage.
-            ILocalReferenceOperation lr when _state.Closures.TryGetEnvBinding(lr.Local, out _)
+            ILocalReferenceOperation lr when _state.TryGetEnvBinding(lr.Local, out _)
                 => EnvEmit.Read(_builder, _state, lr.Local,
                        new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
             ILocalReferenceOperation lr when _localBindings.TryGetValue(lr.Local, out var b)
                 => LoadField(b.Id, new StorageType(TypeClassifier.IsAggregateValue(lr.Type) ? "SystemObjectArray" : GetStorageTypeName(lr.Type))),
-            IParameterReferenceOperation pr when _state.Closures.TryGetEnvBinding(pr.Parameter, out _)
+            IParameterReferenceOperation pr when _state.TryGetEnvBinding(pr.Parameter, out _)
                 => EnvEmit.Read(_builder, _state, pr.Parameter,
                        new StorageType(TypeClassifier.IsAggregateValue(pr.Type) ? "SystemObjectArray" : GetStorageTypeName(pr.Type))),
             IParameterReferenceOperation pr
@@ -730,7 +731,7 @@ public sealed class LoweringServices
     /// in <paramref name="flatId"/>).</summary>
     internal bool BindLocal(ILocalSymbol local, string udonType, out string flatId)
     {
-        if (_state.Closures.TryGetEnvBinding(local, out _))
+        if (_state.TryGetEnvBinding(local, out _))
         {
             flatId = null;
             return false;
@@ -752,7 +753,7 @@ public sealed class LoweringServices
             IParameterReferenceOperation pr => pr.Parameter,
             _ => null,
         };
-        if (sym == null || !_state.Closures.TryGetEnvBinding(sym, out _)) return false;
+        if (sym == null || !_state.TryGetEnvBinding(sym, out _)) return false;
         EnvEmit.Write(_builder, _state, sym, value);
         return true;
     }
@@ -980,7 +981,7 @@ public sealed class LoweringServices
                 if (declExpr.Expression is ILocalReferenceOperation localRef)
                 {
                     // Stage 2 §4.1: captured declaration target → env cell, no flat field.
-                    if (_state.Closures.TryGetEnvBinding(localRef.Local, out _))
+                    if (_state.TryGetEnvBinding(localRef.Local, out _))
                     {
                         EnvEmit.Write(_builder, _state, localRef.Local, value);
                         break;
@@ -1601,8 +1602,8 @@ public sealed class LoweringServices
             new CallableReturnPlan(index => NameAllocator.RetId(funcName, index),
                 new StorageType(GetStorageTypeName(localFunc.ReturnType)))
         };
-        var capturing = _state.Closures.CaptureScope != null
-            && _state.Closures.CaptureScope.IsCapturingClosure(localFunc);
+        var capturing = _state.Captures != null
+            && _state.Captures.IsCapturingClosure(localFunc);
         var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(localFunc, index => $"__{index}_{funcName}",
                 slotPrefix: index => $"__{index}_{funcName}",
@@ -2011,8 +2012,8 @@ public sealed class LoweringServices
             new CallableReturnPlan(index => NameAllocator.RetId(SanitizeId(constructed.Name), index),
                 new StorageType(GetStorageTypeName(constructed.ReturnType)))
         };
-        var capturing = _state.Closures.CaptureScope != null
-            && _state.Closures.CaptureScope.IsCapturingClosure(constructed);
+        var capturing = _state.Captures != null
+            && _state.Captures.IsCapturingClosure(constructed);
         var record = (MethodContext.ClosureSpec)new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(constructed,
                 index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
@@ -2104,10 +2105,10 @@ public sealed class LoweringServices
     /// closure must have a BindingScope lexically enclosing this creation site.</summary>
     internal CLeaf ClosureEnvLeaf(IMethodSymbol targetMethod)
     {
-        if (targetMethod == null || _state.Closures.CaptureScope == null
-            || !_state.Closures.CaptureScope.IsCapturingClosure(targetMethod.OriginalDefinition))
+        if (targetMethod == null || _state.Captures == null
+            || !_state.Captures.IsCapturingClosure(targetMethod.OriginalDefinition))
             return Const(null, StorageTypes.Object);
-        if (!_state.Closures.CaptureScope.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
+        if (!_state.Captures.ClosureScopes.TryGetValue(targetMethod.OriginalDefinition, out var closureScope)
             || closureScope.BindingScope == null)
             throw new System.InvalidOperationException(
                 $"Capturing closure '{targetMethod.Name}' has no binding scope enclosing its creation site.");
@@ -3112,7 +3113,7 @@ public sealed class LoweringServices
         // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
         // 8192-entry __recurStack (compile-clean VmFault on legal C#).
         var sitePlan = CallableSitePlan.Direct(target, callSite,
-            IsRecursiveEdge(_currentMethod, target), _state.RecursionContext.Info);
+            IsRecursiveEdge(_currentMethod, target), _state.Recursion);
         if (sitePlan.RecursiveEdge)
         {
             if (sitePlan.TailSpared)
@@ -3154,7 +3155,7 @@ public sealed class LoweringServices
     /// so InsertRecursionSpills wraps the flagged dispatch arms with the spill/reload.</summary>
     internal bool MarkReentrantDispatch(IOperation dispatchOp)
     {
-        var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _state.RecursionContext.Info);
+        var plan = CallableSitePlan.Delegate(dispatchOp?.Syntax, _state.Recursion);
         RegisterCallableSiteSpill(plan);
         return plan.Reentrant;
     }
@@ -3174,9 +3175,9 @@ public sealed class LoweringServices
         var landing = RequireBoundCallSite(
             site, callableSite.Kind, staticCallee).RequireDispatch().Cross;
         var recursive = landing.HasLocalTarget
-            && _state.RecursionContext.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
+            && _state.Recursion.IsRecursiveEdge(_currentMethod, landing.LocalTarget);
         var plan = CallableSitePlan.Cross(staticCallee, landing, site?.Syntax, recursive,
-            _state.RecursionContext.Info);
+            _state.Recursion);
         RegisterCallableSiteSpill(plan);
         return plan.Reentrant;
     }
@@ -3238,7 +3239,7 @@ public sealed class LoweringServices
                     // local / bundle) is what the existing spill preserves. Spilling the dead field is
                     // the wastefully-conservative over-spill the entry criteria forbid. Definition-keyed
                     // via TryGetEnvBinding (constructed specs re-key through OriginalDefinition, §2 rule 2).
-                    if (_state.Closures.TryGetEnvBinding(param, out _))
+                    if (_state.TryGetEnvBinding(param, out _))
                         continue;
                 }
                 AddField(pids[i]);

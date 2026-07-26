@@ -12,7 +12,6 @@ internal sealed class BoundProgram
     public readonly ProgramDiscovery Discovery;
     public readonly ClosureIdentityPlan ClosureIdentities;
     public readonly CaptureScopeAnalysis Captures;
-    public readonly CallableBodyGraph Bodies;
     public readonly RecursionInfo Recursion;
     public readonly SyntheticDemandPlan SyntheticDemands;
     public readonly BoundCallSiteTable CallSites;
@@ -40,7 +39,6 @@ internal sealed class BoundProgram
         ProgramDiscovery discovery,
         ClosureIdentityPlan closureIdentities,
         CaptureScopeAnalysis captures,
-        CallableBodyGraph bodies,
         RecursionInfo recursion,
         SyntheticDemandPlan syntheticDemands,
         BoundCallSiteTable callSites,
@@ -62,7 +60,6 @@ internal sealed class BoundProgram
         ClosureIdentities = closureIdentities
             ?? throw new ArgumentNullException(nameof(closureIdentities));
         Captures = captures ?? throw new ArgumentNullException(nameof(captures));
-        Bodies = bodies ?? throw new ArgumentNullException(nameof(bodies));
         Recursion = recursion ?? throw new ArgumentNullException(nameof(recursion));
         SyntheticDemands = syntheticDemands
             ?? throw new ArgumentNullException(nameof(syntheticDemands));

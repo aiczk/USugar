@@ -34,6 +34,33 @@ public sealed class RecursionInfo
             recursionGraphNodes, SymbolEqualityComparer.Default);
     }
 
+    public bool IsRecursiveEdge(
+        IMethodSymbol caller,
+        IMethodSymbol callee)
+        => caller != null
+           && callee != null
+           && RecursiveCallees.TryGetValue(
+               caller.OriginalDefinition, out var callees)
+           && callees.Contains(callee.OriginalDefinition);
+
+    public bool IsCycleEdge(
+        IMethodSymbol caller,
+        IMethodSymbol callee)
+        => caller != null
+           && callee != null
+           && CycleCallees.TryGetValue(
+               caller.OriginalDefinition, out var callees)
+           && callees.Contains(callee.OriginalDefinition);
+
+    public bool CalleeTouchesThisField(
+        IMethodSymbol callee,
+        IFieldSymbol field)
+        => callee != null
+           && field != null
+           && ThisFieldTouches.TryGetValue(
+               callee.OriginalDefinition, out var fields)
+           && fields.Contains(field.OriginalDefinition);
+
     static IReadOnlyDictionary<IMethodSymbol, FrozenSet<IMethodSymbol>> CopyMethodMap(
         IReadOnlyDictionary<IMethodSymbol, HashSet<IMethodSymbol>> source)
     {

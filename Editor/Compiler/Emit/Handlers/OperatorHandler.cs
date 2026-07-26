@@ -779,7 +779,7 @@ public class OperatorHandler : IExpressionHandler
     {
         // Stage 2 §4.1: captured pattern variable → env cell (its owning scope's env is live at
         // every point a condition/section hosting this pattern executes).
-        if (_lowering.State.Closures.TryGetEnvBinding(local, out _))
+        if (_lowering.State.TryGetEnvBinding(local, out _))
         {
             EnvEmit.Write(_lowering.Builder, _lowering.State, local, value);
             return;

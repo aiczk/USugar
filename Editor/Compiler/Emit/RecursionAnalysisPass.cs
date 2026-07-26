@@ -332,13 +332,13 @@ internal sealed class RecursionAnalysisPass
     // The callable-body graph cannot discharge this check: synthetic targets are registered later.
     internal void VerifyBridgeTargetsAreNodes()
     {
-        if (_state.Closures.CaptureScope == null || _state.RecursionContext.Info.RecursionGraphNodes == null) return;
+        if (_state.Captures == null || _state.Recursion.RecursionGraphNodes == null) return;
         foreach (var callable in _state.Methods.SyntheticCallables.Values)
         {
             var def = callable.TargetDefinition;
             if (def == null) continue;
-            if (!_state.Closures.CaptureScope.IsCapturingClosure(def)) continue;
-            if (!_state.RecursionContext.Info.RecursionGraphNodes.Contains(def))
+            if (!_state.Captures.IsCapturingClosure(def)) continue;
+            if (!_state.Recursion.RecursionGraphNodes.Contains(def))
                 throw new InvalidOperationException(
                     $"USugar internal error (§5.5 bridge-target armor): capturing delegate bridge "
                   + $"'{callable.Name}' targets '{def}', which has no recursion-graph node — its "
