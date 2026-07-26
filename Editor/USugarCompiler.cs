@@ -86,7 +86,6 @@ public static class USugarCompiler
         USugarLog.Info($"Dumped {rows.Length} event node definitions → {outputPath}");
     }
 
-    [MenuItem("USugar/Diagnostics/Dump SDK ABI Registry")]
     public static void DumpAbiRegistry()
     {
         var catalog = UdonAbiCatalogFactory.Create(
