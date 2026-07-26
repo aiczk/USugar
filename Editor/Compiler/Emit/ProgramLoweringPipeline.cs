@@ -146,31 +146,44 @@ internal sealed class ProgramLoweringPipeline
                 "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
 
         var fields = DiscoverFields();
-        var plan = BuildProgramDiscovery(fields);
-        FieldPlanEmitter.Emit(plan.Fields, _state);
+        var fieldInitializers =
+            fields.InitializerOperations.ToArray();
+        var (callables, reach) =
+            DiscoverCallablesAndReach(fieldInitializers);
+        FieldPlanEmitter.Emit(fields, _state);
         SetReflectionValues();
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (LoweringServices, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
         // shared pre-emission callable graph — no re-fetch or second body walk (F1).
         // C1 fix: roots = the FULL reach artifact (all provenances); field inits = the emitter's own
-        // plan.FieldInitOps (own + base + auto-property + static, already discovered and ordered),
+        // fieldInitializers (own + base + auto-property + static, already discovered and ordered),
         // NOT CaptureScopeAnalysis's own own-class-instance-only re-collection which missed base field and
         // auto-property initializers.
         // CA rewrite (M4): seed the typeobj registry in stable-key order (not mint-walk discovery order),
         // so typeobj alloc / is-chain / virtual-dispatch-chain byte order is traversal-independent.
-        _state.ClassTypes.Seed(plan.Reach.MintedClasses
+        _state.ClassTypes.Seed(reach.MintedClasses
             .OrderBy(StableOrdinalKey, StringComparer.Ordinal)
             .ThenBy(ClassTypeObjectContext.SpecKey, StringComparer.Ordinal));
         DeclareTypeObjectConstants();
         _virtualDispatch = new VirtualDispatch(_state.ClassTypes);
         var bodyGraph = new RecursionNodeWalk(
-            EdgeResolver, plan.Reach, plan.FieldInitOps, plan.Callables.Definitions).Run();
+            EdgeResolver, reach, fieldInitializers,
+            callables.Definitions).Run();
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
+        var captureRoots = ComputeCaptureRoots(reach);
         var captures = CaptureScopeAnalysis.Build(
-            _compilation, _classSymbol, plan.CaptureRoots, bodyGraph.Bodies, plan.FieldInitOps);
+            _compilation, _classSymbol, captureRoots,
+            bodyGraph.Bodies, fieldInitializers);
         _state.SetClosurePlans(closureIdentities, captures);
-        BindAndEmitMethods(plan, bodyGraph, closureIdentities, captures);
+        BindAndEmitMethods(
+            callables,
+            reach,
+            fields,
+            fieldInitializers,
+            bodyGraph,
+            closureIdentities,
+            captures);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
         var result = IrPipeline.Run(_module);
         _flatModule = result.FlatModule;
@@ -180,21 +193,89 @@ internal sealed class ProgramLoweringPipeline
 
     public uint GetHeapSize() => _codeGenResult.HeapSize;
 
-    ProgramDiscovery BuildProgramDiscovery(FieldDiscoveryPlan fields)
+    (CallableDefinitionPlan Callables, ReachabilityPlan Reach)
+        DiscoverCallablesAndReach(
+            IReadOnlyList<IOperation> fieldInitializers)
     {
         // Build the single ReachableBodies fixpoint once after field discovery, but before any field
         // declaration reaches Structured IR. Initializers are semantic roots for the plan.
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
-        var initializerArray = fields.InitializerOperations.ToArray();
-        return new CompilationPlanner(
+        var methods = ComputeMethods();
+        var reachable = BuildReachableBodiesViaResolver(
+            methods, fieldInitializers);
+        var methodSet = new HashSet<IMethodSymbol>(
+            methods, SymbolEqualityComparer.Default);
+        var baseInstanceMethods = reachable.BaseCopies
+            .Where(method => !methodSet.Contains(method))
+            .ToArray();
+        // Local functions register at their declaration/forward-reference
+        // site. Eagerly projecting them as foreign statics creates a dead
+        // duplicate StructuredFunction.
+        var foreignStatics = reachable.ForeignStatics
+            .Where(method =>
+                method.MethodKind != MethodKind.LocalFunction)
+            .ToArray();
+        var definitions = methods
+            .Concat(foreignStatics)
+            .Concat(reachable.StructMembers)
+            .Concat(baseInstanceMethods)
+            .Concat(EnumerateAdditionalCallableDefinitions())
+            .Concat(reachable.BodyByDef.Keys)
+            .Concat(reachable.GenericForeignStaticBodies.Keys)
+            .Concat(reachable.StructMemberDefs)
+            .Select(method => method.OriginalDefinition)
+            .Distinct<IMethodSymbol>(
+                SymbolEqualityComparer.Default)
+            .ToArray();
+        var census = new GenericTypeSpecCensus(
             _compilation,
-            ComputeMethods,
-            methods => BuildReachableBodiesViaResolver(methods, initializerArray),
-            fields,
             GetMethodBodyOperation,
             EnumerateClassFieldInitOps,
-            EnumerateAdditionalCallableDefinitions,
-            _classSymbol).Build();
+            _classSymbol).Build(
+                methods
+                    .Concat(foreignStatics)
+                    .Concat(reachable.StructMembers)
+                    .Concat(baseInstanceMethods),
+                fieldInitializers);
+        var definitionSet = new HashSet<IMethodSymbol>(
+            definitions, SymbolEqualityComparer.Default);
+        var eagerlyRegistered = new HashSet<IMethodSymbol>(
+            methods
+                .Where(method => !method.IsGenericMethod)
+                .Concat(foreignStatics)
+                .Concat(reachable.StructMembers)
+                .Concat(baseInstanceMethods),
+            SymbolEqualityComparer.Default);
+        var specializations = census.MethodSpecializations
+            .Where(method =>
+                definitionSet.Contains(method.OriginalDefinition)
+                && !eagerlyRegistered.Contains(method))
+            .ToArray();
+        var callables = new CallableDefinitionPlan(
+            methods,
+            foreignStatics,
+            reachable.StructMembers,
+            baseInstanceMethods,
+            definitions,
+            specializations,
+            census.ClosureSpecializations);
+        var reach = reachable.Freeze(census.MintedClasses);
+        return (callables, reach);
+    }
+
+    static IReadOnlyList<IMethodSymbol> ComputeCaptureRoots(
+        ReachabilityPlan reach)
+    {
+        var roots = reach.BodyByDef.Keys
+            .Where(method =>
+                method.DeclaringSyntaxReferences.Length > 0)
+            .ToList();
+        roots.AddRange(
+            reach.GenericForeignStaticBodies.Keys
+                .Where(method =>
+                    method.DeclaringSyntaxReferences.Length > 0
+                    && !reach.BodyByDef.ContainsKey(method)));
+        return Array.AsReadOnly(roots.ToArray());
     }
 
     IEnumerable<IMethodSymbol> EnumerateAdditionalCallableDefinitions()
@@ -1007,17 +1088,22 @@ internal sealed class ProgramLoweringPipeline
               or MethodKind.PropertyGet or MethodKind.PropertySet;
 
     void BindAndEmitMethods(
-        ProgramDiscovery discovery,
+        CallableDefinitionPlan callables,
+        ReachabilityPlan reach,
+        FieldDiscoveryPlan fields,
+        IReadOnlyList<IOperation> fieldInitializers,
         CallableBodyGraph bodyGraph,
         ClosureIdentityPlan closureIdentities,
         CaptureScopeAnalysis captures)
     {
-        RegisterProgram(discovery);
+        RegisterProgram(
+            callables, reach, fieldInitializers);
         var specializationRegistrar =
             new SpecializationRegistrar(_lowering);
-        foreach (var specialization in discovery.Callables.SpecializationsByKey.Values)
+        foreach (var specialization
+                 in callables.SpecializationsByKey.Values)
             specializationRegistrar.Register(specialization);
-        foreach (var closure in discovery.Callables.ClosureSpecializations)
+        foreach (var closure in callables.ClosureSpecializations)
         {
             var definition = _state.ClosureIdentities.CanonicalDefinition(closure.Method);
             var method = closure.Method.IsGenericMethod
@@ -1032,14 +1118,21 @@ internal sealed class ProgramLoweringPipeline
             _state.Methods.RegisteredBodies.Select(
                 body => body.Method.OriginalDefinition));
         _state.SyntheticDemandPlanner.SetExpectedDelegateSites(DelegateDemandCensus.Collect(
-            _state.Methods.RegisteredBodies, methodBodies, discovery.FieldInitOps));
-        PlanSyntheticDemands(discovery, methodBodies);
+            _state.Methods.RegisteredBodies,
+            methodBodies,
+            fieldInitializers));
+        PlanSyntheticDemands(
+            fieldInitializers, methodBodies);
         var syntheticDemands = _state.PublishSyntheticDemands();
         var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var abiBuilder = new BoundAbiPlanBuilder(
             _environment.AbiCatalog);
         var boundSource = BindSourceSemantics(
-            discovery, methodBodies, abiBuilder);
+            fields,
+            reach,
+            fieldInitializers,
+            methodBodies,
+            abiBuilder);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.SetRecursionPlan(recursion);
         var abi = abiBuilder.Publish();
@@ -1048,7 +1141,8 @@ internal sealed class ProgramLoweringPipeline
         var aggregates = _state.Aggregates.Publish();
         var classTypes = _state.ClassTypes.Publish();
         var program = new BoundProgram(
-            discovery,
+            callables,
+            fields,
             closureIdentities,
             captures,
             recursion,
@@ -1118,7 +1212,9 @@ internal sealed class ProgramLoweringPipeline
         BoundValueTable Values,
         IReadOnlyDictionary<IFieldSymbol, string> SourceStorageNames)
         BindSourceSemantics(
-            ProgramDiscovery discovery,
+            FieldDiscoveryPlan fields,
+            ReachabilityPlan reach,
+            IReadOnlyList<IOperation> fieldInitializers,
             BoundMethodBodyTable methodBodies,
             BoundAbiPlanBuilder abiBuilder)
     {
@@ -1153,7 +1249,7 @@ internal sealed class ProgramLoweringPipeline
             new TypeDemandPlanner(
                 _environment.Types, _compilation, _state.Aggregates);
 
-        foreach (var aggregateDefault in discovery.Fields.AggregateDefaults)
+        foreach (var aggregateDefault in fields.AggregateDefaults)
             typePlanner.Plan(aggregateDefault.AggregateType, null);
 
         void BindTree(
@@ -1361,14 +1457,14 @@ internal sealed class ProgramLoweringPipeline
             return binding;
         }
 
-        foreach (var initializer in discovery.FieldInitOps)
+        foreach (var initializer in fieldInitializers)
             BindInitializer(
                 initializer, _classSymbol, null);
 
         // User-class instance initializers execute when a class bundle is minted, even though they
         // are not fields of the compiled behaviour. They are therefore body-emission inputs and
         // must be bound under the minted class's closed containing-type map as well.
-        foreach (var mintedClass in discovery.Reach.MintedClasses)
+        foreach (var mintedClass in reach.MintedClasses)
         {
             for (var owner = mintedClass;
                  owner != null && TypeClassifier.IsUserClass(owner);
@@ -1407,7 +1503,7 @@ internal sealed class ProgramLoweringPipeline
     }
 
     void PlanSyntheticDemands(
-        ProgramDiscovery plan,
+        IReadOnlyList<IOperation> fieldInitializers,
         BoundMethodBodyTable methodBodies)
     {
         foreach (var body in _state.Methods.RegisteredBodies.ToArray())
@@ -1431,7 +1527,7 @@ internal sealed class ProgramLoweringPipeline
 
         using var fieldMethodScope = _state.Methods.EnterCallableScope(
             null, null, null, System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
-        foreach (var initializer in plan.FieldInitOps)
+        foreach (var initializer in fieldInitializers)
             PlanSyntheticDemands(initializer, true, _lowering);
     }
 
@@ -1447,11 +1543,15 @@ internal sealed class ProgramLoweringPipeline
             PlanSyntheticDemands(child, false, lowering);
     }
 
-    void RegisterProgram(ProgramDiscovery plan)
+    void RegisterProgram(
+        CallableDefinitionPlan callables,
+        ReachabilityPlan reach,
+        IReadOnlyList<IOperation> fieldInitializers)
     {
-        var methods = plan.Callables.ProgramMethods;
+        var methods = callables.ProgramMethods;
         var typeLayout = _planner.GetLayout(_classSymbol);
-        var crossDispatchExports = CollectCrossDispatchExports(plan);
+        var crossDispatchExports = CollectCrossDispatchExports(
+            reach, fieldInitializers);
 
         // First pass: create IrFunctions, assign params, return vars (skip generic definitions)
         _state.Methods.NextMethodIndex = 0;
@@ -1512,8 +1612,8 @@ internal sealed class ProgramLoweringPipeline
         // base, struct, foreign, field-init) once and applies all three per-operation rules to each, so a
         // struct/foreign/using call inside any reached body is seen. Gates (IsCollectibleStructMember /
         // IsClosedForeignStaticTarget / methodSet exclusion) stay on the projection side — meaning preserved.
-        var baseInstanceMethods = plan.Callables.BaseInstanceMethods;
-        var structMethods = plan.Callables.StructMethods;
+        var baseInstanceMethods = callables.BaseInstanceMethods;
+        var structMethods = callables.StructMethods;
         // C4 retirement (the C2-incidental duplicate): a static LOCAL FUNCTION declared inside a foreign
         // static classifies as a foreign static itself (IsForeignStatic has no MethodKind filter — its
         // reach leg seeding BodyByDef is the C2-proven recursion-node arm and stays), but local functions
@@ -1521,7 +1621,7 @@ internal sealed class ProgramLoweringPipeline
         // overwrote this eager Phase-1 copy in _methodFunctions and left it emitted-but-unreachable (a
         // dead __N_ duplicate body + heap vars, probe-proven __2_Twice/__3_Twice). Gate the REGISTRATION
         // projection only.
-        var foreignStatics = plan.Callables.ForeignStatics;
+        var foreignStatics = callables.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
             EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
@@ -1602,10 +1702,13 @@ internal sealed class ProgramLoweringPipeline
             returns: returns));
     }
 
-    static HashSet<IMethodSymbol> CollectCrossDispatchExports(ProgramDiscovery plan)
+    static HashSet<IMethodSymbol> CollectCrossDispatchExports(
+        ReachabilityPlan reach,
+        IReadOnlyList<IOperation> fieldInitializers)
     {
         var exports = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-        foreach (var root in plan.Reach.BodyByDef.Values.Concat(plan.FieldInitOps))
+        foreach (var root in reach.BodyByDef.Values
+                     .Concat(fieldInitializers))
             foreach (var operation in root.DescendantsAndSelf())
             {
                 foreach (var site in CallableSites.FromOperation(operation))
@@ -1689,7 +1792,8 @@ internal sealed class ProgramLoweringPipeline
             EmitMethod(method, spec);
         if (_pendingCallableBodies.Count != 0)
             throw new InvalidOperationException(
-                "Body lowering discovered callable bodies absent from ProgramDiscovery.");
+                "Body lowering discovered callable bodies absent "
+                + "from the closed-world callable plan.");
 
         _state.VerifySyntheticEmissionComplete();
 

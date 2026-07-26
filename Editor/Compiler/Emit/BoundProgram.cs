@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// Complete immutable semantic input to body lowering. Every callable specialization, closure,
@@ -10,7 +9,8 @@ using Microsoft.CodeAnalysis.Operations;
 /// </summary>
 internal sealed class BoundProgram
 {
-    public readonly ProgramDiscovery Discovery;
+    public readonly CallableDefinitionPlan Callables;
+    public readonly FieldDiscoveryPlan Fields;
     public readonly ClosureIdentityPlan ClosureIdentities;
     public readonly CaptureScopeAnalysis Captures;
     public readonly RecursionInfo Recursion;
@@ -31,14 +31,9 @@ internal sealed class BoundProgram
     public readonly AggregateLayoutTable Aggregates;
     public readonly ClassTypeObjectContext ClassTypes;
 
-    public CallableDefinitionPlan Callables => Discovery.Callables;
-    public ReachabilityPlan Reach => Discovery.Reach;
-    public FieldDiscoveryPlan Fields => Discovery.Fields;
-    public IReadOnlyList<IOperation> FieldInitOps => Discovery.FieldInitOps;
-    public IReadOnlyList<IMethodSymbol> CaptureRoots => Discovery.CaptureRoots;
-
     public BoundProgram(
-        ProgramDiscovery discovery,
+        CallableDefinitionPlan callables,
+        FieldDiscoveryPlan fields,
         ClosureIdentityPlan closureIdentities,
         CaptureScopeAnalysis captures,
         RecursionInfo recursion,
@@ -59,7 +54,10 @@ internal sealed class BoundProgram
         AggregateLayoutTable aggregates,
         ClassTypeObjectContext classTypes)
     {
-        Discovery = discovery ?? throw new ArgumentNullException(nameof(discovery));
+        Callables = callables
+            ?? throw new ArgumentNullException(nameof(callables));
+        Fields = fields
+            ?? throw new ArgumentNullException(nameof(fields));
         ClosureIdentities = closureIdentities
             ?? throw new ArgumentNullException(nameof(closureIdentities));
         Captures = captures ?? throw new ArgumentNullException(nameof(captures));

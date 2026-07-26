@@ -46,13 +46,18 @@ internal sealed class GenericTypeSpecCensus
         _dispatchTypes.Add(rootType);
     }
 
-    public Result Build(ProgramDiscoverySeed plan)
+    public Result Build(
+        IEnumerable<IMethodSymbol> methodRoots,
+        IEnumerable<IOperation> initializerRoots)
     {
-        foreach (var m in plan.ProgramMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.ForeignStatics) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.StructMethods) EnqueueIfClosed(m, null, null);
-        foreach (var m in plan.BaseInstanceMethods) EnqueueIfClosed(m, null, null);
-        foreach (var op in plan.FieldInitOps) Walk(op, null, null, null);
+        if (methodRoots == null)
+            throw new ArgumentNullException(nameof(methodRoots));
+        if (initializerRoots == null)
+            throw new ArgumentNullException(nameof(initializerRoots));
+        foreach (var method in methodRoots)
+            EnqueueIfClosed(method, null, null);
+        foreach (var operation in initializerRoots)
+            Walk(operation, null, null, null);
 
         while (_queue.Count > 0 || _fieldQueue.Count > 0)
         {
@@ -197,7 +202,7 @@ internal sealed class GenericTypeSpecCensus
         EnqueueIfClosed(implementation, implementationMap, trace);
         // The reach pass cannot resolve dispatch against a class type minted later in this census.
         // Preserve the selected implementation as a late registration even when it is a non-generic
-        // definition; CompilationPlanner removes methods that were already registered eagerly.
+        // definition; the caller removes methods that were already registered eagerly.
         if (implementation.DeclaringSyntaxReferences.Length > 0
             && _bodyOf(implementation.OriginalDefinition) != null)
             _specializations.TryAdd(MethodKey(implementation, implementationMap), implementation);
