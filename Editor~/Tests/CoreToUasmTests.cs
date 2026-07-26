@@ -22,9 +22,11 @@ public class CoreToUasmTests
     }
 
     [Fact]
-    public void VerifiedFlatModule_SnapshotsMutableCfgCollectionsAndEdges()
+    public void VerifiedFlatModule_FreezesTheCfgInPlace()
     {
         var module = new FlatModule(className: "Freeze");
+        var field = new FieldDecl("value", StorageTypes.Int32);
+        module.Fields.Add(field);
         var function = module.AddFunction("freeze");
         function.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
         var entry = function.NewBlock();
@@ -36,18 +38,31 @@ public class CoreToUasmTests
 
         var verified = VerifiedFlatModule.VerifyAndFreeze(module);
 
-        entry.Instructions.Clear();
-        entry.Terminator = new CJump(entry.Id);
-        function.Blocks.Clear();
-        module.Functions.Clear();
-
         var frozenFunction = Assert.Single(verified.Functions);
+        Assert.Same(function, frozenFunction);
         Assert.Equal(2, frozenFunction.Blocks.Count);
         Assert.Single(frozenFunction.Entry.Instructions);
         Assert.Equal(exit.Id, Assert.IsType<CJump>(
             frozenFunction.Entry.Terminator).TargetBlockId);
-        Assert.Null(typeof(VerifiedFlatFunction).GetMethod("NewSlot"));
-        Assert.Null(typeof(VerifiedFlatFunction).GetMethod("NewBlock"));
+        Assert.Throws<NotSupportedException>(
+            () => entry.Instructions.Clear());
+        Assert.Throws<InvalidOperationException>(
+            () => entry.Terminator = new CJump(entry.Id));
+        Assert.Throws<NotSupportedException>(
+            () => function.Blocks.Clear());
+        Assert.Throws<NotSupportedException>(
+            () => module.Functions.Clear());
+        Assert.Throws<InvalidOperationException>(
+            () => function.NewSlot(
+                StorageTypes.String, SlotClass.Scratch));
+        Assert.Throws<InvalidOperationException>(
+            () => field.Flags = FieldFlags.Export);
+        Assert.Null(typeof(VerifiedFlatModule).Assembly.GetType(
+            "VerifiedFlatFunction"));
+        Assert.Null(typeof(VerifiedFlatModule).Assembly.GetType(
+            "VerifiedFlatBlock"));
+        Assert.Null(typeof(VerifiedFlatModule).Assembly.GetType(
+            "VerifiedFieldDecl"));
     }
 
     [Fact]

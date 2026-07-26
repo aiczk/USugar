@@ -118,7 +118,8 @@ public static class CoreFlatOptimizer
                 }
             }
             block.Instructions.Clear();
-            block.Instructions.AddRange(newStmts);
+            foreach (var statement in newStmts)
+                block.Instructions.Add(statement);
         }
 
         // [X4]: coalesce the fresh spill temps among themselves when their count crosses the
@@ -197,14 +198,17 @@ public static class CoreFlatOptimizer
     // A spill site is a named recursive-edge internal call OR a Reentrant-flagged delegate-dispatch
     // arm (__indirect / SendCustomEvent — design §4.3): both can re-enter the containing function and
     // clobber its frame, so both get the same spill/reload wrap.
-    static bool IsSpillSite(IFlatInstruction inst, HashSet<string> names)
+    static bool IsSpillSite(
+        IFlatInstruction inst, IReadOnlyCollection<string> names)
         => IsRecursiveCall(inst, names) || IsReentrantFlagged(inst);
 
     // Round-9 [Y3]: a TailSpared instruction is a recursive-edge call SITE in tail position — the
     // frame reads nothing after it, so it is exempt from the per-callee-name wrap (one non-tail
     // site used to make every site of that callee spill, overflowing the stack on deep mixed
     // tail/non-tail recursion; the dispatch arm has always been per-site via Reentrant).
-    internal static bool IsRecursiveCall(IFlatInstruction inst, HashSet<string> names) => inst switch
+    internal static bool IsRecursiveCall(
+        IFlatInstruction inst,
+        IReadOnlyCollection<string> names) => inst switch
     {
         CExprStmt { Expr: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
         CAssign { Value: CInternalCall ic } => !ic.TailSpared && names.Contains(ic.FuncName),
@@ -247,7 +251,7 @@ public static class CoreFlatOptimizer
 
     // Push order: fields then slots (reload pops in reverse → LIFO balanced).
     static void EmitSpill(FlatFunction func, List<IFlatInstruction> output,
-        List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
+        IList<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
         BoundAbiPlan abi)
     {
         foreach (var f in fields)
@@ -261,7 +265,7 @@ public static class CoreFlatOptimizer
     }
 
     static void EmitReload(FlatFunction func, List<IFlatInstruction> output,
-        List<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
+        IList<(string Name, StorageType Type)> fields, List<SlotDecl> slots,
         BoundAbiPlan abi)
     {
         for (int i = slots.Count - 1; i >= 0; i--)
@@ -431,7 +435,8 @@ public static class CoreFlatOptimizer
                 rewritten.Add(r);
             }
             block.Instructions.Clear();
-            block.Instructions.AddRange(rewritten);
+            foreach (var instruction in rewritten)
+                block.Instructions.Add(instruction);
 
             block.Terminator = RemapTerminator(block.Terminator, mapping);
         }

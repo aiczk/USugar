@@ -3091,7 +3091,7 @@ internal sealed class LoweringServices
             if (sitePlan.TailSpared)
                 return InternalCall(func.Name, args, retType, tailSpared: true);
             RegisterCallableSiteSpill(sitePlan);
-            _builder.CurrentFunction.RecursiveCalleeNames.Add(func.Name);
+            _builder.CurrentFunction.AddRecursiveCallee(func.Name);
         }
 
         return InternalCall(func.Name, args, retType);

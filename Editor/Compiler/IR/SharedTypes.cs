@@ -128,18 +128,56 @@ public enum StorageDomain
 /// <summary>Module-level field declaration (heap variable).</summary>
 public sealed class FieldDecl
 {
-    public readonly string Name;
-    public readonly StorageType Type;
-    public object DefaultValue;
-    public FieldFlags Flags;
-    public string SyncMode; // "none", "linear", "smooth" (null = not synced)
-    public readonly StorageDomain Domain;
+    bool _frozen;
+    object _defaultValue;
+    FieldFlags _flags;
+    string _syncMode;
+
+    public string Name { get; }
+    public StorageType Type { get; }
+    public StorageDomain Domain { get; }
+    public object DefaultValue
+    {
+        get => _defaultValue;
+        set
+        {
+            ThrowIfFrozen();
+            _defaultValue = value;
+        }
+    }
+    public FieldFlags Flags
+    {
+        get => _flags;
+        set
+        {
+            ThrowIfFrozen();
+            _flags = value;
+        }
+    }
+    public string SyncMode
+    {
+        get => _syncMode;
+        set
+        {
+            ThrowIfFrozen();
+            _syncMode = value;
+        }
+    }
 
     public FieldDecl(string name, StorageType type, StorageDomain domain = StorageDomain.Generated)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
         Type = type;
         Domain = domain;
+    }
+
+    internal void Freeze() => _frozen = true;
+
+    void ThrowIfFrozen()
+    {
+        if (_frozen)
+            throw new InvalidOperationException(
+                $"Field '{Name}' is frozen.");
     }
 
     public override string ToString()
