@@ -22,7 +22,7 @@ internal sealed class LoweringState
         { get; private set; }
 
     // Mutable output and lowering state.
-    public readonly StructuredModule Module;
+    public readonly FlatModule Module;
     public readonly CoreBuilder Builder;
     public readonly StorageContext Storage;
     public readonly BoundaryChecker Boundary;
@@ -376,8 +376,8 @@ internal sealed class LoweringState
             ?? throw new ArgumentNullException(nameof(planner));
         Types = types
             ?? throw new ArgumentNullException(nameof(types));
-        Module = new StructuredModule()
-            { ClassName = ClassSymbol.ToDisplayString() };
+        Module = new FlatModule(
+            className: ClassSymbol.ToDisplayString());
         Builder = new CoreBuilder(Module);
         Storage = new StorageContext(Module);
         Boundary = new BoundaryChecker(this);

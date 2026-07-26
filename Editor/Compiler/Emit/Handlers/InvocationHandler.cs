@@ -372,7 +372,7 @@ internal sealed class InvocationHandler
         // exactly like a generic method — but target.IsGenericMethod is false so the generic-foreign-static
         // arm above skips it, and its closed form is never pre-registered: Phase-1's foreign-static
         // collector only walks class/base bodies (a generic struct/method body is emitted on demand, in
-        // OPEN form), so the closed Helper<float>.Boost has no Phase-1 StructuredFunction and the plain
+        // OPEN form), so the closed Helper<float>.Boost has no Phase-1 FlatFunction and the plain
         // foreign-static arm's ContainsKey misses. Fell through to a bogus SystemObjectArray.__Boost__
         // extern. Register the closed spec on demand (RegisterGenericSpecialization composes the containing
         // type's type-arg map in EmitMethod, so a T-dependent body monomorphizes correctly) and JUMP to it

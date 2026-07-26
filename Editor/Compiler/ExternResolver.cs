@@ -365,7 +365,7 @@ public static class ExternResolver
 
     // The IUdonEventReceiver cross-program marshalling externs — the single source for the
     // SetProgramVariable / SendCustomEvent / GetProgramVariable signatures shared by every copy-in / dispatch
-    // producer (CoreFlatten + the handlers) and the FlatVerify recognizer, which formerly substring-matched
+    // producer (CoreBuilder + the handlers) and the FlatVerify recognizer, which formerly substring-matched
     // the literal and would silently stop matching if the format drifted.
     public static readonly UdonAbiKey EventReceiverSetProgramVariable =
         UdonAbiKey.VoidMethod("VRCUdonCommonInterfacesIUdonEventReceiver",

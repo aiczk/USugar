@@ -7,10 +7,10 @@ namespace USugar.Tests;
 /// Phase 2: FlatVerify negative tests — confirms the post-condition verifier rejects the
 /// structural violations it can still be handed at runtime. With operand positions retyped to
 /// CLeaf (re-arming the guarantee LIR's separate LOperand type gave for free), a nested call in a
-/// call argument and a CFieldLoad in a CStoreField value are now compile-time-prevented — they can
+/// call argument and a field load in a CStoreField value are now compile-time-prevented — they can
 /// no longer be constructed, so their former negative tests are gone. Missing/dangling terminators
 /// and invalid leaf uses remain runtime-checked; phase mixing is rejected by the type system.
-/// The positive case (well-formed CoreFlatten output passes) has no dedicated unit-test file —
+/// The positive case (well-formed CoreBuilder output passes) has no dedicated unit-test file —
 /// it is exercised by every compiling test, since IrPipeline runs FlatVerify on each compile.
 /// </summary>
 public class FlatVerifyTests
@@ -47,7 +47,7 @@ public class FlatVerifyTests
     }
 
     // NestedCallArg and LoadFieldRefAsOperand violations are now compile-time-prevented: CExternCall.Args
-    // is List<CLeaf> and CStoreField.Value is CLeaf, so neither a nested CExternCall nor a CFieldLoad can be
+    // is List<CLeaf> and CStoreField.Value is CLeaf, so neither a nested CExternCall nor a field load can be
     // placed in those positions. The runtime guard in FlatVerify.RequireLeaf remains as a defensive backstop.
 
     [Fact]
@@ -60,19 +60,19 @@ public class FlatVerifyTests
     }
 
     [Fact]
-    public void StructuredControlFlowCannotEnterFlatInstructionList()
+    public void LegacyStructuredControlFlowIsAbsent()
     {
-        Assert.False(typeof(IFlatInstruction).IsAssignableFrom(typeof(CIf)));
+        Assert.Null(typeof(IFlatInstruction).Assembly.GetType("CIf"));
     }
 
     [Fact]
-    public void StructuredAndFlatFunctionsAreDifferentPhaseTypes()
+    public void LegacyStructuredFunctionIsAbsent()
     {
-        Assert.False(typeof(FlatFunction).IsAssignableFrom(typeof(StructuredFunction)));
+        Assert.Null(typeof(FlatFunction).Assembly.GetType("StructuredFunction"));
     }
 
     // ── Reentrant-flag conservation (design §4.3) ──
-    // CoreFlatten and CoalesceSlots/RemapInst REBUILD call instructions; a rebuild that drops the
+    // CoalesceSlots/RemapInst rebuilds call instructions; a rebuild that drops the
     // Reentrant flag silently loses the dispatch-site recursion spill. FlatVerify must catch the
     // imbalance structurally: flat flag count must equal FlatFunction.ReentrantSiteCount.
 

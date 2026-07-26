@@ -63,10 +63,7 @@ internal sealed class ProgramInitializationEmitter
         {
             if (function.ExportName == null || function.Name == FunctionName)
                 continue;
-            function.Body.Stmts.Insert(0, new CExprStmt(new CInternalCall(
-                FunctionName,
-                new List<CLeaf>(),
-                StorageTypes.Void)));
+            _builder.PrependInternalVoid(function, FunctionName);
         }
     }
 }

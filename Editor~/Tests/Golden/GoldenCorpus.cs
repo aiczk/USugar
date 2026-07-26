@@ -103,8 +103,7 @@ public class StructRecursionPerFrameClosure : UdonSharpBehaviour {
   public int r;
   void Start(){ int Square(int n) => n * n; r = Square(5); }
 }"),
-        // Cross-behaviour call exercises LowerCrossBehaviourCall (Set/Send/Get expansion) —
-        // the one LIVE semantic lowering embedded in HirToLir that CoreFlatten copies verbatim.
+        // Cross-behaviour call exercises CoreBuilder's direct Set/Send/Get expansion.
         ("cross_behaviour_call", "CrossBehaviour",
 @"using UdonSharp; public class CrossBehaviour : UdonSharpBehaviour {
   public TestStubs.BaseEnemy enemy; public int hp;

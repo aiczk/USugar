@@ -7,7 +7,7 @@ public sealed class MulticastDelegateEmitter
 {
     readonly LoweringState _ctx;
     readonly CoreBuilder _builder;
-    readonly StructuredModule _module;
+    readonly FlatModule _module;
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
     readonly INamedTypeSymbol _classSymbol;

@@ -27,7 +27,7 @@ namespace USugar.Tests;
 /// [Y5]  Non-tail self-recursion in a BASE-declared generic called open-T never fed
 ///       BuildRecursionInfo (the on-demand spec family has no eager registration) — no graph node,
 ///       no self-edge, no spills; live locals clobbered per frame (VM-proven rA ref=234 vs 63).
-/// [Y6]  using/Dispose inside a base generic open-T body ICEd ("No StructuredFunction registered for
+/// [Y6]  using/Dispose inside a base generic open-T body ICEd ("No FlatFunction registered for
 ///       method 'Dispose'") — the open definition never seeded the struct/foreign collectors.
 /// [Y7]  A delegate from an INHERITED generic method group with concrete type args rejected loudly
 ///       on legal C# — the creation gate only accepted the compiled class as the declaring type.
@@ -269,7 +269,7 @@ public class W9R9InhRec : W9R9InhRecBase {
     [Fact]
     public void UsingDispose_InBaseGenericOpenT_Compiles()
     {
-        // MinUsingInhGenOpenT (ICE "No StructuredFunction registered for method 'Dispose'" pre-fix).
+        // MinUsingInhGenOpenT (ICE "No FlatFunction registered for method 'Dispose'" pre-fix).
         var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;

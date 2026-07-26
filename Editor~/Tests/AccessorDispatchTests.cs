@@ -174,7 +174,7 @@ public class CwVIdxSet : UdonSharpBehaviour {
     public void VirtualAutoProperty_MixedImpls_Compiles()
     {
         // A virtual AUTO property's impl arm is a layout-slot access on the CONCRETE target's layout;
-        // a computed override's arm is a StructuredFunction call — one chain carries both arm kinds.
+        // a computed override's arm is a FlatFunction call — one chain carries both arm kinds.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class AmB { public virtual int P { get; set; } }

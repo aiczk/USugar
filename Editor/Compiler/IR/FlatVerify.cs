@@ -22,7 +22,7 @@ public static class FlatVerify
     {
         if (module == null) throw new ArgumentNullException(nameof(module));
 
-        var fields = CoreVerify.BuildFieldIndex(module);
+        var fields = BuildFieldIndex(module);
         var functions = new Dictionary<string, FlatFunction>(StringComparer.Ordinal);
         foreach (var function in module.Functions)
             if (!functions.TryAdd(function.Name, function))
@@ -34,6 +34,23 @@ public static class FlatVerify
             Verify(function);
             VerifyTypes(function, module.TypeFacts, fields, functions);
         }
+    }
+
+    static Dictionary<string, StorageType> BuildFieldIndex(FlatModule module)
+    {
+        var fields = new Dictionary<string, StorageType>(StringComparer.Ordinal);
+        foreach (var field in module.Fields)
+            if (!fields.TryAdd(field.Name, field.Type))
+                throw new VerificationException(
+                    $"Duplicate field declaration '{field.Name}'");
+        foreach (var function in module.Functions)
+            foreach (var returnSlot in function.ReturnSlots)
+                if (!fields.TryAdd(returnSlot.Id, returnSlot.StorageType)
+                    && fields[returnSlot.Id] != returnSlot.StorageType)
+                    throw new VerificationException(
+                        $"Return field '{returnSlot.Id}' has conflicting types "
+                        + $"'{fields[returnSlot.Id]}' and '{returnSlot.StorageType}'");
+        return fields;
     }
 
     public static void Verify(FlatFunction f)
@@ -349,11 +366,11 @@ public static class FlatVerify
            && call.Type.Name == "SystemVoid"
            && call.Sig.Key == ExternResolver.EventReceiverSetProgramVariable;
 
-    /// <summary>Reentrant-flag conservation (design §4.3): CoreFlatten and CoalesceSlots/RemapInst both
-    /// REBUILD call instructions, so a rebuild that forgets to copy the flag silently loses the
+    /// <summary>Reentrant-flag conservation (design §4.3): CoalesceSlots/RemapInst rebuilds call
+    /// instructions, so forgetting to copy the flag silently loses the
     /// dispatch-site recursion spill — exactly the failure object-identity marking died of. The flat
     /// instruction stream must carry exactly FlatFunction.ReentrantSiteCount flags (creation-counted by
-    /// CoreBuilder, dead-code-adjusted by CoreFlatten).</summary>
+    /// CoreBuilder).</summary>
     static void VerifyReentrantConservation(FlatFunction f)
     {
         int flagged = 0;
@@ -428,9 +445,6 @@ public static class FlatVerify
                     throw new InvalidOperationException(
                         $"{fn}: {ctx}: CFieldAddr is only valid as a direct extern/internal-call argument");
                 break;
-            case CFieldLoad _:
-                throw new InvalidOperationException(
-                    $"{fn}: {ctx}: CFieldLoad is not a flat leaf (must be materialized via CLoadField)");
             default:
                 throw new InvalidOperationException(
                     $"{fn}: {ctx}: operand must be a leaf, got nested {v?.GetType().Name}");
@@ -442,4 +456,10 @@ public static class FlatVerify
         if (!blockIds.Contains(id))
             throw new InvalidOperationException($"{fn}: terminator targets nonexistent block {id}");
     }
+}
+
+/// <summary>Exception thrown when compiler IR verification fails.</summary>
+public sealed class VerificationException : Exception
+{
+    public VerificationException(string message) : base(message) { }
 }

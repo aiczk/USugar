@@ -25,7 +25,7 @@ namespace USugar.Tests;
 ///       InsertRecursionSpills
 ///       now interval-coalesces the fresh temps among themselves above a 64-temp threshold.
 /// [X5]  using/Dispose (or any struct/foreign-static call) inside a BASE-INSTANCE COPY body ICEd
-///       ("No StructuredFunction registered for method 'Dispose'") — the collectors are now seeded with the
+///       ("No FlatFunction registered for method 'Dispose'") — the collectors are now seeded with the
 ///       base copies' bodies too (registration order unchanged).
 /// [X6]  Two distinct instantiations of a generic whose body contains a CAPTURING closure shared
 ///       one hoisted closure (capture cells seeded last-spec-wins; ref r1=8 vs 3) — loud reject;
@@ -155,7 +155,7 @@ public class W9R5B14M5 : UdonSharpBehaviour {
     [Fact]
     public void UsingDispose_InsideBaseInstanceCopyBody_Compiles()
     {
-        // Pre-fix: "No StructuredFunction registered for method 'Dispose'" ICE — the base copy's body was
+        // Pre-fix: "No FlatFunction registered for method 'Dispose'" ICE — the base copy's body was
         // never scanned by CollectStructMethods/CollectForeignStaticMethods.
         var uasm = TestHelper.CompileToUasm(@"
 using System;

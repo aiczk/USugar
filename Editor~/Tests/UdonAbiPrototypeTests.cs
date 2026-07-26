@@ -27,7 +27,7 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
-    public void CoreVerifierAcceptsTypedSdkPrototype()
+    public void CfgBuilderAcceptsTypedSdkPrototype()
     {
         const string signature = "ExampleMath.__Add__SystemInt32_SystemInt32__SystemInt32";
         var bound = Catalog(signature,
@@ -35,7 +35,7 @@ public class UdonAbiPrototypeTests
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new StructuredModule();
+        var module = new FlatModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);
@@ -45,11 +45,12 @@ public class UdonAbiPrototypeTests
             builder.Const(2, StorageTypes.Int32),
         }, StorageTypes.Int32));
 
-        CoreVerify.Verify(module);
+        builder.Complete();
+        FlatVerify.Verify(module);
     }
 
     [Fact]
-    public void CoreVerifierRejectsSdkPrototypeAritySkew()
+    public void CfgBuilderRejectsSdkPrototypeAritySkew()
     {
         const string signature = "ExampleMath.__Add__SystemInt32_SystemInt32__SystemInt32";
         var bound = Catalog(signature,
@@ -57,37 +58,39 @@ public class UdonAbiPrototypeTests
             Param("right", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new StructuredModule();
+        var module = new FlatModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);
-        builder.EmitAssign(destination, new CExternCall(bound, new List<CLeaf>
-        {
-            builder.Const(1, StorageTypes.Int32),
-        }, StorageTypes.Int32));
-
-        var error = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        var error = Assert.Throws<VerificationException>(() =>
+            builder.EmitAssign(destination, new CExternCall(
+                bound, new List<CLeaf>
+                {
+                    builder.Const(1, StorageTypes.Int32),
+                },
+                StorageTypes.Int32)));
         Assert.Contains("consumes 3 SDK stack operands", error.Message);
     }
 
     [Fact]
-    public void CoreVerifierRejectsSdkPrototypeTypeSkew()
+    public void CfgBuilderRejectsSdkPrototypeTypeSkew()
     {
         const string signature = "ExampleMath.__Abs__SystemInt32__SystemInt32";
         var bound = Catalog(signature,
             Param("value", "SystemInt32", UdonAbiParameterMode.In),
             Param("result", "SystemInt32", UdonAbiParameterMode.Out))
             .Require(TestHelper.AbiKey(signature));
-        var module = new StructuredModule();
+        var module = new FlatModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("test");
         var destination = builder.AllocFrame(StorageTypes.Int32);
-        builder.EmitAssign(destination, new CExternCall(bound, new List<CLeaf>
-        {
-            builder.Const("bad", StorageTypes.String),
-        }, StorageTypes.Int32));
-
-        var error = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        var error = Assert.Throws<VerificationException>(() =>
+            builder.EmitAssign(destination, new CExternCall(
+                bound, new List<CLeaf>
+                {
+                    builder.Const("bad", StorageTypes.String),
+                },
+                StorageTypes.Int32)));
         Assert.Contains("expects ABI type 'SystemInt32'", error.Message);
     }
 

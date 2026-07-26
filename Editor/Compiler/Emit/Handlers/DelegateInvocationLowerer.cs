@@ -167,7 +167,7 @@ internal sealed class DelegateInvocationLowerer
     /// foreign-received bundles) — over-spilling here is strictly conservative and cheap (§8-3
     /// direction). InsertRecursionSpills protects the fan-out's OWN live-across-the-call slots (i/n/
     /// list/args-snapshot/ret) via its existing generic per-function slot-liveness machinery — no new
-    /// spill category, since that pass is driven by StructuredFunction.ReentrantSiteCount and post-coalesce
+    /// spill category, since that pass is driven by FlatFunction.ReentrantSiteCount and post-coalesce
     /// slot liveness, not by the caller having an IMethodSymbol.
     /// </summary>
     internal CLeaf EmitFanoutElementDispatch(CLeaf bundle, IMethodSymbol invoke,

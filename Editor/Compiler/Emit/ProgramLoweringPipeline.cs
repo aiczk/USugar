@@ -23,10 +23,10 @@ public sealed class UasmEmitter
     // Phase-local projections; immutable services remain on the session.
     Compilation _compilation => _state.Compilation;
     INamedTypeSymbol _classSymbol => _state.ClassSymbol;
-    StructuredModule _module => _state.Module;
+    FlatModule _module => _state.Module;
     CoreBuilder _builder => _state.Builder;
     FrozenLayoutPlan _planner => _state.Planner;
-    IReadOnlyDictionary<IMethodSymbol, StructuredFunction> _methodFunctions => _state.Methods.Functions;
+    IReadOnlyDictionary<IMethodSymbol, FlatFunction> _methodFunctions => _state.Methods.Functions;
     IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
     IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
     IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
@@ -148,7 +148,7 @@ public sealed class UasmEmitter
     // ── Emit ──
 
     /// <summary>Access to the Core IR module for debugging and testing.</summary>
-    public StructuredModule Module => _module;
+    public FlatModule Module => _module;
     /// <summary>Access to the most recently lowered flat IR module.</summary>
     public VerifiedFlatModule FlatModule => _flatModule;
 
@@ -234,7 +234,7 @@ public sealed class UasmEmitter
             closureIdentities,
             captures);
         // Handlers build Core IR; the pipeline (verify/optimize/flatten) runs on Core directly.
-        var result = IrPipeline.Run(_module);
+        var result = IrPipeline.Run(_module, _builder);
         _flatModule = result.FlatModule;
         _codeGenResult = result.CodeGen;
         return result.CodeGen.Uasm;
@@ -259,7 +259,7 @@ public sealed class UasmEmitter
             .ToArray();
         // Local functions register at their declaration/forward-reference
         // site. Eagerly projecting them as foreign statics creates a dead
-        // duplicate StructuredFunction.
+        // duplicate FlatFunction.
         var foreignStatics = reachable.ForeignStatics
             .Where(method =>
                 method.MethodKind != MethodKind.LocalFunction)
@@ -2318,7 +2318,7 @@ public sealed class UasmEmitter
 
     // B46 (wave-14 r4): a foreign-static call whose containing type still carries an OPEN type
     // parameter (Helper<U>.Boost seen in the SHARED body of a generic struct/method, U unbound) has
-    // no single monomorphization here — collecting it would register a phantom open StructuredFunction, exactly
+    // no single monomorphization here — collecting it would register a phantom open FlatFunction, exactly
     // the shape IsCollectibleStructMember skips. The binding phase materializes its closed call site.
     // Genuinely closed foreign statics (incl.
     // non-generic Helper.Boost, or Helper<int>.Boost from a concretely-typed context) are collected.
@@ -2336,7 +2336,7 @@ public sealed class UasmEmitter
     // regardless of which instantiation is collecting it — resolves a SELF-reference (recursion, or
     // one struct member calling a sibling) to the RAW OPEN containing type (Box<T> where T is the
     // struct's own type parameter), never to any concrete spec. Collecting this phantom open-form
-    // entry registers a SECOND, dead (real call sites bind to the closed spec) StructuredFunction
+    // entry registers a SECOND, dead (real call sites bind to the closed spec) FlatFunction
     // that corrupts the definition-keyed
     // recursion/spill bookkeeping (VM-proven: a self-recursive generic struct method returned 0
     // instead of the CLR's 6). Skip collecting through the open form; the real call sites (outer
@@ -2355,7 +2355,7 @@ public sealed class UasmEmitter
     // fix targeted (VM-proven: BoxMutualRecurse Ping(5)+Ping(3) returned 8 instead of the CLR's 21).
     // B70 root 2 (A11): a recursive generic LF / struct method's self-call `Lf<T>(n-1)` is an open generic-
     // METHOD form (its OWN type argument is still the open T), the method-dimension twin of the open-
-    // containing-type shape above. Left collectible it registers a dead second StructuredFunction whose body is
+    // containing-type shape above. Left collectible it registers a dead second FlatFunction whose body is
     // emitted mapless (no isSpec map) → `new T[]` → bogus `TArray` (the closed Lf<int> spec is registered
     // separately while the bound program is materialized). Reject it too.
     internal static bool IsCollectibleStructMember(IMethodSymbol m)

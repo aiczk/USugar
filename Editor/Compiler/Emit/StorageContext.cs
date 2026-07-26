@@ -15,7 +15,7 @@ public readonly struct LocalBinding
 /// </summary>
 public sealed class StorageContext
 {
-    readonly StructuredModule _module;
+    readonly FlatModule _module;
     readonly Dictionary<string, int> _counters = new();
     readonly Dictionary<string, FieldDecl> _declarations = new(StringComparer.Ordinal);
     readonly Dictionary<StorageType, string> _thisVars = new();
@@ -24,7 +24,7 @@ public sealed class StorageContext
 
     public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
 
-    public StorageContext(StructuredModule module) => _module = module;
+    public StorageContext(FlatModule module) => _module = module;
 
     int NextIndex(string key)
     {

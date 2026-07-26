@@ -54,25 +54,18 @@ public class FlatTypeVerifyTests
     }
 
     [Fact]
-    public void ModuleVerifier_RejectsSelectArmMismatchAfterFlattening()
+    public void CfgBuilderRejectsSelectArmMismatchAtConstruction()
     {
-        var module = new StructuredModule(abiCatalog: TestHelper.RegistryFacts);
+        var module = new FlatModule(abiCatalog: TestHelper.RegistryFacts);
         var builder = new CoreBuilder(module);
-        var function = builder.BeginFunction("select");
+        builder.BeginFunction("select");
         var condition = builder.AllocScratch(StorageTypes.Boolean);
-        var result = builder.AllocScratch(StorageTypes.Int32);
-        builder.EmitAssign(result, new CSelect(
-            builder.SlotRef(condition),
-            builder.Const("bad", StorageTypes.String),
-            builder.Const(1, StorageTypes.Int32),
-            StorageTypes.Int32));
-
-        // Structured verification intentionally permits inheritance-compatible CSelect arms. Once
-        // lowered to concrete COPY edges, the shared declared-relaxation rule can decide each arm.
-        CoreVerify.Verify(module);
-        var flatModule = CoreFlatten.Lower(module);
-
-        var ex = Assert.Throws<VerificationException>(() => FlatVerify.Verify(flatModule));
+        var ex = Assert.Throws<VerificationException>(() =>
+            builder.Select(
+                builder.SlotRef(condition),
+                builder.Const("bad", StorageTypes.String),
+                builder.Const(1, StorageTypes.Int32),
+                StorageTypes.Int32));
         Assert.Contains("CAssign", ex.Message);
     }
 

@@ -94,7 +94,7 @@ public sealed class ReceiverBridgeEmitter
         });
     }
 
-    void EmitBody(string bridgeName, Microsoft.CodeAnalysis.IMethodSymbol member, StructuredFunction targetFunction)
+    void EmitBody(string bridgeName, Microsoft.CodeAnalysis.IMethodSymbol member, FlatFunction targetFunction)
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(

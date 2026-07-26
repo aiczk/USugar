@@ -116,7 +116,8 @@ public class CoreToUasmTests
     [Fact]
     public void CoreBuilder_DoesNotDeduplicateCollidingObjectRenderings()
     {
-        var builder = new CoreBuilder(new StructuredModule { ClassName = "ConstCollision" });
+        var builder = new CoreBuilder(
+            new FlatModule(className: "ConstCollision"));
         var nullValue = builder.Const(null, StorageTypes.Object);
         var nullString = builder.Const("null", StorageTypes.Object);
         var boxedOne = builder.Const(1, StorageTypes.Object);

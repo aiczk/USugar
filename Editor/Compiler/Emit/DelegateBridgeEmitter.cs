@@ -71,7 +71,7 @@ public sealed class DelegateBridgeEmitter
         }
     }
 
-    StructuredFunction RequireTarget(
+    FlatFunction RequireTarget(
         IMethodSymbol method,
         string bridgeName)
     {
@@ -87,7 +87,7 @@ public sealed class DelegateBridgeEmitter
 
     void EmitBody(string bridgeName, IMethodSymbol signatureMethod,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
-        StructuredFunction target, IMethodSymbol closureCheckMethod)
+        FlatFunction target, IMethodSymbol closureCheckMethod)
     {
         var builder = _context.Builder;
         var signaturePart = DelegateAbi.BuildSigPart(

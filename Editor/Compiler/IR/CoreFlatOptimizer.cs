@@ -39,9 +39,7 @@ public static class CoreFlatOptimizer
     /// </summary>
     public static void InsertRecursionSpills(FlatModule module)
     {
-        var abi = module.Abi
-            ?? throw new InvalidOperationException(
-                "Recursion spill lowering requires a bound ABI.");
+        var abi = module.RequireAbi();
         foreach (var func in module.Functions)
             InsertRecursionSpillsFunc(func, abi);
     }
@@ -673,7 +671,7 @@ public static class CoreFlatOptimizer
         CLoadField lf => new CLoadField(RemapSlotId(lf.DestSlot, mapping), lf.FieldName, lf.Type),
         CStoreField sf => new CStoreField(sf.FieldName, RemapLeaf(sf.Value, mapping)),
         // Reentrant (and round-9 [Y3] TailSpared) MUST be copied: this rebuild is the second
-        // flag-killing reconstruction site (with CoreFlatten.LowerExpr — design §4.3); FlatVerify
+        // flag-killing reconstruction site (design §4.3); FlatVerify
         // checks Reentrant conservation after the pass.
         CExprStmt { Expr: CExternCall ce } => new CExprStmt(ce.With(RemapArgs(ce.Args, mapping), RemapSlotIdNullable(ce.DestSlot, mapping))),
         CExprStmt { Expr: CInternalCall ci } => new CExprStmt(ci.With(RemapArgs(ci.Args, mapping), RemapSlotIdNullable(ci.DestSlot, mapping))),
@@ -691,7 +689,7 @@ public static class CoreFlatOptimizer
             $"Unknown CTerminator kind in CoreFlatOptimizer.RemapTerminator: {TermKind(term)}"),
     };
 
-    // Kind naming for the loud defaults above (mirrors CoreVerify's "Unknown IFlatInstruction type" voice; a
+    // Kind naming for the loud defaults above (mirrors FlatVerify's unknown-instruction voice; a
     // CExprStmt names its payload too, since the flat arms discriminate on it).
     static string StmtKind(IFlatInstruction inst) => inst switch
     {

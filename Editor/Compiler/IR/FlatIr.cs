@@ -22,7 +22,7 @@ public sealed class FlatBlock
     }
 }
 
-/// <summary>A function after structured control flow has been lowered to a flat CFG.</summary>
+/// <summary>A function represented directly as a flat control-flow graph.</summary>
 public sealed class FlatFunction
 {
     public readonly string Name;
@@ -45,18 +45,6 @@ public sealed class FlatFunction
         ExportName = exportName;
     }
 
-    internal FlatFunction(StructuredFunction source)
-        : this(source?.Name ?? throw new ArgumentNullException(nameof(source)), source.ExportName)
-    {
-        Slots.AddRange(source.Slots);
-        ReturnType = source.ReturnType;
-        ParamFieldNames.AddRange(source.ParamFieldNames);
-        ReturnSlots.AddRange(source.ReturnSlots);
-        RecursiveCalleeNames.UnionWith(source.RecursiveCalleeNames);
-        RecursionSpillFields.AddRange(source.RecursionSpillFields);
-        ReentrantSiteCount = source.ReentrantSiteCount;
-    }
-
     public int NewSlot(StorageType type, SlotClass slotClass, string fixedName = null)
     {
         var id = Slots.Count;
@@ -75,37 +63,42 @@ public sealed class FlatFunction
     public string ReturnFieldName => ReturnSlots.Count == 1 ? ReturnSlots[0].Id : null;
 }
 
-/// <summary>Top-level flat Core IR. Collection ownership is distinct from the structured input.</summary>
+/// <summary>The compiler's sole mutable IR module.</summary>
 public sealed class FlatModule
 {
     public readonly List<FlatFunction> Functions = new List<FlatFunction>();
     public readonly List<FieldDecl> Fields = new List<FieldDecl>();
-    public readonly UdonTypeFactRegistry TypeFacts;
-    internal readonly BoundAbiPlan Abi;
-    public readonly string ClassName;
-
-    internal FlatModule(StructuredModule source)
-    {
-        if (source == null) throw new ArgumentNullException(nameof(source));
-        foreach (var field in source.Fields)
-            Fields.Add(new FieldDecl(field.Name, field.Type, field.Domain)
-            {
-                DefaultValue = field.DefaultValue,
-                Flags = field.Flags,
-                SyncMode = field.SyncMode,
-            });
-        TypeFacts = source.TypeFacts;
-        Abi = source.RequireAbi();
-        ClassName = source.ClassName;
-    }
+    public UdonTypeFactRegistry TypeFacts { get; private set; }
+    BoundAbiPlan _abi;
+    public string ClassName { get; }
 
     public FlatModule(UdonTypeFactRegistry typeFacts = null, UdonAbiCatalog abiCatalog = null,
         string className = null)
     {
         TypeFacts = typeFacts ?? new UdonTypeFactRegistry();
         if (abiCatalog != null)
-            Abi = BoundAbiPlan.ExactCatalog(abiCatalog);
+            _abi = BoundAbiPlan.ExactCatalog(abiCatalog);
         ClassName = className;
+    }
+
+    internal BoundAbiPlan RequireAbi()
+        => _abi ?? throw new InvalidOperationException(
+            "The CFG module ABI was not published.");
+
+    internal void PublishSemantics(
+        BoundAbiPlan abi,
+        UdonTypeFactRegistry typeFacts)
+    {
+        if (_abi != null)
+            throw new InvalidOperationException(
+                "The CFG module semantics were published twice.");
+        if (typeFacts == null)
+            throw new ArgumentNullException(nameof(typeFacts));
+        if (!typeFacts.IsFrozen)
+            throw new InvalidOperationException(
+                "CFG construction requires a frozen type-fact snapshot.");
+        _abi = abi ?? throw new ArgumentNullException(nameof(abi));
+        TypeFacts = typeFacts;
     }
 
     public FlatFunction AddFunction(string name, string exportName = null)
@@ -113,6 +106,15 @@ public sealed class FlatModule
         var function = new FlatFunction(name, exportName);
         Functions.Add(function);
         return function;
+    }
+
+    internal FlatFunction RequireFunction(string name)
+    {
+        foreach (var function in Functions)
+            if (string.Equals(function.Name, name, StringComparison.Ordinal))
+                return function;
+        throw new InvalidOperationException(
+            $"CFG function '{name}' was absent from the module.");
     }
 }
 

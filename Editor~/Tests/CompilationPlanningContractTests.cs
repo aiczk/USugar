@@ -157,14 +157,14 @@ public class CompilationPlanningContractTests
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
         Assert.DoesNotContain(planFields, field =>
             field.FieldType == typeof(LoweringState)
-            || field.FieldType == typeof(StructuredModule)
+            || field.FieldType == typeof(FlatModule)
             || field.FieldType == typeof(StorageContext));
         Assert.DoesNotContain(
             typeof(FieldDiscoveryPlan).GetMethods(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             method => method.GetParameters().Any(parameter =>
                 parameter.ParameterType == typeof(LoweringState)
-                || parameter.ParameterType == typeof(StructuredModule)));
+                || parameter.ParameterType == typeof(FlatModule)));
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public class CompilationPlanningContractTests
             typeof(UdonAbiBinder),
             typeof(MaterializingUdonTypeSystem),
             typeof(CallableBodyGraph),
-            typeof(StructuredFunction),
+            typeof(FlatFunction),
             typeof(LoweringState),
         };
         Assert.DoesNotContain(fields, field =>
@@ -207,13 +207,13 @@ public class CompilationPlanningContractTests
                 BindingFlags.Instance | BindingFlags.Public
                 | BindingFlags.NonPublic),
             field => ContainsType(
-                field.FieldType, typeof(StructuredFunction)));
+                field.FieldType, typeof(FlatFunction)));
         Assert.DoesNotContain(
             typeof(MethodContext.RegisteredCallable).GetFields(
                 BindingFlags.Instance | BindingFlags.Public
                 | BindingFlags.NonPublic),
             field => ContainsType(
-                field.FieldType, typeof(StructuredFunction)));
+                field.FieldType, typeof(FlatFunction)));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysisCache"));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("MethodAnalysis"));
         Assert.Null(typeof(BoundProgram).Assembly.GetType("BoundMethodAnalysisTable"));

@@ -82,16 +82,16 @@ public sealed class MethodContext
 
     readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
         new(SymbolEqualityComparer.Default);
-    readonly Dictionary<IMethodSymbol, StructuredFunction> _functions =
+    readonly Dictionary<IMethodSymbol, FlatFunction> _functions =
         new(SymbolEqualityComparer.Default);
-    readonly Dictionary<RegisteredCallable, StructuredFunction>
+    readonly Dictionary<RegisteredCallable, FlatFunction>
         _functionsByCallable = new();
     readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
     readonly List<RegisteredCallableBody> _registeredBodies = new();
     bool _callableRegistryFrozen;
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
-    public IReadOnlyDictionary<IMethodSymbol, StructuredFunction> Functions
+    public IReadOnlyDictionary<IMethodSymbol, FlatFunction> Functions
         => _functions;
     public IReadOnlyDictionary<IMethodSymbol, MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
@@ -198,7 +198,7 @@ public sealed class MethodContext
     // ── Per-spec hoisted closures (design 2026-07-10 v3 §2B, B64/B70 root fix) ──
     //
     // A lambda / non-generic local function's IMethodSymbol is DEFINITION-EQUAL across the enclosing
-    // generic's instantiations ([Y8]), so a bare symbol key shares ONE hoisted StructuredFunction across specs —
+    // generic's instantiations ([Y8]), so a bare symbol key shares ONE hoisted FlatFunction across specs —
     // the closure body is then baked with the first spec's type arguments and its flat bookkeeping
     // aliases (VM-proven B64/B70/B89). Every hoisted closure therefore registers under a composite
     // (definition, enclosing-spec type-args) key. The args component uses CLR SYMBOL identity
@@ -390,7 +390,7 @@ public sealed class MethodContext
         return spec;
     }
 
-    public RegisteredCallable AddSyntheticCallable(string name, StructuredFunction function,
+    public RegisteredCallable AddSyntheticCallable(string name, FlatFunction function,
         IMethodSymbol signatureMethod, IMethodSymbol targetMethod, CallableKind kind,
         string[] paramVarIds = null, ReturnSlot[] returnSlots = null)
     {
@@ -430,7 +430,7 @@ public sealed class MethodContext
 
     public void AddMaterializedFunction(
         RegisteredCallable callable,
-        StructuredFunction function)
+        FlatFunction function)
     {
         if (!_callableRegistryFrozen)
             throw new InvalidOperationException(
@@ -446,7 +446,7 @@ public sealed class MethodContext
             _functions.Add(callable.Definition, function);
     }
 
-    public StructuredFunction RequireFunction(
+    public FlatFunction RequireFunction(
         RegisteredCallable callable)
         => callable != null
            && _functionsByCallable.TryGetValue(

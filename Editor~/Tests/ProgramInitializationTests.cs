@@ -27,7 +27,8 @@ public class InitBarrier : UdonSharpBehaviour
         Assert.Contains(exports, f => f.ExportName == "BeforeStart");
         Assert.All(exports, function =>
         {
-            var first = Assert.IsType<CExprStmt>(function.Body.Stmts.First());
+            var first = Assert.IsType<CExprStmt>(
+                function.Entry.Instructions.First());
             var call = Assert.IsType<CInternalCall>(first.Expr);
             Assert.Equal(ProgramInitializationEmitter.FunctionName, call.FuncName);
         });

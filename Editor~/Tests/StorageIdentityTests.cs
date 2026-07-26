@@ -8,7 +8,7 @@ public class StorageIdentityTests
     [Fact]
     public void UserAndGeneratedStorageWithSameNameAndType_Reject()
     {
-        var storage = new StorageContext(new StructuredModule());
+        var storage = new StorageContext(new FlatModule());
         storage.DeclareField("collision", StorageTypes.Int32);
 
         var error = Assert.Throws<InvalidOperationException>(
@@ -21,7 +21,7 @@ public class StorageIdentityTests
     [Fact]
     public void RepeatedGeneratedAbiDeclaration_IsIdempotent()
     {
-        var module = new StructuredModule();
+        var module = new FlatModule();
         var storage = new StorageContext(module);
 
         Assert.True(storage.TryDeclareVar("__abi_value", StorageTypes.Int32));
@@ -62,25 +62,29 @@ public class StorageTypeObjectCollision : UdonSharpBehaviour
     [Fact]
     public void PinnedSlotRequiresDeclaredHeapStorage()
     {
-        var module = new StructuredModule();
+        var module = new FlatModule();
         var builder = new CoreBuilder(module);
         builder.BeginFunction("missing_pinned");
         builder.AllocPinned(StorageTypes.Int32, "missing");
 
-        var error = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
+        builder.Complete();
+        var error = Assert.Throws<VerificationException>(
+            () => FlatVerify.Verify(module));
         Assert.Contains("Undeclared field 'missing'", error.Message);
     }
 
     [Fact]
     public void PinnedSlotMustMatchHeapStorageType()
     {
-        var module = new StructuredModule();
+        var module = new FlatModule();
         module.Fields.Add(new FieldDecl("pinned", StorageTypes.String));
         var builder = new CoreBuilder(module);
         builder.BeginFunction("mismatched_pinned");
         builder.AllocPinned(StorageTypes.Int32, "pinned");
 
-        var error = Assert.Throws<VerificationException>(() => CoreVerify.Verify(module));
-        Assert.Contains("Type mismatch", error.Message);
+        builder.Complete();
+        var error = Assert.Throws<VerificationException>(
+            () => FlatVerify.Verify(module));
+        Assert.Contains("type mismatch", error.Message);
     }
 }
