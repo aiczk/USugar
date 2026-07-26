@@ -37,31 +37,23 @@ public sealed class ResolvedEdgeResolver
             var target = site.Target;
             var instance = site.Receiver;
             if (instance?.Type is not INamedTypeSymbol receiverType) continue;
-
-            if (receiverType.TypeKind == TypeKind.Interface)
-            {
-                foreach (var concrete in portableClasses)
-                {
-                    if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, receiverType)))
-                        continue;
-                    if (concrete.FindImplementationForInterfaceMember(target) is IMethodSymbol impl && !impl.IsAbstract
-                        && !(impl.AssociatedSymbol is IPropertySymbol autoProperty
-                             && !UasmEmitter.IsComputedProperty(autoProperty)))
-                        yield return impl;
-                }
+            if (receiverType.TypeKind != TypeKind.Interface
+                && !VirtualDispatch.IsDispatchSite(
+                    target, instance, receiverType))
                 continue;
-            }
-            if (!VirtualDispatch.IsDispatchSite(target, instance, receiverType)) continue;
-            var slot = VirtualDispatch.SlotIntroducer(target);
             foreach (var concrete in portableClasses)
-                if (VirtualDispatch.IsAssignable(concrete, receiverType)
-                    && VirtualDispatch.MostDerivedImpl(concrete, slot) is { } impl)
-                {
-                    if (impl.AssociatedSymbol is IPropertySymbol autoProperty
-                        && !UasmEmitter.IsComputedProperty(autoProperty))
-                        continue;
-                    yield return impl;
-                }
+            {
+                var impl = VirtualDispatch.ResolveImplementation(
+                    concrete, receiverType, target);
+                if (impl == null) continue;
+                // Reach registers method bodies. Auto-property dispatch is
+                // resolved by the same authority but consumes a storage slot,
+                // so it deliberately has no body root.
+                if (impl.AssociatedSymbol is IPropertySymbol autoProperty
+                    && !UasmEmitter.IsComputedProperty(autoProperty))
+                    continue;
+                yield return impl;
+            }
         }
     }
 

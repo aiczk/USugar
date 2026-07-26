@@ -85,11 +85,9 @@ public sealed class VirtualDispatch
         var interfaceDispatch = receiverType?.TypeKind == TypeKind.Interface;
         var usesRuntimeDispatch = interfaceDispatch
             || IsDispatchSite(site.Target, site.Receiver, receiverType);
-        var runtimeTargets = interfaceDispatch
-            ? ResolveInterfaceTargets(receiverType, site.Target)
-            : usesRuntimeDispatch
-                ? ResolveTargets(receiverType, site.Target)
-                : new List<VDispatchTarget>();
+        var runtimeTargets = usesRuntimeDispatch
+            ? ResolveTargets(receiverType, site.Target)
+            : new List<VDispatchTarget>();
         var cross = compiledClass == null
             ? default : ResolveCrossProgramLocalTarget(compiledClass, site.Target);
         return new DispatchPlan(site, runtimeTargets, cross,
@@ -218,42 +216,64 @@ public sealed class VirtualDispatch
 
     /// <summary>The closed-world set of (minted concrete subtype of staticType, its most-derived impl of the
     /// slot). Empty if no minted subtype implements it; singleton ⇒ devirtualizable; ≥2 ⇒ ReferenceEquals-chain.</summary>
-    List<VDispatchTarget> ResolveTargets(INamedTypeSymbol staticType, IMethodSymbol slotMethod)
+    List<VDispatchTarget> ResolveTargets(
+        INamedTypeSymbol staticType,
+        IMethodSymbol target)
     {
-        var slotDef = SlotIntroducer(slotMethod);
         var outp = new List<VDispatchTarget>();
         foreach (var concrete in _typeObjs.MintedClasses)
         {
-            if (!IsAssignable(concrete, staticType)) continue;
-            var impl = MostDerivedImpl(concrete, slotDef);
-            if (impl == null)
-            {
-                if (slotDef.IsAbstract) continue; // a concrete type with an abstract, unimplemented slot cannot occur
-                impl = slotDef;                    // non-abstract slot not overridden in this type
-            }
-            if (slotMethod.IsGenericMethod && impl.IsGenericMethod)
-                impl = impl.Construct(slotMethod.TypeArguments.ToArray());
+            var impl = ResolveImplementation(
+                concrete, staticType, target);
+            if (impl == null) continue;
             var v = _typeObjs.TryGetTypeObjVar(concrete);
             if (v != null) outp.Add(new VDispatchTarget(concrete, v, impl));
         }
         return outp;
     }
 
-    List<VDispatchTarget> ResolveInterfaceTargets(INamedTypeSymbol interfaceType, IMethodSymbol member)
+    /// <summary>
+    /// Pure per-concrete dispatch authority shared by the pre-seed reach
+    /// census and the post-seed runtime dispatch plan. Type-object naming is a
+    /// later projection and cannot affect which implementation is selected.
+    /// </summary>
+    internal static IMethodSymbol ResolveImplementation(
+        INamedTypeSymbol concrete,
+        INamedTypeSymbol staticType,
+        IMethodSymbol target)
     {
-        var outp = new List<VDispatchTarget>();
-        foreach (var concrete in _typeObjs.MintedClasses)
+        if (concrete == null || staticType == null || target == null)
+            return null;
+        if (staticType.TypeKind == TypeKind.Interface)
         {
-            if (!concrete.AllInterfaces.Any(i => SymbolEqualityComparer.Default.Equals(i, interfaceType)))
-                continue;
-            var impl = FindInterfaceMethodImplementation(concrete, member);
-            if (impl == null || impl.IsAbstract) continue;
+            if (!concrete.AllInterfaces.Any(interfaceType =>
+                    SymbolEqualityComparer.Default.Equals(
+                        interfaceType, staticType)))
+                return null;
+            var impl = FindInterfaceMethodImplementation(
+                concrete, target);
+            if (impl == null || impl.IsAbstract)
+                return null;
             if (impl.IsVirtual || impl.IsOverride)
-                impl = MostDerivedImpl(concrete, SlotIntroducer(impl)) ?? impl;
-            var typeObj = _typeObjs.TryGetTypeObjVar(concrete);
-            if (typeObj != null) outp.Add(new VDispatchTarget(concrete, typeObj, impl));
+                impl = MostDerivedImpl(
+                    concrete, SlotIntroducer(impl)) ?? impl;
+            return impl;
         }
-        return outp;
+
+        if (!IsAssignable(concrete, staticType))
+            return null;
+        var slot = SlotIntroducer(target);
+        var implementation = MostDerivedImpl(concrete, slot);
+        if (implementation == null)
+        {
+            if (slot.IsAbstract) return null;
+            implementation = slot;
+        }
+        if (target.IsGenericMethod
+            && implementation.IsGenericMethod)
+            implementation = implementation.OriginalDefinition
+                .Construct(target.TypeArguments.ToArray());
+        return implementation;
     }
 
     /// <summary>Resolve an interface method/accessor on a concrete class. Roslyn does not reliably
