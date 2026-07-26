@@ -85,6 +85,14 @@ internal sealed class LoweringServices
             operation.Syntax, kind, target, scope);
     }
 
+    internal IMethodSymbol RequireBoundCallable(
+        IOperation operation,
+        CallableSiteKind kind,
+        IMethodSymbol target)
+        => RequireRegisteredCallable(
+            RequireBoundCallSite(operation, kind, target)
+                .Callable.Site.Target);
+
     internal IMethodSymbol RequireBoundDeconstruction(IOperation operation)
     {
         if (operation == null) throw new ArgumentNullException(nameof(operation));
@@ -1305,7 +1313,9 @@ internal sealed class LoweringServices
     /// value: the C# order), the same lowering PreparePropertySet gives plain assignment.</summary>
     void EmitInitializerSetterAssignment(CLeaf instance, IPropertyReferenceOperation propRef, IOperation valueOp)
     {
-        var setter = RequireStructMember(propRef.Property.SetMethod);
+        var setter = RequireBoundCallable(
+            propRef, CallableSiteKind.PropertySet,
+            propRef.Property.SetMethod);
         var args = new List<CLeaf> { instance };
         if (propRef.Property.IsIndexer) args.AddRange(EvaluateIndexerArgs(propRef));
         args.Add(VisitExpression(valueOp));
@@ -1365,7 +1375,8 @@ internal sealed class LoweringServices
         if (propRef.Property is { IsIndexer: false, SetMethod: { } aggSetterRaw }
             && propRef.Instance?.Type is INamedTypeSymbol aggSetType && TypeClassifier.IsObjectArrayEmulated(aggSetType))
         {
-            var aggSetter = RequireStructMember(aggSetterRaw);
+            var aggSetter = RequireRegisteredCallable(
+                boundSetter.Callable.Site.Target);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
             return aggSetVal => EmitExprStmt(
                 EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
@@ -1377,7 +1388,8 @@ internal sealed class LoweringServices
         if (propRef.Property is { IsIndexer: true, SetMethod: { } aggIdxSetterRaw }
             && propRef.Instance?.Type is INamedTypeSymbol aggIdxSetType && TypeClassifier.IsObjectArrayEmulated(aggIdxSetType))
         {
-            var aggIdxSetter = RequireStructMember(aggIdxSetterRaw);
+            var aggIdxSetter = RequireRegisteredCallable(
+                boundSetter.Callable.Site.Target);
             var setterArgs = new List<CLeaf> { LoadInstanceRaw(propRef.Instance) };
             setterArgs.AddRange(EvaluateIndexerArgs(propRef)); // wave-9 r4: named index args bind by ordinal
             return aggIdxVal =>
@@ -1428,7 +1440,8 @@ internal sealed class LoweringServices
                 && !USugarCompilerHelper.IsFrameworkNamespace(sourceSetter.ContainingNamespace)
                 && UasmEmitter.IsComputedProperty(propRef.Property))
             {
-                var resolvedSetter = RequireStructMember(sourceSetter);
+                var resolvedSetter = RequireRegisteredCallable(
+                    boundSetter.Callable.Site.Target);
                 return staticVal => EmitExprStmt(
                     EmitCallToMethod(resolvedSetter, new List<CLeaf> { staticVal }));
             }
@@ -1885,8 +1898,14 @@ internal sealed class LoweringServices
     /// through the ambient map when it carries an open type parameter, re-locating the member on the
     /// closed containing type before (if the method is itself ALSO generic) re-applying the method's
     /// own type-arg substitution on top — the two dimensions are independent and compose.</summary>
-    internal IMethodSymbol SubstituteMethodTypeArgs(IMethodSymbol target)
-        => TypeEnvironment.CloseMethod(_compilation, target, _typeParamMap);
+    internal IMethodSymbol CloseMethodForPlanning(IMethodSymbol target)
+    {
+        if (_state.Program != null)
+            throw new InvalidOperationException(
+                "Method closure is a binding-phase operation; emission must read BoundProgram.");
+        return TypeEnvironment.CloseMethod(
+            _compilation, target, _typeParamMap);
+    }
 
     internal (
         IMethodSymbol Method,
@@ -2054,7 +2073,7 @@ internal sealed class LoweringServices
     /// accessor, ctor, operator/conversion method) discovered while emitting a GENERIC STRUCT'S OWN
     /// method body binds to the OPEN containing type (Box&lt;T&gt;.Member, never Box&lt;int&gt;.Member) —
     /// the operation tree is built from the shared/unconstructed syntax regardless of which spec is
-    /// emitting, the exact invariant SubstituteMethodTypeArgs closes for plain method calls
+    /// emitting, the exact invariant BoundProgram closes for plain method calls
     /// (VisitInvocation). Every OTHER struct-member call site instead depended solely on
     /// CollectStructMethodsInOperation's pre-pass, which deliberately SKIPS this same open-form
     /// self-reference (IsCollectibleStructMember's feature-G comment — collecting it registers a dead
@@ -2085,12 +2104,6 @@ internal sealed class LoweringServices
 
         throw new InvalidOperationException(
             $"Callable '{method.ToDisplayString()}' was absent from the bound program.");
-    }
-
-    internal IMethodSymbol RequireStructMember(IMethodSymbol member)
-    {
-        var resolved = SubstituteMethodTypeArgs(member);
-        return RequireRegisteredCallable(resolved);
     }
 
     // The [X6]/[Y2] instantiation-pin gates were retired by the per-spec closure separation
@@ -2264,7 +2277,8 @@ internal sealed class LoweringServices
             && targetMethod.ContainingType is INamedTypeSymbol recvCt0
             && TypeClassifier.IsObjectArrayEmulated(recvCt0))
         {
-            var member = RequireStructMember(targetMethod);
+            var member = RequireRegisteredCallable(
+                CloseMethodForPlanning(targetMethod));
             var memberFunc = _methodFunctions[member];
             var recvLeaf = Const(null, StorageTypes.ObjectArray);
             var recvBridgeName = DelegateAbi.BridgeName(memberFunc.Name) + "_rcv";
@@ -2337,7 +2351,7 @@ internal sealed class LoweringServices
             // paths use (it also wires the __envp field for a capturing LF, keyed by OriginalDefinition).
             if (targetMethod.IsGenericMethod)
             {
-                var constructedLf = SubstituteMethodTypeArgs(targetMethod);
+                var constructedLf = CloseMethodForPlanning(targetMethod);
                 if (!constructedLf.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
                 {
                     targetMethod = constructedLf;
@@ -2370,7 +2384,7 @@ internal sealed class LoweringServices
             // with fully resolved type args only — a variable receiver would need the RECEIVER's
             // program to export this specialization's bridge (it cannot know the instantiation), and
             // an inherited/foreign generic target has no local body registration — loud per §8-3.
-            var constructed = SubstituteMethodTypeArgs(targetMethod);
+            var constructed = CloseMethodForPlanning(targetMethod);
             bool unresolved = constructed.TypeArguments.Any(ta => ta is ITypeParameterSymbol);
             // Wave-9 round-9 [Y7]: an INHERITED user-base generic method is part of the class
             // family — round-8 [Y11] made its closed specializations emit in THIS program (the
@@ -2708,10 +2722,12 @@ internal sealed class LoweringServices
         if (setValue != null)
         {
             args.Add(setValue);
-            EmitExprStmt(EmitCallToMethod(RequireStructMember(t.Impl), args));
+            EmitExprStmt(EmitCallToMethod(
+                RequireRegisteredCallable(t.Impl), args));
             return null;
         }
-        var ret = EmitCallToMethod(RequireStructMember(t.Impl), args);
+        var ret = EmitCallToMethod(
+            RequireRegisteredCallable(t.Impl), args);
         return prop.Type is INamedTypeSymbol retAgg && TypeClassifier.IsAggregateValue(retAgg)
             ? AggregateAbi.DeepClone(_builder, ret, retAgg, _state.Aggregates.GetLayout) : ret;
     }
@@ -2824,7 +2840,9 @@ internal sealed class LoweringServices
     /// runtime-name constant.</summary>
     CLeaf ClassToStringArmValue(VDispatchTarget t, CLeaf recvRef, bool useOverrides)
         => useOverrides && TypeClassifier.IsUserClass(t.Impl.ContainingType)
-            ? EmitCallToMethod(RequireStructMember(t.Impl), new List<CLeaf> { recvRef })
+            ? EmitCallToMethod(
+                RequireRegisteredCallable(t.Impl),
+                new List<CLeaf> { recvRef })
             : Const(ClassAbi.RuntimeTypeName(t.Concrete), StorageTypes.String);
 
     // ── Call helpers ──
@@ -3129,7 +3147,7 @@ internal sealed class LoweringServices
     /// analogue of <see cref="ClosureEnvLeaf"/> on the delegate-capture side. A user-struct member
     /// only reaches generic SDK ABI binding (a method or accessor path) when it has NO registered StructuredFunction —
     /// i.e. a Phase-1 collector (CollectStructMethodsInOperation / CollectForeignStaticCallsInOperation)
-    /// or an on-demand ResolveStructMember arm did not cover this member/reach shape. Historically that
+    /// or callable binding did not cover this member/reach shape. Historically that
     /// silently minted a bogus <c>SystemObjectArray.__&lt;Name&gt;__…</c> extern that only UasmValidator
     /// or the VM caught, with a message that never named the root cause (this exact shape recurred as
     /// roadmap B41/B46/B47). Fail HERE, where the bogus extern would be born, with a diagnosis instead.

@@ -144,7 +144,8 @@ internal sealed class DeconstructionAssignmentHandler : IOperationHandler
                         || e is IDeclarationExpressionOperation { Expression: ITupleOperation }))
                         throw new System.NotSupportedException(
                             "Nested user-defined Deconstruct targets are not supported yet.");
-                    var method = _lowering.RequireStructMember(deconstruct);
+                    var method = _lowering.RequireRegisteredCallable(
+                        deconstruct);
                     if (method.Parameters.Length != targetTuple.Elements.Length
                         || method.Parameters.Any(p => p.RefKind != RefKind.Out))
                         throw new System.NotSupportedException(
@@ -176,8 +177,11 @@ internal sealed class DeconstructionAssignmentHandler : IOperationHandler
             // type args (`var (a,b) = P2<T>(x)` with the enclosing T in scope) — resolve through
             // the enclosing specialization's type-param map so the return-slot lookup below sees
             // the same monomorphized symbol the invocation emission registers. Closed/non-generic
-            // callees pass through unchanged (SubstituteMethodTypeArgs is identity for them).
-            var callTarget = _lowering.SubstituteMethodTypeArgs(invocation.TargetMethod);
+            // callees pass through unchanged when the call-site table is materialized.
+            var callTarget = _lowering.RequireBoundCallSite(
+                invocation,
+                CallableSiteKind.Method,
+                invocation.TargetMethod).Callable.Site.Target;
             var isCrossBehaviour = ExternResolver.IsUdonSharpBehaviour(callTarget.ContainingType)
                 && invocation.Instance is not IInstanceReferenceOperation
                 && callTarget.ContainingType.Name != "UdonSharpBehaviour";

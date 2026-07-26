@@ -74,7 +74,9 @@ internal sealed class MemberInvocationLowerer
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && TypeClassifier.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
-            var ret = _lowering.EmitCallToMethod(_lowering.RequireStructMember(aggGetterRaw),
+            var ret = _lowering.EmitCallToMethod(
+                _lowering.RequireBoundCallable(
+                    op, CallableSiteKind.PropertyGet, aggGetterRaw),
                 new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) });
             return op.Property.Type is INamedTypeSymbol getRetAgg && TypeClassifier.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, getRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
@@ -136,19 +138,19 @@ internal sealed class MemberInvocationLowerer
             // static-method pattern, one node kind over). Without this the fall-through emits a bogus
             // SystemObjectArray.__get_Doubled__ extern. The getter is pre-registered when its call site was
             // reachable with a CLOSED containing type (collection layer); a closed spec first seen at a
-            // generic call site inside a struct/generic body is registered on demand here (mirrors the
-            // foreign-static-on-generic method arm). Auto/BCL/const-foldable statics are excluded: the
+            // generic call site inside a struct/generic body is materialized by call-site binding.
+            // Auto/BCL/const-foldable statics are excluded: the
             // const-fold arm below owns the BCL foldables, and IsUserComputedStaticProperty gates out autos.
             if (op.Property.IsStatic && op.Property.GetMethod is { } sPropGetter
                 && sPropGetter.DeclaringSyntaxReferences.Length > 0
                 && !USugarCompilerHelper.IsFrameworkNamespace(sPropGetter.ContainingNamespace)
                 && IsUserComputedStaticProperty(op.Property))
             {
-                // ResolveStructMember substitutes the containing type's type args from the current map
-                // (SP<T>.get_Doubled → SP<int>.get_Doubled inside a Box<int> spec) and registers the closed
-                // spec on demand; an already-closed getter (a class-body call site) is returned unchanged
-                // and was pre-registered by the collection layer.
-                var sgv = _lowering.EmitCallToMethod(_lowering.RequireStructMember(sPropGetter), new List<CLeaf>());
+                // BoundProgram supplies the closed getter for this exact specialization.
+                var sgv = _lowering.EmitCallToMethod(
+                    _lowering.RequireBoundCallable(
+                        op, CallableSiteKind.PropertyGet, sPropGetter),
+                    new List<CLeaf>());
                 return op.Property.Type is INamedTypeSymbol sgAgg && TypeClassifier.IsAggregateValue(sgAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, sgv, sgAgg, _lowering.State.Aggregates.GetLayout) : sgv;
             }
@@ -309,7 +311,10 @@ internal sealed class MemberInvocationLowerer
         {
             var sargs = new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) };
             sargs.AddRange(_lowering.EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
-            var ret = _lowering.EmitCallToMethod(_lowering.RequireStructMember(idxGetterRaw), sargs);
+            var ret = _lowering.EmitCallToMethod(
+                _lowering.RequireBoundCallable(
+                    op, CallableSiteKind.PropertyGet, idxGetterRaw),
+                sargs);
             return op.Property.Type is INamedTypeSymbol idxRetAgg && TypeClassifier.IsAggregateValue(idxRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, idxRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
         }
@@ -549,12 +554,17 @@ internal sealed class MemberInvocationLowerer
             else
             {
                 // CW4: same by-ordinal + ref/out discipline as the mint arm (EmitClassInstanceMint).
-                var chainCtor = _lowering.SubstituteMethodTypeArgs(target);
-            _owner.Externs.GuardRefOutArguments(init.Arguments, chainCtor);
+                var chainCtor = _lowering.RequireBoundCallable(
+                    init, CallableSiteKind.Constructor, target);
+                _owner.Externs.GuardRefOutArguments(
+                    init.Arguments, chainCtor);
                 var chainArgs = new List<CLeaf> { inst };
-            var chainPrepared = _owner.Externs.MarshalArgumentsByOrdinal(init.Arguments, chainCtor, chainArgs);
-                _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(target), chainArgs));
-            _owner.Externs.EmitRefOutCopyBack(init.Arguments, chainCtor, 0, chainPrepared);
+                var chainPrepared = _owner.Externs.MarshalArgumentsByOrdinal(
+                    init.Arguments, chainCtor, chainArgs);
+                _lowering.EmitExprStmt(
+                    _lowering.EmitCallToMethod(chainCtor, chainArgs));
+                _owner.Externs.EmitRefOutCopyBack(
+                    init.Arguments, chainCtor, 0, chainPrepared);
             }
             return;
         }
@@ -572,7 +582,9 @@ internal sealed class MemberInvocationLowerer
     /// ctor chain — the base ctor runs its own field inits, base chain, and body (needed for a base ctor with
     /// side effects, e.g. a virtual call under charter #6).</summary>
     void CallBaseCtor(IMethodSymbol ctorSym, CLeaf inst)
-        => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(_lowering.RequireStructMember(ctorSym), new List<CLeaf> { inst }));
+        => _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
+            _lowering.RequireRegisteredCallable(ctorSym),
+            new List<CLeaf> { inst }));
 
     void EmitClassInitializers(CLeaf instance, INamedTypeSymbol owner)
         => ClassAbi.EmitInstanceFieldInitializers(
@@ -620,14 +632,14 @@ internal sealed class MemberInvocationLowerer
                 // SOURCE order for named args, the same Roslyn fact behind the w4 invocation fix — so
                 // `new C(b: 2, a: 1)` silently swapped fields) with no ref/out guard or copy-back. Same
                 // by-ordinal + guard + copy-back discipline as EmitUserMethodCall; the substituted symbol
-                // equals ResolveStructMember's result minus its on-demand registration side effect, which
-                // stays at the call (after argument evaluation, as before).
+                // comes from the same frozen constructor site used by argument validation.
                 var ctor = constructor;
         _owner.Externs.GuardRefOutArguments(op.Arguments, ctor);
                 var ctorArgs = new List<CLeaf> { instance };
         var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, ctor, ctorArgs);
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
-                    _lowering.RequireStructMember(constructor), ctorArgs));
+                    _lowering.RequireRegisteredCallable(constructor),
+                    ctorArgs));
         _owner.Externs.EmitRefOutCopyBack(op.Arguments, ctor, 0, ctorPrepared);
             },
             instance => _lowering.EmitAggregateObjectInitializer(instance, layout, op.Initializer),
@@ -775,7 +787,8 @@ internal sealed class MemberInvocationLowerer
             var ctorArgs = new List<CLeaf> { _lowering.SlotRef(slot) };
             var ctorPrepared = _owner.Externs.MarshalArgumentsByOrdinal(op.Arguments, structCtor, ctorArgs);
             _lowering.EmitExprStmt(_lowering.EmitCallToMethod(
-                _lowering.RequireStructMember(constructor), ctorArgs));
+                _lowering.RequireRegisteredCallable(constructor),
+                ctorArgs));
             _owner.Externs.EmitRefOutCopyBack(op.Arguments, structCtor, 0, ctorPrepared);
             // ctor + object-initializer combo (`new V(1,2) { Y = 3 }`): apply the initializer AFTER the
             // ctor runs, same order C# gives the fields (roadmap B41 (d)).

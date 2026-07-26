@@ -54,7 +54,7 @@ internal sealed class AbiDemandPlanner
 
     void PlanInvocation(IInvocationOperation operation)
     {
-        var method = _lowering.SubstituteMethodTypeArgs(
+        var method = _lowering.CloseMethodForPlanning(
             operation.TargetMethod);
         if (_lowering.ResolveType(operation.Instance?.Type)
                 is INamedTypeSymbol receiver
@@ -118,7 +118,7 @@ internal sealed class AbiDemandPlanner
                 .MethodSymbol;
         }
         if (rawMethod == null) return;
-        var method = _lowering.SubstituteMethodTypeArgs(rawMethod);
+        var method = _lowering.CloseMethodForPlanning(rawMethod);
         if (method.ContainingType is INamedTypeSymbol aggregate
             && TypeClassifier.IsObjectArrayEmulated(aggregate))
             return;

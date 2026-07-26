@@ -117,6 +117,11 @@ internal static class CallableSites
                         target, operation, eventReference.Instance);
                 yield break;
             }
+            case IRecursivePatternOperation
+                { DeconstructSymbol: IMethodSymbol deconstruct }:
+                yield return new CallableSite(
+                    CallableSiteKind.Method, deconstruct, operation);
+                yield break;
         }
 
         var operatorMethod = OperatorMethod(operation);

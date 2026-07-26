@@ -82,7 +82,11 @@ internal sealed class LValueLowerer
                 var cachedArgs = _lowering.EvaluateIndexerArgs(sIdxRef); // wave-9 r4: named index args bind by ordinal
                 var getterArgs = new List<CLeaf> { recv };
                 getterArgs.AddRange(cachedArgs);
-                var currentVal = _lowering.EmitCallToMethod(_lowering.RequireStructMember(sIdxGetterRaw), getterArgs);
+                var currentVal = _lowering.EmitCallToMethod(
+                    _lowering.RequireBoundCallable(
+                        sIdxRef, CallableSiteKind.PropertyGet,
+                        sIdxGetterRaw),
+                    getterArgs);
                 return new LoweringServices.LValuePlan { Value = currentVal, ArrayVal = recv, IndexArgs = cachedArgs };
             }
             // Wave-9 round-2 [W6]: user indexer COMPOUND assignment through a VARIABLE receiver
@@ -139,7 +143,12 @@ internal sealed class LValueLowerer
                 if (aggCapPropRef.Property.GetMethod is { } capGetterRaw)
                 {
                     var recv = _lowering.LoadInstanceRaw(aggCapPropRef.Instance);
-                    CLeaf getVal = _lowering.EmitCallToMethod(_lowering.RequireStructMember(capGetterRaw), new List<CLeaf> { recv });
+                    CLeaf getVal = _lowering.EmitCallToMethod(
+                        _lowering.RequireBoundCallable(
+                            aggCapPropRef,
+                            CallableSiteKind.PropertyGet,
+                            capGetterRaw),
+                        new List<CLeaf> { recv });
                     if (aggCapPropRef.Property.Type is INamedTypeSymbol capGetAgg && TypeClassifier.IsAggregateValue(capGetAgg))
                         getVal = AggregateAbi.DeepClone(_lowering.Builder, getVal, capGetAgg, _lowering.State.Aggregates.GetLayout);
                     return new LoweringServices.LValuePlan { Value = getVal, ArrayVal = recv };
@@ -438,7 +447,9 @@ internal sealed class LValueLowerer
                         _lowering.EmitStoreField(StaticOwnerAbi.PropertyName(propRef.Property, owner), valueVal);
                         return;
                     }
-                    var setter = _lowering.RequireStructMember(propRef.Property.SetMethod);
+                    var setter = _lowering.RequireBoundCallable(
+                        propRef, CallableSiteKind.PropertySet,
+                        propRef.Property.SetMethod);
                     _lowering.EmitExprStmt(_lowering.EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
                     return;
                 }

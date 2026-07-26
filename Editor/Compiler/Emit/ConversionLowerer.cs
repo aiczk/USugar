@@ -162,7 +162,7 @@ internal sealed class ConversionSemanticPlanner
             return new ClosedConversionPlan(
                 ClosedConversionKind.UserOperator,
                 effectiveSource,
-                _lowering.SubstituteMethodTypeArgs(method),
+                _lowering.CloseMethodForPlanning(method),
                 allowsProgramLocalClassErasure);
         if (classified.IsEnumeration)
             return new ClosedConversionPlan(

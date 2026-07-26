@@ -55,7 +55,9 @@ internal sealed class OperatorHandler : IExpressionHandler
         {
             var lhs = _lowering.VisitExpression(op.LeftOperand);
             var rhs = _lowering.VisitExpression(op.RightOperand);
-            return _lowering.EmitCallToMethod(_lowering.RequireStructMember(binOpM), new List<CLeaf> { lhs, rhs });
+            return _lowering.EmitCallToMethod(
+                _lowering.RequireRegisteredCallable(binOpM),
+                new List<CLeaf> { lhs, rhs });
         }
 
 
@@ -361,7 +363,9 @@ internal sealed class OperatorHandler : IExpressionHandler
             && unOpM.ContainingType is INamedTypeSymbol unOpCt && TypeClassifier.IsObjectArrayEmulated(unOpCt))
         {
             var operand = _lowering.VisitExpression(op.Operand);
-            return _lowering.EmitCallToMethod(_lowering.RequireStructMember(unOpM), new List<CLeaf> { operand });
+            return _lowering.EmitCallToMethod(
+                _lowering.RequireRegisteredCallable(unOpM),
+                new List<CLeaf> { operand });
         }
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
@@ -657,7 +661,9 @@ internal sealed class OperatorHandler : IExpressionHandler
         if (matchType is not INamedTypeSymbol aggType || !TypeClassifier.IsAggregateValue(matchType))
         {
             var deconstruct = rec.DeconstructSymbol is not IMethodSymbol deconstructMethod
-                ? null : _lowering.RequireStructMember(_lowering.SubstituteMethodTypeArgs(deconstructMethod));
+                ? null
+                : _lowering.RequireBoundCallable(
+                    rec, CallableSiteKind.Method, deconstructMethod);
             if (deconstruct == null
                 || deconstruct.Parameters.Length != rec.DeconstructionSubpatterns.Length
                 || deconstruct.Parameters.Any(p => p.RefKind != RefKind.Out))
@@ -751,7 +757,9 @@ internal sealed class OperatorHandler : IExpressionHandler
             else if (isAgg && sub.Member is IPropertyReferenceOperation cpr
                      && cpr.Property.GetMethod is { } cgetter)
             {
-                memberVal = _lowering.EmitCallToMethod(_lowering.RequireStructMember(cgetter),
+                memberVal = _lowering.EmitCallToMethod(
+                    _lowering.RequireBoundCallable(
+                        cpr, CallableSiteKind.PropertyGet, cgetter),
                     new List<CLeaf> { valueVal });
             }
             else

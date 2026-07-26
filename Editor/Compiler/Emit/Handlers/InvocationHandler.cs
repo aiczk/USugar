@@ -73,10 +73,9 @@ internal sealed class InvocationHandler : IExpressionHandler
             return dlgEqResult;
 
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
-        var target = _lowering.SubstituteMethodTypeArgs(op.TargetMethod);
         var boundSite = _lowering.RequireBoundCallSite(
-            op, CallableSiteKind.Method, target);
-        target = boundSite.Callable.Site.Target;
+            op, CallableSiteKind.Method, op.TargetMethod);
+        var target = boundSite.Callable.Site.Target;
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
@@ -245,10 +244,10 @@ internal sealed class InvocationHandler : IExpressionHandler
         // Feature G: dispatch by the CONSTRUCTED symbol (Box<int>.Get(), not Box<T>.Get()) — target is
         // already the right constructed spec here, whether from an outer call site (Roslyn hands us
         // the concretely-typed receiver's member directly) or a self/cross-struct-method call inside
-        // another generic struct method's own body (SubstituteMethodTypeArgs re-closes it above). But a
+        // another generic struct method's own body (BoundProgram closes it before emission). But a
         // method reached ONLY via such an internal self/sibling reference was never pre-collected
-        // (CollectStructMethodsInOperation deliberately skips the open form) — register it on demand,
-        // like a generic method's own on-demand arm below (wave-14 residual gap).
+        // (CollectStructMethodsInOperation deliberately skips the open form); the binding phase
+        // materializes the exact closed callable before emission.
         if (!target.IsStatic && target.MethodKind == MethodKind.Ordinary
             && target.ContainingType is INamedTypeSymbol structRecv && TypeClassifier.IsObjectArrayEmulated(structRecv))
         {
@@ -278,7 +277,7 @@ internal sealed class InvocationHandler : IExpressionHandler
             // CA-M1: a v1 class instance method rides the SAME param0-receiver path. The receiver bundle
             // flows by reference (EmitStructInstanceCall's defensive copy stays gated on IsAggregateValue,
             // which is false for a class — so mutations through the receiver are visible to every alias).
-            var structTarget = _lowering.RequireStructMember(target);
+            var structTarget = _lowering.RequireRegisteredCallable(target);
             // B56: a struct-hosted generic method must record its instantiation so a nested closure/LF
             // referencing the method's T finds the owner in the closure-compose (the class arm does this
             // via RegisterGenericSpecialization; the struct path registers the spec separately).
@@ -349,8 +348,8 @@ internal sealed class InvocationHandler : IExpressionHandler
         // Wave-9 round-8 [Y11]: INHERITED generic callee whose call site carries OPEN type args
         // (`P2<T>(x)` inside the derived class's own generic body). The phase-1 base-copy collector
         // only registers CLOSED call-site symbols (an open form has no single monomorphization), so
-        // when the enclosing specialization's map closes the symbol HERE (SubstituteMethodTypeArgs
-        // above), register it as an on-demand generic specialization — EmitMethod resolves the body
+        // BoundProgram closes the symbol under the enclosing specialization and materializes the
+        // inherited callable before emission. EmitMethod resolves the body
         // from the base declaration's own syntax tree, exactly like a same-class spec. Without this
         // the call fell through to the cross-class/extern arms (decon: 'Method P2 not found in
         // layout for MB1Base'; direct: bogus IUdonEventReceiver extern — loud ICE on legal C#).
@@ -447,7 +446,10 @@ internal sealed class InvocationHandler : IExpressionHandler
             if (targets.Count >= 2)
                 return EmitVirtualChain(op, targets);
             if (targets.Count == 1)
-                return EmitStructInstanceCall(op, _lowering.RequireStructMember(targets[0].Impl));
+                return EmitStructInstanceCall(
+                    op,
+                    _lowering.RequireRegisteredCallable(
+                        targets[0].Impl));
             return EmitUnreachableVirtualCall(op, localInterface, target);
         }
 
@@ -483,10 +485,9 @@ internal sealed class InvocationHandler : IExpressionHandler
     /// executed arm — the arms are mutually exclusive, so the per-arm stores never race.</summary>
     CLeaf EmitVirtualChain(IInvocationOperation op, IReadOnlyList<VDispatchTarget> targets)
     {
-        // Pure analysis (throws only): the substituted symbol equals ResolveStructMember's result minus
-        // its on-demand registration side effect, which stays inside the arms (registration order intact).
+        // Every dispatch target was closed and registered with the bound call site.
         foreach (var t in targets)
-            _externs.GuardRefOutArguments(op.Arguments, _lowering.SubstituteMethodTypeArgs(t.Impl));
+            _externs.GuardRefOutArguments(op.Arguments, t.Impl);
 
         var recvSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
         _lowering.EmitAssign(recvSlot, _lowering.LoadInstanceRaw(op.Instance));
@@ -519,7 +520,7 @@ internal sealed class InvocationHandler : IExpressionHandler
             _lowering.Builder.EmitIf(eq, _ =>
             {
                 _lowering.EmitAssign(matched, _lowering.Const(true, StorageTypes.Boolean));
-                var impl = _lowering.RequireStructMember(t.Impl);
+                var impl = _lowering.RequireRegisteredCallable(t.Impl);
                 var call = _lowering.EmitCallToMethod(impl, callArgs);
                 if (isVoid) _lowering.EmitExprStmt(call);
                 else _lowering.EmitAssign(destSlot, call);

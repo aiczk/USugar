@@ -426,7 +426,9 @@ internal sealed class ExpressionHandler : IExpressionHandler
                 && TypeClassifier.IsObjectArrayEmulated(conversionOwner))
             {
                 result = _lowering.EmitCallToMethod(
-                    _lowering.RequireStructMember(conversionMethod), new List<CLeaf> { srcVal });
+                    _lowering.RequireRegisteredCallable(
+                        conversionMethod),
+                    new List<CLeaf> { srcVal });
                 return true;
             }
 
@@ -797,7 +799,9 @@ internal sealed class ExpressionHandler : IExpressionHandler
             // A user STRUCT conversion operator is an emitted method, not an extern: route to it (its containing
             // type is SystemObjectArray-backed, so it has no SDK conversion extern).
             if (operatorMethod.ContainingType is INamedTypeSymbol convOpCt && TypeClassifier.IsObjectArrayEmulated(convOpCt))
-                return _lowering.EmitCallToMethod(_lowering.RequireStructMember(operatorMethod), new List<CLeaf> { srcVal });
+                return _lowering.EmitCallToMethod(
+                    _lowering.RequireRegisteredCallable(operatorMethod),
+                    new List<CLeaf> { srcVal });
 
             var dstType = _lowering.GetStorageTypeName(conv.Type);
             var conversionExtern = _lowering.State.BoundAbi.RequireConversion(

@@ -43,7 +43,7 @@ namespace USugar.Tests;
 ///       (decon: "Method P2 not found in layout for MB1Base"; direct: bogus
 ///       IUdonEventReceiver extern) — the phase-1 base-copy collector only registers CLOSED
 ///       call-site symbols. Fixed: when the enclosing spec's map closes the symbol at emit time,
-///       register it as an on-demand generic specialization.
+///       materialize the closed specialization before emission.
 /// [Y12] Ref/out copy-back re-evaluated the lvalue's receiver/index legs AFTER the call
 ///       (`AddTo(ref arr[Idx()].v)` ran Idx() twice and the write landed in the cell chosen by
 ///       the SECOND evaluation; out and plain int[]-element flavors identical). Fixed:

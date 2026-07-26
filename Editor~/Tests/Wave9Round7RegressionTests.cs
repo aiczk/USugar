@@ -25,7 +25,7 @@ namespace USugar.Tests;
 ///       capturing closures pin their generic to one instantiation per the round-5 [X6] reject).
 /// [Y5]  `var (a,b) = P2&lt;T&gt;(x)` inside a generic body failed loud ("Method P2 not found in
 ///       layout") — the deconstruction same-class invocation arm looked up return slots with the
-///       OPEN symbol. Fixed: the arm resolves the callee through SubstituteMethodTypeArgs.
+///       OPEN symbol. Fixed: the arm consumes the closed BoundProgram call-site target.
 /// [Y7]/[Y9] Deconstruction into a FIELD target with ANY non-this receiver (own-typed variable,
 ///       behaviour-array element, foreign behaviour field) threw "Unsupported l-value target:
 ///       FieldReferenceOperation" on legal C# while the simple-assignment twin worked. Fixed:
