@@ -45,6 +45,10 @@ public sealed class UasmEmitter
 
     public IReadOnlyList<EmitDiagnostic> Diagnostics => _diagnostics;
     public CodeGenResult CodeGenResult => _codeGenResult;
+    internal BoundProgram Program
+        => _state.Program
+           ?? throw new InvalidOperationException(
+               "The bound program is unavailable before emission completes.");
     internal CompilationSession Session => _session;
     internal IUdonTypeSystem Types => _state.Types;
     internal IEnumerable<OperationKind> HandledOperationKinds
@@ -390,6 +394,7 @@ public sealed class UasmEmitter
             if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
             {
                 DeclareDelegateField(member, delegateType);
+                RecordSourceField(member, StorageTypes.ObjectArray, null);
                 continue; // Skip normal field declaration
             }
 
@@ -439,6 +444,8 @@ public sealed class UasmEmitter
             }
             _fieldDiscovery.DeclareField(
                 member.Name, new StorageType(udonType), flags, constValue, syncMode);
+            RecordSourceField(
+                member, new StorageType(udonType), syncMode);
 
             // Aggregate (struct/tuple) field with NO explicit initializer → C# default-initializes it to a
             // zeroed struct. In the object[] emulation that requires a fresh default array; without it the heap
@@ -491,6 +498,7 @@ public sealed class UasmEmitter
             var storageName = SourceStorageName(prop);
             _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                 isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
+            RecordSourceProperty(prop, new StorageType(udonType));
         }
 
         // Record count of derived-class field init ops; base class init ops added below
@@ -555,6 +563,7 @@ public sealed class UasmEmitter
                 if (member.Type is INamedTypeSymbol baseDelegateType && baseDelegateType.DelegateInvokeMethod != null)
                 {
                     DeclareDelegateField(member, baseDelegateType);
+                    RecordSourceField(member, StorageTypes.ObjectArray, null);
                     declaredMemberSyms[member.Name] = member;
                     continue;
                 }
@@ -597,6 +606,8 @@ public sealed class UasmEmitter
                     baseFlags,
                     constValue,
                     baseSyncMode);
+                RecordSourceField(
+                    member, new StorageType(udonType), baseSyncMode);
 
                 var baseFcbAttr = member.GetAttributes()
                     .FirstOrDefault(a => a.AttributeClass?.Name == "FieldChangeCallbackAttribute");
@@ -662,6 +673,7 @@ public sealed class UasmEmitter
                 var storageName = SourceStorageName(prop);
                 _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                     isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
+                RecordSourceProperty(prop, new StorageType(udonType));
             }
             baseType = baseType.BaseType;
         }
@@ -691,10 +703,49 @@ public sealed class UasmEmitter
     }
 
     /// <summary>Base-first reorder shared by the instance and static field-initializer tiers (§3.6):
-    /// <paramref name="ops"/> was collected derived-first (indices [0, derivedCount) ) then base-class
-    /// groups nearest-parent-first (each group's start boundary recorded in <paramref name="boundaries"/>);
-    /// rewrites it to outermost-base ... nearest-base ... derived (C# spec order). A no-op when no base
-    /// class contributed any ops.</summary>
+    void RecordSourceField(
+        IFieldSymbol field,
+        StorageType storageType,
+        string syncMode)
+        => _fieldDiscovery.RecordSourceField(
+            field.Name,
+            field,
+            field.Type,
+            storageType,
+            IsSerializedField(field),
+            syncMode);
+
+    void RecordSourceProperty(
+        IPropertySymbol property,
+        StorageType storageType)
+        => _fieldDiscovery.RecordSourceField(
+            property.Name,
+            property,
+            property.Type,
+            storageType,
+            property.DeclaredAccessibility == Accessibility.Public);
+
+    static bool IsSerializedField(IFieldSymbol field)
+    {
+        if (field.IsConst || field.IsStatic || field.IsReadOnly)
+            return false;
+        var attributes = field.GetAttributes();
+        if (attributes.Any(attribute =>
+                attribute.AttributeClass?.Name == "OdinSerializeAttribute"))
+            return true;
+        if (attributes.Any(attribute =>
+                attribute.AttributeClass?.Name == "NonSerializedAttribute"))
+            return false;
+        return field.DeclaredAccessibility == Accessibility.Public
+               || attributes.Any(attribute =>
+                   attribute.AttributeClass?.Name is
+                       "SerializeField"
+                       or "SerializeFieldAttribute"
+                       or "SerializeReference"
+                       or "SerializeReferenceAttribute");
+    }
+
+    /// <summary>Reorders inherited initializer groups to C# base-first order.</summary>
     static void ReorderBaseFirst<T>(List<T> ops, List<int> boundaries, int derivedCount)
     {
         if (ops.Count <= derivedCount) return;

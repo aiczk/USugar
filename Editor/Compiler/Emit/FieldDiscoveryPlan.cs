@@ -19,12 +19,44 @@ internal readonly struct FieldInitializerPlan
 }
 
 /// <summary>
+/// Source-facing field metadata frozen by the same discovery pass that owns the
+/// Udon heap declaration. Unity integration consumes this record instead of
+/// walking the symbol hierarchy a second time.
+/// </summary>
+internal readonly struct SourceFieldPlan
+{
+    public readonly string Name;
+    public readonly ISymbol Member;
+    public readonly ITypeSymbol UserType;
+    public readonly StorageType StorageType;
+    public readonly bool IsSerialized;
+    public readonly string SyncMode;
+
+    public SourceFieldPlan(
+        string name,
+        ISymbol member,
+        ITypeSymbol userType,
+        StorageType storageType,
+        bool isSerialized,
+        string syncMode)
+    {
+        Name = name ?? throw new ArgumentNullException(nameof(name));
+        Member = member ?? throw new ArgumentNullException(nameof(member));
+        UserType = userType ?? throw new ArgumentNullException(nameof(userType));
+        StorageType = storageType;
+        IsSerialized = isSerialized;
+        SyncMode = syncMode;
+    }
+}
+
+/// <summary>
 /// Immutable result of field discovery. It contains semantic declarations and initializer roots,
 /// but no Structured IR; lowering publishes it only after the whole program plan is closed.
 /// </summary>
 internal sealed class FieldDiscoveryPlan
 {
     public readonly IReadOnlyList<FieldDecl> Declarations;
+    public readonly IReadOnlyList<SourceFieldPlan> SourceFields;
     public readonly IReadOnlyList<FieldInitializerPlan> Initializers;
     public readonly IReadOnlyList<FieldInitializerPlan> StaticInitializers;
     public readonly IReadOnlyList<(string FieldName, INamedTypeSymbol AggregateType)> AggregateDefaults;
@@ -32,12 +64,14 @@ internal sealed class FieldDiscoveryPlan
 
     public FieldDiscoveryPlan(
         IEnumerable<FieldDecl> declarations,
+        IEnumerable<SourceFieldPlan> sourceFields,
         IEnumerable<FieldInitializerPlan> initializers,
         IEnumerable<FieldInitializerPlan> staticInitializers,
         IEnumerable<(string FieldName, INamedTypeSymbol AggregateType)> aggregateDefaults,
         IReadOnlyDictionary<string, string> fieldChangeCallbacks)
     {
         Declarations = Array.AsReadOnly(declarations.Select(Clone).ToArray());
+        SourceFields = Array.AsReadOnly(sourceFields.ToArray());
         Initializers = Array.AsReadOnly(initializers.ToArray());
         StaticInitializers = Array.AsReadOnly(staticInitializers.ToArray());
         AggregateDefaults = Array.AsReadOnly(aggregateDefaults.ToArray());
@@ -99,6 +133,9 @@ internal sealed class FieldDiscoveryPlanBuilder
 {
     readonly List<FieldDecl> _declarations = new();
     readonly Dictionary<string, FieldDecl> _declarationsByName = new(StringComparer.Ordinal);
+    readonly List<SourceFieldPlan> _sourceFields = new();
+    readonly Dictionary<string, SourceFieldPlan> _sourceFieldsByName =
+        new(StringComparer.Ordinal);
 
     public readonly List<FieldInitializerPlan> InstanceInitializers = new();
     public readonly List<FieldInitializerPlan> StaticInitializers = new();
@@ -130,9 +167,38 @@ internal sealed class FieldDiscoveryPlanBuilder
         return true;
     }
 
+    public void RecordSourceField(
+        string name,
+        ISymbol member,
+        ITypeSymbol userType,
+        StorageType storageType,
+        bool isSerialized,
+        string syncMode = null)
+    {
+        var field = new SourceFieldPlan(
+            name, member, userType, storageType, isSerialized, syncMode);
+        if (_sourceFieldsByName.TryGetValue(name, out var existing))
+        {
+            if (SymbolEqualityComparer.Default.Equals(existing.Member, member)
+                && SymbolEqualityComparer.Default.Equals(
+                    existing.UserType, userType)
+                && existing.StorageType == storageType
+                && existing.IsSerialized == isSerialized
+                && string.Equals(
+                    existing.SyncMode, syncMode,
+                    StringComparison.Ordinal))
+                return;
+            throw new InvalidOperationException(
+                $"Source field metadata '{name}' was bound twice.");
+        }
+        _sourceFieldsByName.Add(name, field);
+        _sourceFields.Add(field);
+    }
+
     public FieldDiscoveryPlan Build()
         => new FieldDiscoveryPlan(
             _declarations,
+            _sourceFields,
             InstanceInitializers,
             StaticInitializers,
             AggregateDefaults,

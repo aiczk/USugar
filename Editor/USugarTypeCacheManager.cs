@@ -148,171 +148,49 @@ static class USugarTypeCacheManager
     // ── Field definitions ──
 
     internal static Dictionary<string, FieldDefinition> BuildFieldDefinitions(
-        INamedTypeSymbol symbol, CompilationSession session)
+        FieldDiscoveryPlan fields)
     {
-        if (symbol == null) throw new ArgumentNullException(nameof(symbol));
-        if (session == null) throw new ArgumentNullException(nameof(session));
+        if (fields == null) throw new ArgumentNullException(nameof(fields));
         var defs = new Dictionary<string, FieldDefinition>();
-
-        foreach (var member in symbol.GetMembers().OfType<IFieldSymbol>())
+        foreach (var field in fields.SourceFields)
         {
-            if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
-            defs[member.Name] = CreateFieldDefinition(member, session.Types);
-        }
-
-        // Auto-properties and public properties (mirroring field discovery)
-        foreach (var prop in symbol.GetMembers().OfType<IPropertySymbol>())
-        {
-            if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-            var isAuto = !UasmEmitter.IsComputedProperty(prop);
-            if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-            defs[prop.Name] = CreatePropertyDefinition(prop, session.Types);
-        }
-
-        // Inherited fields and properties from user-defined base classes
-        var declaredNames = new HashSet<string>(defs.Keys);
-        var baseType = symbol.BaseType;
-        while (baseType != null)
-        {
-            if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace)
-                || baseType.Name == "UdonSharpBehaviour") break;
-
-            foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
-            {
-                if (member.IsStatic || member.IsImplicitlyDeclared || member.IsConst) continue;
-                if (!declaredNames.Add(member.Name)) continue;
-                defs[member.Name] = CreateFieldDefinition(member, session.Types);
-            }
-            foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
-            {
-                if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
-                if (!declaredNames.Add(prop.Name)) continue;
-                var isAuto = !UasmEmitter.IsComputedProperty(prop);
-                if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
-                defs[prop.Name] = CreatePropertyDefinition(prop, session.Types);
-            }
-            baseType = baseType.BaseType;
-        }
-
-        // Supplement with CLR reflection to match the formatter's fieldLayout exactly.
-        SupplementFromClrReflection(defs, symbol, session.Types);
-
-        return defs;
-    }
-
-    static FieldDefinition CreateFieldDefinition(
-        IFieldSymbol field, UdonTypeSystem types)
-    {
-        var userType = ResolveClrType(field.Type)
-            ?? throw new InvalidOperationException(
-                $"Could not resolve CLR type for field '{field.ToDisplayString()}'.");
-        var lowering = types.Describe(field.Type);
-        var systemType = ResolveStorageClrType(
-            lowering.Storage.Id, userType)
-            ?? throw new InvalidOperationException(
-                $"Could not resolve Udon storage type for field "
-                + $"'{field.ToDisplayString()}'.");
-        var isSerialized = GetIsSerialized(field);
-        RejectOpaqueSerializedField(field.ToDisplayString(), userType, systemType, isSerialized);
-        return new FieldDefinition(
-            field.Name,
-            userType,
-            systemType,
-            GetFieldSyncMode(field),
-            isSerialized,
-            GetRuntimeAttributes(field));
-    }
-
-    static FieldDefinition CreatePropertyDefinition(
-        IPropertySymbol property, UdonTypeSystem types)
-    {
-        var userType = ResolveClrType(property.Type)
-            ?? throw new InvalidOperationException(
-                $"Could not resolve CLR type for property '{property.ToDisplayString()}'.");
-        var lowering = types.Describe(property.Type);
-        var systemType = ResolveStorageClrType(
-            lowering.Storage.Id, userType)
-            ?? throw new InvalidOperationException(
-                $"Could not resolve Udon storage type for property "
-                + $"'{property.ToDisplayString()}'.");
-        var isSerialized = property.DeclaredAccessibility == Accessibility.Public;
-        RejectOpaqueSerializedField(
-            property.ToDisplayString(), userType, systemType, isSerialized);
-        return new FieldDefinition(
-            property.Name,
-            userType,
-            systemType,
-            null,
-            isSerialized,
-            GetRuntimeAttributes(property));
-    }
-
-    static void SupplementFromClrReflection(
-        Dictionary<string, FieldDefinition> defs,
-        INamedTypeSymbol symbol,
-        UdonTypeSystem types)
-    {
-        var clrType = ResolveClrType(symbol);
-        if (clrType == null || !typeof(UdonSharpBehaviour).IsAssignableFrom(clrType)) return;
-
-        var symbolByClrType = new Dictionary<Type, INamedTypeSymbol>();
-        for (var currentSymbol = symbol;
-             currentSymbol != null && currentSymbol.Name != "UdonSharpBehaviour";
-             currentSymbol = currentSymbol.BaseType)
-        {
-            var currentClrType = ClrTypeResolver.Resolve(currentSymbol);
-            if (currentClrType != null)
-                symbolByClrType[currentClrType] = currentSymbol;
-        }
-
-        // Walk hierarchy exactly like the formatter does (base -> derived).
-        var baseTypes = new Stack<Type>();
-        var current = clrType;
-        while (current != null && current != typeof(UdonSharpBehaviour))
-        {
-            baseTypes.Push(current);
-            current = current.BaseType;
-        }
-
-        while (baseTypes.Count > 0)
-        {
-            current = baseTypes.Pop();
-            foreach (var field in current.GetFields(
-                BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance
-                | BindingFlags.DeclaredOnly))
-            {
-                if (field.IsStatic || defs.ContainsKey(field.Name)) continue;
-                var userType = field.FieldType;
-                symbolByClrType.TryGetValue(current, out var ownerSymbol);
-                var fieldSymbol = ownerSymbol?.GetMembers(field.Name)
-                    .OfType<IFieldSymbol>()
-                    .FirstOrDefault();
-                var lowering = fieldSymbol != null
-                    ? types.Describe(fieldSymbol.Type)
-                    : types.Describe(userType);
-                var systemType = ResolveStorageClrType(
-                    lowering.Storage.Id, userType);
-                if (systemType == null)
-                    throw new InvalidOperationException(
-                        $"Could not resolve Udon storage type for CLR field "
-                        + $"'{current.FullName}.{field.Name}'.");
-                var isSerialized = IsFieldSerializedClr(field);
-                RejectOpaqueSerializedField(
-                    $"{current.FullName}.{field.Name}",
-                    userType,
-                    systemType,
-                    isSerialized);
-
-                defs[field.Name] = new FieldDefinition(
+            var userType = ResolveClrType(field.UserType)
+                ?? throw new InvalidOperationException(
+                    $"Could not resolve CLR type for field "
+                    + $"'{field.Member.ToDisplayString()}'.");
+            var systemType = ResolveStorageClrType(
+                field.StorageType.Id, userType)
+                ?? throw new InvalidOperationException(
+                    $"Could not resolve Udon storage type for field "
+                    + $"'{field.Member.ToDisplayString()}'.");
+            RejectOpaqueSerializedField(
+                field.Member.ToDisplayString(),
+                userType,
+                systemType,
+                field.IsSerialized);
+            defs.Add(
+                field.Name,
+                new FieldDefinition(
                     field.Name,
                     userType,
                     systemType,
-                    GetFieldSyncModeClr(field),
-                    isSerialized,
-                    field.GetCustomAttributes(false).OfType<Attribute>().ToList());
-            }
+                    ParseSyncMode(field.SyncMode),
+                    field.IsSerialized,
+                    GetRuntimeAttributes(field.Member)));
         }
+        return defs;
     }
+
+    static UdonSyncMode? ParseSyncMode(string mode)
+        => mode switch
+        {
+            null => null,
+            "none" => UdonSyncMode.None,
+            "linear" => UdonSyncMode.Linear,
+            "smooth" => UdonSyncMode.Smooth,
+            _ => throw new InvalidOperationException(
+                $"Unknown Udon sync mode '{mode}'."),
+        };
 
     static void RejectOpaqueSerializedField(
         string fieldName,
@@ -443,48 +321,5 @@ static class USugarTypeCacheManager
     static bool IsRegisteredUdonType(Type type)
         => USugarReflectionTargets.IsExternTypeMethod.Invoke(
             null, new object[] { type }) as bool? == true;
-
-    static bool IsFieldSerializedClr(FieldInfo field)
-    {
-        if (field.IsInitOnly || field.IsStatic) return false;
-        var attributes = field.GetCustomAttributes(false).OfType<Attribute>().ToArray();
-        if (attributes.Any(attribute =>
-                attribute.GetType().Name == "OdinSerializeAttribute"))
-            return true;
-        if (attributes.Any(attribute => attribute is NonSerializedAttribute))
-            return false;
-        return field.IsPublic
-            || attributes.Any(attribute =>
-                attribute is SerializeField
-                || attribute.GetType().Name == "SerializeReference");
-    }
-
-    static UdonSyncMode? GetFieldSyncModeClr(FieldInfo field)
-    {
-        var attr = field.GetCustomAttribute<UdonSyncedAttribute>();
-        if (attr == null) return null;
-        return attr.NetworkSyncType;
-    }
-
-    static bool GetIsSerialized(IFieldSymbol field)
-    {
-        if (field.IsConst || field.IsStatic || field.IsReadOnly) return false;
-        var attrs = field.GetAttributes();
-        if (attrs.Any(a => a.AttributeClass?.Name is "OdinSerializeAttribute")) return true;
-        if (attrs.Any(a => a.AttributeClass?.Name is "NonSerializedAttribute")) return false;
-        return field.DeclaredAccessibility == Accessibility.Public
-            || attrs.Any(a => a.AttributeClass?.Name is "SerializeField" or "SerializeFieldAttribute"
-                or "SerializeReference" or "SerializeReferenceAttribute");
-    }
-
-    static UdonSyncMode? GetFieldSyncMode(IFieldSymbol field)
-    {
-        var syncAttr = field.GetAttributes()
-            .FirstOrDefault(a => a.AttributeClass?.Name == "UdonSyncedAttribute");
-        if (syncAttr == null) return null;
-        if (syncAttr.ConstructorArguments.Length > 0 && syncAttr.ConstructorArguments[0].Value is int modeVal)
-            return (UdonSyncMode)modeVal;
-        return UdonSyncMode.None;
-    }
 
 }
