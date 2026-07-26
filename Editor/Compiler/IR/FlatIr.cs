@@ -263,7 +263,7 @@ public sealed class FlatModule
 /// The sole phase token accepted by code generation. Verification freezes the mutable CFG in
 /// place; functions, blocks, fields, and their collections cannot change across this boundary.
 /// </summary>
-public sealed class VerifiedFlatModule
+internal sealed class VerifiedFlatModule
 {
     public IReadOnlyList<FlatFunction> Functions { get; }
     public IReadOnlyList<FieldDecl> Fields { get; }
@@ -290,7 +290,7 @@ public sealed class VerifiedFlatModule
 }
 
 /// <summary>Canonical traversal order for reachable CFG blocks.</summary>
-public static class FlatCfgOrder
+internal static class FlatCfgOrder
 {
     public static List<FlatBlock> ComputeRpo(FlatFunction function)
     {

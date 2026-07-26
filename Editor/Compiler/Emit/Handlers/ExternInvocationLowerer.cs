@@ -966,7 +966,7 @@ internal sealed class ExternInvocationLowerer
 
         var instanceVal = _lowering.VisitExpression(op.Instance);
 
-        // Build param pairs for CCrossCall
+        // Build the typed cross-program transport parameters.
         // VisitExpression clones aggregate locals/params automatically (Clone-on-read).
         // Wave-9 round-3 [W4]: evaluate in textual order (C# semantics) but slot each value at its
         // PARAMETER ordinal — op.Arguments is call-site-ordered for named/reordered args, so indexing
@@ -1002,7 +1002,7 @@ internal sealed class ExternInvocationLowerer
         var (exportName, paramIds, _) = _lowering.GetCalleeLayout(target);
         var instanceVal = _lowering.VisitExpression(op.Instance);
 
-        // Build param pairs for CCrossCall — by parameter ordinal, textual evaluation order
+        // Build typed transport parameters by parameter ordinal and textual evaluation order.
         // (wave-9 round-3 [W4]: named/reordered args used to bind positionally on this path).
         var paramPairs = _lowering.CrossCallArguments(op.Arguments, target, paramIds);
 
@@ -1183,7 +1183,7 @@ internal sealed class ExternInvocationLowerer
         {
             // `out _` — the value is thrown away, so the store leg is a no-op. The read leg must
             // still produce a WELL-TYPED placeholder: an INTERNAL call stages it positionally into
-            // the callee's param field (a null CValue is a CoreVerify ICE — M4 wave L1s_r2_c11), and
+            // the callee's param field (a null value is invalid CFG — M4 wave L1s_r2_c11), and
             // the callee overwrites an out param before any read, so a fresh scratch is sound.
             case IDiscardOperation discard:
                 return (() => _lowering.SlotRef(_lowering.State.Builder.AllocScratch(_lowering.GetStorageType(discard.Type))), _ => { });

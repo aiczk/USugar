@@ -8,7 +8,7 @@ using System.Text;
 ///   Pass 1: Collect instructions into intermediate representation, compute label addresses.
 ///   Pass 2: Render UASM text with resolved numeric addresses.
 /// </summary>
-public static class CoreToUasm
+internal static class CoreToUasm
 {
     public static CodeGenResult Generate(VerifiedFlatModule module)
     {

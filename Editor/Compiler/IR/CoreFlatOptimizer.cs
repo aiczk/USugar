@@ -7,7 +7,7 @@ using System.Linq;
 /// heap-variable reduction, while the former CFG-simplify / DCE / copy-propagation passes changed neither
 /// EXTERN count nor runtime cost on real code (Udon is EXTERN-bound), so they were removed.
 /// </summary>
-public static class CoreFlatOptimizer
+internal static class CoreFlatOptimizer
 {
     // ========================================================================
     // Slot Coalescing

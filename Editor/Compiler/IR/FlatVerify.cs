@@ -13,7 +13,7 @@ using System.Collections.Generic;
 // RawCopyCompatibility. The module overload is the production entry point.
 // ============================================================================
 
-public static class FlatVerify
+internal static class FlatVerify
 {
     /// <summary>Production flat-IR verification. The function-only overload checks shape; this
     /// module-aware entry also proves every COPY-equivalent edge against the authoritative slot,
@@ -455,7 +455,7 @@ public static class FlatVerify
 }
 
 /// <summary>Exception thrown when compiler IR verification fails.</summary>
-public sealed class VerificationException : Exception
+internal sealed class VerificationException : Exception
 {
     public VerificationException(string message) : base(message) { }
 }

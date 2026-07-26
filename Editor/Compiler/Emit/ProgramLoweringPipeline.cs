@@ -147,14 +147,14 @@ public sealed class UasmEmitter
 
     // ── Emit ──
 
-    /// <summary>Access to the Core IR module for debugging and testing.</summary>
-    public FlatModule Module => _module;
-    /// <summary>Access to the most recently lowered flat IR module.</summary>
-    public VerifiedFlatModule FlatModule => _flatModule;
+    /// <summary>Compiler-internal CFG inspection surface.</summary>
+    internal FlatModule Module => _module;
+    /// <summary>Compiler-internal verified CFG inspection surface.</summary>
+    internal VerifiedFlatModule FlatModule => _flatModule;
 
     /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
     /// consumed by nothing yet — see LoweringState.CaptureScope).</summary>
-    public CaptureScopeAnalysis CaptureScope => _state.Captures;
+    internal CaptureScopeAnalysis CaptureScope => _state.Captures;
     public Compilation Compilation => _state.Compilation;
     public INamedTypeSymbol ClassSymbol => _state.ClassSymbol;
 
@@ -1973,7 +1973,7 @@ public sealed class UasmEmitter
         // method body — its operation tree is the generic DEFINITION's, so T-typed expressions need
         // the instantiation's type-param map during body emission (registration already substituted
         // the signature types while the enclosing spec's map was active; without the map here the
-        // body type-checks as 'T' and CoreVerify ICEs on a single legal instantiation). A closure
+        // body type-checks as 'T' and CFG verification rejects a single legal instantiation). A closure
         // whose semantics depend on T pins its generic to ONE instantiation (the [X6] r5 reject,
         // widened in round 8 to type-param-referencing closures), so FirstGenericSpec is the exact
         // owner. Walk up through enclosing closures to (possibly nested) generic owners.

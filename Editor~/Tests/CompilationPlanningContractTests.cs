@@ -143,6 +143,12 @@ public class CompilationPlanningContractTests
             typeof(DelegateAbi),
             typeof(ClosedConversionPlan),
             typeof(InvocationHandler),
+            typeof(CoreFlatOptimizer),
+            typeof(CoreToUasm),
+            typeof(FlatCfgOrder),
+            typeof(FlatVerify),
+            typeof(VerifiedFlatModule),
+            typeof(VerificationException),
         };
 
         Assert.All(
