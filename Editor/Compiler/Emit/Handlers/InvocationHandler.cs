@@ -75,7 +75,7 @@ internal sealed class InvocationHandler : IExpressionHandler
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var boundSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.Method, op.TargetMethod);
-        var target = boundSite.Callable.Site.Target;
+        var target = boundSite.Target;
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
@@ -173,18 +173,8 @@ internal sealed class InvocationHandler : IExpressionHandler
             }
         }
 
-        // Virtual dispatch through `this`: a call to a virtual/override/abstract method must bind to the
-        // most-derived override in the COMPILED type, even when the call site is in an INHERITED base
-        // method whose static target is the base declaration. base.M() and calls on other objects
-        // (cross-behaviour) are excluded. Without this a base method runs the base body, not the override.
-        if ((target.IsVirtual || target.IsOverride || target.IsAbstract)
-            && target.MethodKind == MethodKind.Ordinary
-            && op.Instance is IInstanceReferenceOperation iref
-            && iref.Syntax is not Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax
-            && _lowering.ResolveMostDerivedOverride(target) is { } derivedOverride
-            && !SymbolEqualityComparer.Default.Equals(derivedOverride, target))
-            target = derivedOverride;
-
+        // BoundTarget already applies the frozen `this`-receiver leaf override. base.M() and calls on
+        // other objects retain their static target.
         switch (target.MethodKind)
         {
             // Delegate invocation: a() where a is Action/Func
@@ -467,9 +457,6 @@ internal sealed class InvocationHandler : IExpressionHandler
         // Extern method call
         return _externs.EmitExternMethodCall(op, target);
     }
-
-    // ResolveMostDerivedOverride moved to LoweringServices (round-9: StatementHandler's TCO gate needs
-    // the same virtual-dispatch resolution — see VisitReturn).
 
     // User-struct instance method call: receiver object[] passed (uncloned) as synthetic param0
     // so `this`-field mutations reflect back to the caller's local (value-type by-ref `this` semantics).

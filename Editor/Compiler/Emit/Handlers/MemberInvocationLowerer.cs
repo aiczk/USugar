@@ -87,14 +87,22 @@ internal sealed class MemberInvocationLowerer
         {
             // Virtual dispatch through `this` (round 7): a read inside an inherited base body binds the
             // BASE accessor — resolve to the chain-leaf override; `base.P` keeps the static binding.
-            var thisProp = _lowering.ResolveDispatchProperty(op);
+            var thisGetter = boundGetter == null
+                ? null
+                : _lowering.RequireBoundTarget(
+                    op, CallableSiteKind.PropertyGet,
+                    boundGetter);
+            var thisProp = thisGetter?.AssociatedSymbol
+                               as IPropertySymbol
+                           ?? op.Property;
 
             // User-defined property getter → internal call. A struct-typed getter result is COPIED (C#
             // getters return by value) — otherwise `read = this.Prop` aliases the backing field. (diff-fuzz w4)
-            if (thisProp.GetMethod != null
-                && _lowering.MethodFunctions.ContainsKey(thisProp.GetMethod))
+            if (thisGetter != null
+                && _lowering.MethodFunctions.ContainsKey(thisGetter))
             {
-                var gv = _lowering.EmitCallToMethod(thisProp.GetMethod, new List<CLeaf>());
+                var gv = _lowering.EmitCallToMethod(
+                    thisGetter, new List<CLeaf>());
                 return thisProp.Type is INamedTypeSymbol thisGetAgg && TypeClassifier.IsAggregateValue(thisGetAgg)
                     ? AggregateAbi.DeepClone(_lowering.Builder, gv, thisGetAgg, _lowering.State.Aggregates.GetLayout) : gv;
             }
@@ -284,7 +292,7 @@ internal sealed class MemberInvocationLowerer
         }
 
         // User-defined indexer on this/base BEHAVIOUR → internal getter call (`this[i]` reads this-fields
-        // directly, no receiver param). ResolveDispatchProperty (round 7): `this[i]` inside an inherited
+        // directly, no receiver param). BoundProgram maps `this[i]` inside an inherited
         // base body binds the BASE indexer — dispatch the chain-leaf override; `base[i]` keeps the static
         // binding. B48/WjR3: an object[]-emulated containing type (user struct OR v1 class) must NOT take
         // this behaviour-only arm — its accessor is a StructuredFunction expecting the receiver object[] as param0,
@@ -294,7 +302,11 @@ internal sealed class MemberInvocationLowerer
         // mirroring how a struct's `this.Method()` self-call routes through EmitStructInstanceCall.
         if (op.Instance is IInstanceReferenceOperation
             && !TypeClassifier.IsObjectArrayEmulated(op.Property.ContainingType)
-            && _lowering.ResolveDispatchProperty(op) is { GetMethod: { } idxDispatchGetter }
+            && VirtualDispatch.FindAccessor(
+                op.Property, getter: true) is { } idxSourceGetter
+            && _lowering.RequireBoundTarget(
+                op, CallableSiteKind.PropertyGet,
+                idxSourceGetter) is { } idxDispatchGetter
             && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter))
         {
             // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args

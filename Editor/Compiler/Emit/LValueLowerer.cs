@@ -51,14 +51,18 @@ internal sealed class LValueLowerer
         {
             // User-defined indexer on this/base BEHAVIOUR: cache the (possibly side-effecting) index args
             // ONCE, so a compound assignment (`this[Idx()] += x`) does not evaluate the index twice.
-            // ResolveDispatchProperty (round 7): `this[i]` inside an inherited base body binds the BASE
+            // BoundProgram maps `this[i]` inside an inherited base body from the BASE
             // indexer — read through the chain-leaf override's getter; `base[i]` keeps the static binding.
             // WjR3 (B48 twin): an object[]-emulated containing type (user struct OR v1 class) must NOT
             // take this behaviour-only no-receiver arm — its accessor expects the receiver object[] as
             // param0 (CInternalCall arity skew); it falls through to the receiver-as-param0 arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && _lowering.ResolveDispatchProperty(idxRef).GetMethod is { } idxDispatchGetter
+                && VirtualDispatch.FindAccessor(
+                    idxRef.Property, getter: true) is { } idxSourceGetter
+                && _lowering.RequireBoundTarget(
+                    idxRef, CallableSiteKind.PropertyGet,
+                    idxSourceGetter) is { } idxDispatchGetter
                 && _lowering.MethodFunctions.ContainsKey(idxDispatchGetter):
             {
                 // Each VisitExpression(arg) is bound to a scratch leaf once under ANF — the index side effect
@@ -297,11 +301,16 @@ internal sealed class LValueLowerer
                 break;
             }
             // Auto-property on this → backing field already handled by write-back to field (user-defined
-            // classes only). ResolveDispatchProperty (round 7): an inherited base body's write binds the
+            // classes only). BoundProgram maps an inherited base body's write from the
             // BASE accessor — all three this-path cases below dispatch the chain-leaf override instead;
             // `base.P` keeps the static binding (its base-instance copy accessors).
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation } propRef
-                when _lowering.ResolveDispatchProperty(propRef) is { } autoDispatchProp
+                when VirtualDispatch.FindAccessor(
+                    propRef.Property, getter: false) is { } autoSourceSetter
+                && _lowering.RequireBoundTarget(
+                    propRef, CallableSiteKind.PropertySet,
+                    autoSourceSetter).AssociatedSymbol
+                    is IPropertySymbol autoDispatchProp
                 && autoDispatchProp.GetMethod?.DeclaringSyntaxReferences.IsEmpty == true
                 && ExternResolver.IsUdonSharpBehaviour(autoDispatchProp.ContainingType)
                 && autoDispatchProp.ContainingType.Name != "UdonSharpBehaviour":
@@ -313,7 +322,11 @@ internal sealed class LValueLowerer
             // object[]-emulated indexer arm below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: true } } idxRef
                 when !TypeClassifier.IsObjectArrayEmulated(idxRef.Property.ContainingType)
-                && _lowering.ResolveDispatchProperty(idxRef).SetMethod is { } idxDispatchSetter
+                && VirtualDispatch.FindAccessor(
+                    idxRef.Property, getter: false) is { } idxSourceSetter
+                && _lowering.RequireBoundTarget(
+                    idxRef, CallableSiteKind.PropertySet,
+                    idxSourceSetter) is { } idxDispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(idxDispatchSetter, out _):
             {
                 // Wave-9 round-4: the uncached path slots by parameter ordinal too (named args).
@@ -330,7 +343,11 @@ internal sealed class LValueLowerer
             // the indexer arms above/below.
             case IPropertyReferenceOperation { Instance: IInstanceReferenceOperation, Property: { IsIndexer: false } } propRef
                 when !TypeClassifier.IsObjectArrayEmulated(propRef.Property.ContainingType)
-                && _lowering.ResolveDispatchProperty(propRef).SetMethod is { } dispatchSetter
+                && VirtualDispatch.FindAccessor(
+                    propRef.Property, getter: false) is { } sourceSetter
+                && _lowering.RequireBoundTarget(
+                    propRef, CallableSiteKind.PropertySet,
+                    sourceSetter) is { } dispatchSetter
                 && _lowering.MethodFunctions.TryGetValue(dispatchSetter, out _):
                 _lowering.EmitExprStmt(_lowering.EmitCallToMethod(dispatchSetter, new List<CLeaf> { valueVal }));
                 return;

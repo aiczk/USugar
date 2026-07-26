@@ -90,8 +90,15 @@ internal sealed class LoweringServices
         CallableSiteKind kind,
         IMethodSymbol target)
         => RequireRegisteredCallable(
-            RequireBoundCallSite(operation, kind, target)
-                .Callable.Site.Target);
+            RequireBoundCallSite(
+                operation, kind, target).Target);
+
+    internal IMethodSymbol RequireBoundTarget(
+        IOperation operation,
+        CallableSiteKind kind,
+        IMethodSymbol target)
+        => RequireBoundCallSite(
+            operation, kind, target).Target;
 
     internal IMethodSymbol RequireBoundDeconstruction(IOperation operation)
     {
@@ -1402,7 +1409,10 @@ internal sealed class LoweringServices
         // Virtual dispatch through `this` (round 7): a write inside an inherited base body binds
         // the BASE accessor — resolve to the chain-leaf override for the this-path setter lookups
         // below; `base.P` (and every non-this receiver) keeps the static binding.
-        var dispatchProp = ResolveDispatchProperty(propRef);
+        var dispatchSetter = boundSetter.Target;
+        var dispatchProperty =
+            dispatchSetter.AssociatedSymbol as IPropertySymbol
+            ?? propRef.Property;
         // B74 fold: route the extern owner through the shared funnel (an inherited property registers under
         // the receiver's own static type, not its declaring base) — replaces the old Behaviour/MonoBehaviour-
         // only string fixup below. A null instance (static setter) leaves the owner unchanged.
@@ -1410,8 +1420,9 @@ internal sealed class LoweringServices
         var propContainingUdon = GetStorageTypeName(ResolveExternOwnerType(propRef.Property.ContainingType, propOwnerReceiver, propRef.Property.Name));
 
         // User-defined indexer on this/base → internal setter call (index args followed by the value).
-        if (dispatchProp.IsIndexer && propRef.Instance is IInstanceReferenceOperation
-            && dispatchProp.SetMethod != null && _methodFunctions.ContainsKey(dispatchProp.SetMethod))
+        if (propRef.Property.IsIndexer
+            && propRef.Instance is IInstanceReferenceOperation
+            && _methodFunctions.ContainsKey(dispatchSetter))
         {
             // Wave-9 round-4: index args slotted by parameter ordinal (named/reordered index args
             // bind by name; the base[...] flavor rides this same arm via the base-instance copy).
@@ -1419,7 +1430,8 @@ internal sealed class LoweringServices
             return thisIdxVal =>
             {
                 thisIdxArgs.Add(thisIdxVal);
-                EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, thisIdxArgs));
+                EmitExprStmt(EmitCallToMethod(
+                    dispatchSetter, thisIdxArgs));
             };
         }
 
@@ -1515,16 +1527,21 @@ internal sealed class LoweringServices
         switch (propRef.Instance)
         {
             case IInstanceReferenceOperation
-                when dispatchProp.SetMethod != null && _methodFunctions.TryGetValue(dispatchProp.SetMethod, out _):
+                when _methodFunctions.TryGetValue(
+                    dispatchSetter, out _):
                 // User-defined property setter on this → internal call
-                EmitExprStmt(EmitCallToMethod(dispatchProp.SetMethod, new List<CLeaf> { srcVal }));
+                EmitExprStmt(EmitCallToMethod(
+                    dispatchSetter,
+                    new List<CLeaf> { srcVal }));
                 break;
             case IInstanceReferenceOperation
-                when dispatchProp.SetMethod?.DeclaringSyntaxReferences.IsEmpty == true
-                     && ExternResolver.IsUdonSharpBehaviour(dispatchProp.ContainingType)
-                     && dispatchProp.ContainingType.Name != "UdonSharpBehaviour":
+                when dispatchSetter.DeclaringSyntaxReferences.IsEmpty
+                     && ExternResolver.IsUdonSharpBehaviour(
+                         dispatchProperty.ContainingType)
+                     && dispatchProperty.ContainingType.Name
+                     != "UdonSharpBehaviour":
                 // Auto-property set on this → direct variable assignment (user-defined classes only)
-                EmitStoreField(dispatchProp.Name, srcVal);
+                EmitStoreField(dispatchProperty.Name, srcVal);
                 break;
             default:
             {
@@ -1831,53 +1848,17 @@ internal sealed class LoweringServices
         return binding;
     }
 
-    // ── Override-chain resolution (shared core) ──
-    //
-    // The "walk _classSymbol's BaseType chain; for each same-named member, walk its
-    // Overridden{Method,Property} chain looking for a match on the target's OriginalDefinition" search
-    // was independently copy-pasted four times (this file's method/property flavors, plus
-    // ResolvedEdgeResolver.ResolveLeafOverrideDef/LeafPropertyTarget for the recursion-graph's
-    // emission-faithful mirror of this same dispatch) — the two walker methods below are the single
-    // shared core; each of the four call sites differs only in what it does with the raw match (generic
-    // re-Construct here, OriginalDefinition-normalization in the resolver) and its own guards.
-
-    /// <summary>Search <paramref name="classSymbol"/>'s BaseType chain for a same-named method whose
-    /// OverriddenMethod chain reaches <paramref name="def"/> (an OriginalDefinition). Returns the found
-    /// member AS DECLARED — callers that need it OriginalDefinition-normalized do that themselves — or
-    /// null if no override chain reaches it.</summary>
-    internal static IMethodSymbol FindOverrideMethodInChain(INamedTypeSymbol classSymbol, IMethodSymbol def, string name)
+    /// <summary>Planning-only method-group override selection. Source call sites use the frozen
+    /// dispatch target stored in BoundProgram.</summary>
+    IMethodSymbol ResolveMostDerivedOverrideForPlanning(
+        IMethodSymbol baseMethod)
     {
-        for (var t = classSymbol; t != null; t = t.BaseType)
-            foreach (var m in t.GetMembers(name).OfType<IMethodSymbol>())
-                for (IMethodSymbol o = m; o != null; o = o.OverriddenMethod)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return m;
-        return null;
-    }
-
-    /// <summary>Property twin of <see cref="FindOverrideMethodInChain"/> — walks OverriddenProperty
-    /// instead of OverriddenMethod.</summary>
-    internal static IPropertySymbol FindOverridePropertyInChain(INamedTypeSymbol classSymbol, IPropertySymbol def, string name)
-    {
-        for (var t = classSymbol; t != null; t = t.BaseType)
-            foreach (var p in t.GetMembers(name).OfType<IPropertySymbol>())
-                for (var o = p; o != null; o = o.OverriddenProperty)
-                    if (SymbolEqualityComparer.Default.Equals(o.OriginalDefinition, def))
-                        return p;
-        return null;
-    }
-
-    /// <summary>Most-derived override of <paramref name="baseMethod"/> reachable from the compiled type
-    /// (_classSymbol), or baseMethod itself if none — mirrors C# virtual dispatch for a `this` call whose
-    /// static target is a base declaration. Round-8 [R8]: GetMembers returns the UNCONSTRUCTED member,
-    /// so a generic virtual called through this lost its type arguments and monomorphized the open
-    /// definition — the SDK assembler then ICEd with TypeResolverException 'T' (even same-class).
-    /// Re-construct the resolved member with the original call's type arguments. (Moved from
-    /// InvocationHandler in round 9 — StatementHandler's TCO gate shares it.)</summary>
-    internal IMethodSymbol ResolveMostDerivedOverride(IMethodSymbol baseMethod)
-    {
+        if (_state.Program != null)
+            throw new InvalidOperationException(
+                "Override resolution is a binding-phase operation; emission must read BoundProgram.");
         var def = baseMethod.OriginalDefinition;
-        var m = FindOverrideMethodInChain(_classSymbol, def, baseMethod.Name);
+        var m = VirtualDispatch.FindOverrideMethodInChain(
+            _classSymbol, def, baseMethod.Name);
         if (m == null) return baseMethod;
         return baseMethod.IsGenericMethod && m.IsGenericMethod
             ? m.OriginalDefinition.Construct(baseMethod.TypeArguments.ToArray())
@@ -2503,7 +2484,9 @@ internal sealed class LoweringServices
                     // static binding (non-virtual by C# ldftn semantics — the copy IS the target).
                     var adapterTarget = !baseReceiver && targetMethod.MethodKind == MethodKind.Ordinary
                         && (targetMethod.IsVirtual || targetMethod.IsOverride || targetMethod.IsAbstract)
-                        ? ResolveMostDerivedOverride(targetMethod) : targetMethod;
+                        ? ResolveMostDerivedOverrideForPlanning(
+                            targetMethod)
+                        : targetMethod;
                     var adapterBinding = new DelegateBindingPlan(
                         DelegateBindingKind.SignatureAdapter, adapterTarget, adapterName);
                     _state.Synthetics.RegisterSigAdapter(
@@ -2537,26 +2520,6 @@ internal sealed class LoweringServices
         return new MaterializedDelegateBinding(
             new DelegateBindingPlan(bindingKind, targetMethod, bridgeExportName),
             funcRef, targetInstance, envLeaf);
-    }
-
-    /// <summary>Virtual dispatch through `this` for PROPERTY/INDEXER accessors (round 7): a property
-    /// reference inside an INHERITED base method body statically binds the BASE declaration, so the
-    /// this-path accessor lookups must resolve to the most-derived override visible from the compiled
-    /// class — the chain-leaf accessor over the chain-leaf storage — exactly like
-    /// <see cref="ResolveMostDerivedOverride"/> for MethodKind.Ordinary calls (shares its
-    /// <see cref="FindOverridePropertyInChain"/> walker). Without this the lookup hits the
-    /// base-instance COPY, which runs the base accessor body (manual props/indexers, pre-chain-dispatch behavior)
-    /// or reads the base declaration's per-declaration `__basebk` storage (auto-props, post-917d99c).
-    /// `base.P` keeps the static binding (the single non-virtual property access in C#), as does every
-    /// non-this receiver (cross dispatch is receiver-correct via the planner chain-root layout).</summary>
-    internal IPropertySymbol ResolveDispatchProperty(IPropertyReferenceOperation op)
-    {
-        var prop = op.Property;
-        if (!(prop.IsVirtual || prop.IsOverride || prop.IsAbstract)) return prop;
-        if (op.Instance is not IInstanceReferenceOperation iref) return prop;
-        if (iref.Syntax is Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax) return prop;
-        var def = prop.OriginalDefinition;
-        return FindOverridePropertyInChain(_classSymbol, def, prop.Name) ?? prop;
     }
 
     // ── CW1 lift: runtime-polymorphic PROPERTY/INDEXER accessor dispatch on v1-class receivers ──

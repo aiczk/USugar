@@ -151,6 +151,12 @@ internal sealed class StatementHandler : IOperationHandler
 
     void VisitReturn(IReturnOperation op)
     {
+        var tailCall = op.ReturnedValue as IInvocationOperation;
+        var tailTarget = tailCall == null
+            ? null
+            : _lowering.RequireBoundTarget(
+                tailCall, CallableSiteKind.Method,
+                tailCall.TargetMethod);
         // Tail call optimization: return self(args) → overwrite params + goto entry.
         // Wave-9 round-8 [Y3]: TCO is only sound when every ref/out arg threads the SAME parameter
         // (param→param is an identity rebind under the shared flat heap). A re-chained ref/out
@@ -165,9 +171,10 @@ internal sealed class StatementHandler : IOperationHandler
         // outv 363 vs CLR 528 at depth 30 once the cross-method ref-thread acceptance let the
         // shape compile). The leaf's own self-call resolves to itself, keeping TCO byte-identical
         // for every non-base-copy shape.
-        if (op.ReturnedValue is IInvocationOperation tailCall
+        if (tailCall != null
             && _lowering.CurrentMethod != null
-            && SymbolEqualityComparer.Default.Equals(tailCall.TargetMethod, _lowering.CurrentMethod)
+            && SymbolEqualityComparer.Default.Equals(
+                tailTarget, _lowering.CurrentMethod)
             // CA-v2b-2: TCO rebinds only the explicit params, NOT the receiver (param0), so the receiver must
             // be unchanged — either a static self-call (no receiver) or a `this`/base receiver. A non-`this`
             // instance receiver (`return other.Self(args)`, e.g. a polymorphic tail recursion
@@ -175,12 +182,6 @@ internal sealed class StatementHandler : IOperationHandler
             // fall through to normal (virtual) dispatch. (A `this` virtual self-call stays correct: executing
             // _currentMethod means this's most-derived override IS _currentMethod, so it re-dispatches to it.)
             && (tailCall.Instance == null || tailCall.Instance is IInstanceReferenceOperation)
-            && (tailCall.Instance is not IInstanceReferenceOperation
-                || tailCall.TargetMethod.IsStatic
-                || !(tailCall.TargetMethod.IsVirtual || tailCall.TargetMethod.IsOverride
-                     || tailCall.TargetMethod.IsAbstract)
-                || SymbolEqualityComparer.Default.Equals(
-                    _lowering.ResolveMostDerivedOverride(tailCall.TargetMethod), _lowering.CurrentMethod))
             && TailCallRefArgsSelfThreaded(tailCall))
         {
             EmitTailCall(tailCall);

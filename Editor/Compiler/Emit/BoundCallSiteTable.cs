@@ -93,6 +93,8 @@ internal sealed class BoundCallSite
 {
     public readonly ResolvedCallableSite Callable;
     public readonly DispatchPlan? Dispatch;
+    public IMethodSymbol Target
+        => Dispatch?.BoundTarget ?? Callable.Site.Target;
 
     public BoundCallSite(ResolvedCallableSite callable, DispatchPlan? dispatch)
     {

@@ -40,6 +40,7 @@ internal enum DispatchPrecision
 internal readonly struct DispatchPlan
 {
     public readonly CallableSite Site;
+    public readonly IMethodSymbol BoundTarget;
     public readonly IReadOnlyList<VDispatchTarget> RuntimeTargets;
     public readonly CrossDispatchPlan Cross;
     public readonly DispatchPrecision Precision;
@@ -49,6 +50,13 @@ internal readonly struct DispatchPlan
         CrossDispatchPlan cross, DispatchPrecision precision)
     {
         Site = site;
+        BoundTarget =
+            site.Receiver is IInstanceReferenceOperation receiver
+            && receiver.Syntax
+                is not Microsoft.CodeAnalysis.CSharp.Syntax.BaseExpressionSyntax
+            && cross.HasLocalTarget
+                ? cross.LocalTarget
+                : site.Target;
         RuntimeTargets = (runtimeTargets ?? System.Array.Empty<VDispatchTarget>())
             .ToList().AsReadOnly();
         Cross = cross;
@@ -115,7 +123,7 @@ public sealed class VirtualDispatch
             localTarget = target;
         }
 
-        var leaf = LoweringServices.FindOverrideMethodInChain(
+        var leaf = FindOverrideMethodInChain(
             compiledClass, localTarget.OriginalDefinition, localTarget.Name) ?? localTarget;
         if (target.IsGenericMethod && leaf.IsGenericMethod)
             leaf = leaf.OriginalDefinition.Construct(target.TypeArguments.ToArray());
@@ -127,6 +135,46 @@ public sealed class VirtualDispatch
     public static bool IsVirtualCall(IMethodSymbol target)
         => (target.IsVirtual || target.IsAbstract || target.IsOverride)
            && target.MethodKind is MethodKind.Ordinary or MethodKind.PropertyGet or MethodKind.PropertySet;
+
+    internal static IMethodSymbol FindOverrideMethodInChain(
+        INamedTypeSymbol classSymbol,
+        IMethodSymbol definition,
+        string name)
+    {
+        for (var type = classSymbol;
+             type != null;
+             type = type.BaseType)
+            foreach (var method in type.GetMembers(name)
+                         .OfType<IMethodSymbol>())
+                for (var current = method;
+                     current != null;
+                     current = current.OverriddenMethod)
+                    if (SymbolEqualityComparer.Default.Equals(
+                            current.OriginalDefinition,
+                            definition))
+                        return method;
+        return null;
+    }
+
+    internal static IPropertySymbol FindOverridePropertyInChain(
+        INamedTypeSymbol classSymbol,
+        IPropertySymbol definition,
+        string name)
+    {
+        for (var type = classSymbol;
+             type != null;
+             type = type.BaseType)
+            foreach (var property in type.GetMembers(name)
+                         .OfType<IPropertySymbol>())
+                for (var current = property;
+                     current != null;
+                     current = current.OverriddenProperty)
+                    if (SymbolEqualityComparer.Default.Equals(
+                            current.OriginalDefinition,
+                            definition))
+                        return property;
+        return null;
+    }
 
     /// <summary>The SINGLE predicate for "this invocation OR property/indexer accessor reference is a
     /// runtime-polymorphic dispatch site on a v1 user-class receiver": a virtual call whose receiver is a base-typed variable OR <c>this</c> — NOT

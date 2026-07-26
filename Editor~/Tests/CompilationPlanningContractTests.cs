@@ -207,6 +207,12 @@ public class CompilationPlanningContractTests
         Assert.Null(typeof(LoweringServices).GetMethod(
             "SubstituteMethodTypeArgs",
             BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        Assert.Null(typeof(LoweringServices).GetMethod(
+            "ResolveMostDerivedOverride",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        Assert.Null(typeof(LoweringServices).GetMethod(
+            "ResolveDispatchProperty",
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
         Assert.All(
             typeof(BoundAbiPlan).GetFields(
                 BindingFlags.Instance | BindingFlags.NonPublic),
