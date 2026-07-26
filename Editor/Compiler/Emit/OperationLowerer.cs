@@ -10,14 +10,44 @@ using Microsoft.CodeAnalysis.Operations;
 /// </summary>
 internal sealed class OperationLowerer
 {
+    const byte NoRoute = 0;
+    const byte GeneralStatementRoute = 1;
+    const byte LoopRoute = 2;
+    const byte SwitchRoute = 3;
+    const byte DeconstructionRoute = 4;
+    const byte GeneralExpressionRoute = 5;
+    const byte SimpleAssignmentRoute = 6;
+    const byte CompoundAssignmentRoute = 7;
+    const byte OperatorRoute = 8;
+    const byte InvocationRoute = 9;
+    const byte ArrayRoute = 10;
+    const byte NullableRoute = 11;
+
+    static readonly OperationKind[] HandledKinds =
+        Enum.GetValues(typeof(OperationKind))
+            .Cast<OperationKind>()
+            .Distinct()
+            .Where(kind =>
+                StatementRoute(kind) != NoRoute
+                || ExpressionRoute(kind) != NoRoute)
+            .ToArray();
+
     readonly LoweringState _state;
-    readonly Dictionary<OperationKind, IOperationHandler> _statements;
-    readonly Dictionary<OperationKind, IExpressionHandler> _expressions;
+    readonly StatementHandler _statements;
+    readonly LoopHandler _loops;
+    readonly SwitchHandler _switches;
+    readonly DeconstructionAssignmentHandler _deconstructions;
+    readonly ExpressionHandler _expressions;
+    readonly SimpleAssignmentHandler _simpleAssignments;
+    readonly CompoundAssignmentHandler _compoundAssignments;
     readonly OperatorHandler _operators;
+    readonly InvocationHandler _invocations;
+    readonly ArrayHandler _arrays;
+    readonly NullableHandler _nullables;
 
     public LoweringServices Services { get; }
     internal IEnumerable<OperationKind> HandledOperationKinds
-        => _statements.Keys.Concat(_expressions.Keys).Distinct();
+        => HandledKinds;
 
     public OperationLowerer(LoweringState state)
     {
@@ -25,24 +55,20 @@ internal sealed class OperationLowerer
         state.SetOperationLowerer(this);
         Services = new LoweringServices(state);
 
-        var statement = new StatementHandler(Services);
-        var loop = new LoopHandler(Services);
-        var @switch = new SwitchHandler(Services);
-        var deconstruction = new DeconstructionAssignmentHandler(Services);
-        var simpleAssignment = new SimpleAssignmentHandler(Services);
-        var compoundAssignment = new CompoundAssignmentHandler(Services);
+        _statements = new StatementHandler(Services);
+        _loops = new LoopHandler(Services);
+        _switches = new SwitchHandler(Services);
+        _deconstructions =
+            new DeconstructionAssignmentHandler(Services);
+        _expressions = new ExpressionHandler(Services);
+        _simpleAssignments =
+            new SimpleAssignmentHandler(Services);
+        _compoundAssignments =
+            new CompoundAssignmentHandler(Services);
         _operators = new OperatorHandler(Services);
-
-        _statements = BuildDispatch<IOperationHandler>(
-            statement, loop, @switch, deconstruction);
-        _expressions = BuildDispatch<IExpressionHandler>(
-            new ExpressionHandler(Services),
-            simpleAssignment,
-            compoundAssignment,
-            _operators,
-            new InvocationHandler(Services),
-            new ArrayHandler(Services),
-            new NullableHandler(Services));
+        _invocations = new InvocationHandler(Services);
+        _arrays = new ArrayHandler(Services);
+        _nullables = new NullableHandler(Services);
     }
 
     public void VisitOperation(IOperation operation)
@@ -51,17 +77,14 @@ internal sealed class OperationLowerer
             throw new NotSupportedException("VisitOperation called with null operation");
         while (operation is IParenthesizedOperation parenthesized)
             operation = parenthesized.Operand;
-        if (_statements.TryGetValue(operation.Kind, out var handler))
+        try
         {
-            try
-            {
-                handler.Handle(operation);
+            if (TryHandleStatement(operation))
                 return;
-            }
-            catch (Exception exception)
-            {
-                throw TagLocation(exception, operation);
-            }
+        }
+        catch (Exception exception)
+        {
+            throw TagLocation(exception, operation);
         }
         throw new NotSupportedException(
             $"Unsupported operation: {operation.Kind} ({operation.GetType().Name})");
@@ -76,16 +99,15 @@ internal sealed class OperationLowerer
             throw new NotSupportedException("VisitExpression called with null operation");
         while (operation is IParenthesizedOperation parenthesized)
             operation = parenthesized.Operand;
-        if (_expressions.TryGetValue(operation.Kind, out var handler))
+        try
         {
-            try
-            {
-                return LoweredValue.Create(_state, operation, handler.Handle(operation));
-            }
-            catch (Exception exception)
-            {
-                throw TagLocation(exception, operation);
-            }
+            if (TryLowerExpression(operation, out var leaf))
+                return LoweredValue.Create(
+                    _state, operation, leaf);
+        }
+        catch (Exception exception)
+        {
+            throw TagLocation(exception, operation);
         }
         throw new NotSupportedException(
             $"Unsupported expression: {operation.Kind} ({operation.GetType().Name})");
@@ -95,21 +117,134 @@ internal sealed class OperationLowerer
         CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _operators.EmitPatternCheckImpl(value, valueType, pattern);
 
-    static Dictionary<OperationKind, T> BuildDispatch<T>(params T[] handlers)
-        where T : IHandler
+    bool TryHandleStatement(IOperation operation)
     {
-        var table = new Dictionary<OperationKind, T>();
-        foreach (var handler in handlers)
-            foreach (var kind in handler.HandledKinds)
-            {
-                if (table.TryGetValue(kind, out var existing))
-                    throw new InvalidOperationException(
-                        $"Duplicate handler for OperationKind.{kind}: "
-                        + $"{existing.GetType().Name} and {handler.GetType().Name}");
-                table[kind] = handler;
-            }
-        return table;
+        switch (StatementRoute(operation.Kind))
+        {
+            case GeneralStatementRoute:
+                _statements.Handle(operation);
+                return true;
+            case LoopRoute:
+                _loops.Handle(operation);
+                return true;
+            case SwitchRoute:
+                _switches.Handle(operation);
+                return true;
+            case DeconstructionRoute:
+                _deconstructions.Handle(operation);
+                return true;
+            default:
+                return false;
+        }
     }
+
+    bool TryLowerExpression(
+        IOperation operation, out CLeaf result)
+    {
+        switch (ExpressionRoute(operation.Kind))
+        {
+            case GeneralExpressionRoute:
+                result = _expressions.Handle(operation);
+                return true;
+            case SimpleAssignmentRoute:
+                result = _simpleAssignments.Handle(operation);
+                return true;
+            case CompoundAssignmentRoute:
+                result = _compoundAssignments.Handle(operation);
+                return true;
+            case OperatorRoute:
+                result = _operators.Handle(operation);
+                return true;
+            case InvocationRoute:
+                result = _invocations.Handle(operation);
+                return true;
+            case ArrayRoute:
+                result = _arrays.Handle(operation);
+                return true;
+            case NullableRoute:
+                result = _nullables.Handle(operation);
+                return true;
+            default:
+                result = null;
+                return false;
+        }
+    }
+
+    static byte StatementRoute(OperationKind kind)
+        => kind switch
+        {
+            OperationKind.Block
+                or OperationKind.ExpressionStatement
+                or OperationKind.VariableDeclarationGroup
+                or OperationKind.Conditional
+                or OperationKind.Return
+                or OperationKind.YieldReturn
+                or OperationKind.YieldBreak
+                or OperationKind.Branch
+                or OperationKind.Labeled
+                or OperationKind.LocalFunction
+                or OperationKind.Using
+                or OperationKind.UsingDeclaration
+                or OperationKind.Empty
+                => GeneralStatementRoute,
+            OperationKind.Loop => LoopRoute,
+            OperationKind.Switch => SwitchRoute,
+            OperationKind.DeconstructionAssignment
+                => DeconstructionRoute,
+            _ => NoRoute,
+        };
+
+    static byte ExpressionRoute(OperationKind kind)
+        => kind switch
+        {
+            OperationKind.Literal
+                or OperationKind.LocalReference
+                or OperationKind.FieldReference
+                or OperationKind.EventReference
+                or OperationKind.ParameterReference
+                or OperationKind.InstanceReference
+                or OperationKind.Conversion
+                or OperationKind.DefaultValue
+                or OperationKind.TypeOf
+                or OperationKind.NameOf
+                or OperationKind.SizeOf
+                or OperationKind.DeclarationExpression
+                or OperationKind.Discard
+                or OperationKind.DelegateCreation
+                or OperationKind.Tuple
+                => GeneralExpressionRoute,
+            OperationKind.SimpleAssignment
+                => SimpleAssignmentRoute,
+            OperationKind.CompoundAssignment
+                or OperationKind.Increment
+                or OperationKind.Decrement
+                or OperationKind.EventAssignment
+                => CompoundAssignmentRoute,
+            OperationKind.BinaryOperator
+                or OperationKind.UnaryOperator
+                or OperationKind.Conditional
+                or OperationKind.IsType
+                or OperationKind.IsPattern
+                or OperationKind.SwitchExpression
+                or OperationKind.TupleBinaryOperator
+                => OperatorRoute,
+            OperationKind.Invocation
+                or OperationKind.ObjectCreation
+                or OperationKind.PropertyReference
+                or OperationKind.InterpolatedString
+                or OperationKind.TypeParameterObjectCreation
+                or OperationKind.AnonymousObjectCreation
+                => InvocationRoute,
+            OperationKind.ArrayCreation
+                or OperationKind.ArrayElementReference
+                => ArrayRoute,
+            OperationKind.ConditionalAccess
+                or OperationKind.Coalesce
+                or OperationKind.ConditionalAccessInstance
+                or OperationKind.CoalesceAssignment
+                => NullableRoute,
+            _ => NoRoute,
+        };
 
     static Exception TagLocation(Exception exception, IOperation operation)
     {

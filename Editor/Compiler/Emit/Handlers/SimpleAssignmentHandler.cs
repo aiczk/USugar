@@ -4,7 +4,7 @@ using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `a = b` simple assignments across all lvalue targets
 /// (locals, fields, array elements, properties, cross-behaviour, delegates, struct fields).</summary>
-internal sealed class SimpleAssignmentHandler : IExpressionHandler
+internal sealed class SimpleAssignmentHandler
 {
     readonly LoweringServices _lowering;
     readonly LValueLowerer _lvalues;
@@ -14,8 +14,6 @@ internal sealed class SimpleAssignmentHandler : IExpressionHandler
         _lowering = lowering;
         _lvalues = new LValueLowerer(lowering);
     }
-
-    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.SimpleAssignment };
 
     public CLeaf Handle(IOperation op)
         => op is ISimpleAssignmentOperation assign

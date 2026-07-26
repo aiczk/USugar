@@ -1,7 +1,7 @@
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class NullableHandler : IExpressionHandler
+internal sealed class NullableHandler
 {
     readonly LoweringServices _lowering;
     readonly LValueLowerer _lvalues;
@@ -11,11 +11,6 @@ internal sealed class NullableHandler : IExpressionHandler
         _lowering = lowering;
         _lvalues = new LValueLowerer(lowering);
     }
-
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.ConditionalAccess, OperationKind.Coalesce, OperationKind.ConditionalAccessInstance, OperationKind.CoalesceAssignment,
-    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

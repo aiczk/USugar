@@ -3,18 +3,12 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class OperatorHandler : IExpressionHandler
+internal sealed class OperatorHandler
 {
     readonly LoweringServices _lowering;
     public OperatorHandler(LoweringServices lowering) => _lowering = lowering;
 
     // OperationKind.Conditional also appears in the statement table (StatementHandler) — the ternary lives here.
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.BinaryOperator, OperationKind.UnaryOperator, OperationKind.Conditional, OperationKind.IsType,
-        OperationKind.IsPattern, OperationKind.SwitchExpression, OperationKind.TupleBinaryOperator,
-    };
-
     public CLeaf Handle(IOperation expression) => expression switch
     {
         ITupleBinaryOperation op => VisitTupleBinary(op),

@@ -9,12 +9,10 @@ using Microsoft.CodeAnalysis.Operations;
 /// 140-line lowering deserves its own home. Pattern matching (IPatternCaseClauseOperation)
 /// and enum-typed switch values (with EmitEnumToUnderlying conversion) are supported.
 /// </summary>
-internal sealed class SwitchHandler : IOperationHandler
+internal sealed class SwitchHandler
 {
     readonly LoweringServices _lowering;
     public SwitchHandler(LoweringServices lowering) => _lowering = lowering;
-
-    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.Switch };
 
     public void Handle(IOperation operation)
     {

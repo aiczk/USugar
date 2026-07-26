@@ -6,14 +6,12 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `var (a, b) = ...` and `(a, b) = method()` tuple deconstruction.</summary>
-internal sealed class DeconstructionAssignmentHandler : IOperationHandler
+internal sealed class DeconstructionAssignmentHandler
 {
     readonly LoweringServices _lowering;
 
     public DeconstructionAssignmentHandler(LoweringServices lowering)
         => _lowering = lowering;
-
-    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.DeconstructionAssignment };
 
     public void Handle(IOperation op)
     {

@@ -57,6 +57,9 @@ public class CompilationPlanningContractTests
         var assembly = typeof(UasmEmitter).Assembly;
         Assert.Null(assembly.GetType("EmitContext"));
         Assert.Null(assembly.GetType("LoweringDispatch"));
+        Assert.Null(assembly.GetType("IHandler"));
+        Assert.Null(assembly.GetType("IOperationHandler"));
+        Assert.Null(assembly.GetType("IExpressionHandler"));
 
         var stateFields = typeof(LoweringState).GetFields(
             BindingFlags.Instance | BindingFlags.Public
@@ -69,6 +72,12 @@ public class CompilationPlanningContractTests
             typeof(OperationLowerer).GetFields(
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
             field => typeof(Delegate).IsAssignableFrom(field.FieldType));
+        Assert.DoesNotContain(
+            typeof(OperationLowerer).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic),
+            field => field.FieldType.IsGenericType
+                     && field.FieldType.GetGenericTypeDefinition()
+                     == typeof(Dictionary<,>));
         Assert.DoesNotContain(stateFields, field =>
             field.FieldType == typeof(CompilationSession)
             || field.FieldType == typeof(LayoutPlanBuilder)

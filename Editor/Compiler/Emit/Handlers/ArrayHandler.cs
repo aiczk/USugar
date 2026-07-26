@@ -2,12 +2,10 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class ArrayHandler : IExpressionHandler
+internal sealed class ArrayHandler
 {
     readonly LoweringServices _lowering;
     public ArrayHandler(LoweringServices lowering) => _lowering = lowering;
-
-    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.ArrayCreation, OperationKind.ArrayElementReference };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

@@ -3,7 +3,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class InvocationHandler : IExpressionHandler
+internal sealed class InvocationHandler
 {
     readonly LoweringServices _lowering;
     readonly DelegateInvocationLowerer _delegates;
@@ -43,12 +43,6 @@ internal sealed class InvocationHandler : IExpressionHandler
 
     internal static CConst DefaultConst(CoreBuilder builder, StorageType type)
         => DelegateInvocationLowerer.DefaultConst(builder, type);
-
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.Invocation, OperationKind.ObjectCreation, OperationKind.PropertyReference, OperationKind.InterpolatedString,
-        OperationKind.TypeParameterObjectCreation, OperationKind.AnonymousObjectCreation,
-    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

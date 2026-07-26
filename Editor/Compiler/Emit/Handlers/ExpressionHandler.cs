@@ -3,19 +3,10 @@ using System.Collections.Generic;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class ExpressionHandler : IExpressionHandler
+internal sealed class ExpressionHandler
 {
     readonly LoweringServices _lowering;
     public ExpressionHandler(LoweringServices lowering) => _lowering = lowering;
-
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.Literal, OperationKind.LocalReference, OperationKind.FieldReference,
-        OperationKind.EventReference, OperationKind.ParameterReference, OperationKind.InstanceReference,
-        OperationKind.Conversion, OperationKind.DefaultValue, OperationKind.TypeOf, OperationKind.NameOf,
-        OperationKind.SizeOf,
-        OperationKind.DeclarationExpression, OperationKind.Discard, OperationKind.DelegateCreation, OperationKind.Tuple,
-    };
 
     public CLeaf Handle(IOperation expression) => expression switch
     {

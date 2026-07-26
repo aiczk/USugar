@@ -3,20 +3,12 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class StatementHandler : IOperationHandler
+internal sealed class StatementHandler
 {
     readonly LoweringServices _lowering;
     public StatementHandler(LoweringServices lowering) => _lowering = lowering;
 
     // IReturnOperation spans Return/YieldReturn/YieldBreak; all three route here as under `is IReturnOperation`.
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.Block, OperationKind.ExpressionStatement, OperationKind.VariableDeclarationGroup,
-        OperationKind.Conditional, OperationKind.Return, OperationKind.YieldReturn, OperationKind.YieldBreak,
-        OperationKind.Branch, OperationKind.Labeled, OperationKind.LocalFunction,
-        OperationKind.Using, OperationKind.UsingDeclaration, OperationKind.Empty,
-    };
-
     public void Handle(IOperation operation)
     {
         switch (operation)

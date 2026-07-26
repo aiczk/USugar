@@ -3,14 +3,12 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-internal sealed class LoopHandler : IOperationHandler
+internal sealed class LoopHandler
 {
     readonly LoweringServices _lowering;
     public LoopHandler(LoweringServices lowering) => _lowering = lowering;
 
     // While/For/ForEach all carry OperationKind.Loop, distinguished by LoopKind inside Handle().
-    public OperationKind[] HandledKinds { get; } = new[] { OperationKind.Loop };
-
     public void Handle(IOperation operation)
     {
         switch (operation)

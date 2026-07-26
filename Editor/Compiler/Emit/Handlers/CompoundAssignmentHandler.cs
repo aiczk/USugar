@@ -3,7 +3,7 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>Handles `a += b`, `a -= b`, `a++`, `++a`, etc.</summary>
-internal sealed class CompoundAssignmentHandler : IExpressionHandler
+internal sealed class CompoundAssignmentHandler
 {
     readonly LoweringServices _lowering;
     readonly LValueLowerer _lvalues;
@@ -15,11 +15,6 @@ internal sealed class CompoundAssignmentHandler : IExpressionHandler
     }
 
     // IIncrementOrDecrementOperation spans BOTH Increment and Decrement — a single kind would drop `x--`.
-    public OperationKind[] HandledKinds { get; } = new[]
-    {
-        OperationKind.CompoundAssignment, OperationKind.Increment, OperationKind.Decrement, OperationKind.EventAssignment,
-    };
-
     public CLeaf Handle(IOperation op) => op switch
     {
         ICompoundAssignmentOperation compound => VisitCompoundAssignment(compound),
