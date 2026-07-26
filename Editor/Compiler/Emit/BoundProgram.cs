@@ -148,6 +148,12 @@ internal sealed class BoundProgram
         _deconstructions = Freeze(
             deconstructions, nameof(deconstructions));
         _conversions = Freeze(conversions, nameof(conversions));
+        foreach (var conversion in _conversions.Values)
+            if (conversion.DelegateWrapperName is { } wrapper
+                && !SyntheticDemands.WrapperSignatures.ContainsKey(wrapper))
+                throw new ArgumentException(
+                    $"Delegate wrapper '{wrapper}' was absent from synthetic demands.",
+                    nameof(conversions));
         Constants = constants
             ?? throw new ArgumentNullException(nameof(constants));
         MethodBodies = methodBodies

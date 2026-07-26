@@ -163,19 +163,18 @@ internal sealed class LoweringServices
             operation, scope, role);
     }
 
-    internal bool TryGetBoundAbi(
+    internal BoundExtern RequireParamsInvocation(
         IOperation operation,
-        BoundAbiRole role,
-        out BoundExtern bound)
+        out bool expand)
     {
         if (operation == null)
             throw new ArgumentNullException(nameof(operation));
         var scope = _state.CurrentBindingScope
             ?? throw new InvalidOperationException(
-                $"ABI role '{role}' for '{operation.Syntax}' is being "
+                $"Params ABI for '{operation.Syntax}' is being "
                 + "lowered outside a bound semantic scope.");
-        return _state.BoundAbi.TryFindOperation(
-            operation, scope, role, out bound);
+        return _state.BoundAbi.RequireParamsInvocation(
+            operation, scope, out expand);
     }
 
     /// <summary>
@@ -1862,19 +1861,6 @@ internal sealed class LoweringServices
             new DelegateBindingPlan(DelegateBindingKind.Wrapper, innerInvoke, wrapperName),
             outerInvoke, innerInvoke, typeParamMap);
         return wrapperName;
-    }
-
-    internal string RequireWrapperSig(
-        IMethodSymbol outerInvoke,
-        IMethodSymbol innerInvoke,
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap)
-    {
-        var wrapperName = DelegateAbi.WrapperName(
-            DelegateAbi.BuildSigPart(
-                outerInvoke, _state.Types, typeParamMap),
-            DelegateAbi.BuildSigPart(
-                innerInvoke, _state.Types, typeParamMap));
-        return _state.Program.SyntheticDemands.RequireWrapper(wrapperName);
     }
 
     DelegateBindingPlan PlanDelegateDemand(IMethodSymbol method, string bridgeName,

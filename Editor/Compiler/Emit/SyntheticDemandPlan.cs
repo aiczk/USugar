@@ -97,13 +97,6 @@ internal sealed class SyntheticDemandPlan
             + "was absent from the bound program.");
     }
 
-    public string RequireWrapper(string wrapperName)
-    {
-        if (WrapperSignatures.ContainsKey(wrapperName)) return wrapperName;
-        throw new InvalidOperationException(
-            $"Delegate wrapper '{wrapperName}' was absent from the bound program.");
-    }
-
     static IReadOnlyDictionary<string, TValue> CopyMap<TValue>(
         IDictionary<string, TValue> source)
         => new ReadOnlyDictionary<string, TValue>(

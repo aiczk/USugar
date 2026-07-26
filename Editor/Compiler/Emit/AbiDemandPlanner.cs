@@ -67,6 +67,19 @@ internal sealed class AbiDemandPlanner
         if (method.ContainingType is INamedTypeSymbol aggregate
             && TypeClassifier.IsObjectArrayEmulated(aggregate))
             return;
+        var last = method.Parameters.Length - 1;
+        IArrayCreationOperation paramsArray = null;
+        if (last >= 0
+            && method.Parameters[last].IsParams
+            && operation.Arguments.Length == method.Parameters.Length
+            && operation.Arguments[last].ArgumentKind
+            == ArgumentKind.ParamArray)
+        {
+            var paramsValue = operation.Arguments[last].Value;
+            while (paramsValue is IConversionOperation conversion)
+                paramsValue = conversion.Operand;
+            paramsArray = paramsValue as IArrayCreationOperation;
+        }
         (
             IMethodSymbol Method,
             string Owner,
@@ -83,34 +96,32 @@ internal sealed class AbiDemandPlanner
             _abi.RecordOperationFailure(
                 operation, scope, BoundAbiRole.Invocation,
                 ex.Message);
+            if (paramsArray != null)
+                _abi.RecordOperationFailure(
+                    operation, scope, BoundAbiRole.ParamsInvocation,
+                    ex.Message);
             return;
         }
+        BoundExtern standard = null;
+        var standardFailure =
+            $"No registered Udon extern implements method "
+            + $"'{request.Method.ToDisplayString()}' for ABI owner "
+            + $"'{request.Owner}'.";
         if (_abi.TryBindMethod(
                 request.Method, request.Owner, TypeName,
-                request.ParameterOverride, out var standard))
+                request.ParameterOverride, out standard))
             _abi.RecordOperation(
                 operation, scope, BoundAbiRole.Invocation, standard);
         else
             _abi.RecordOperationFailure(
                 operation, scope, BoundAbiRole.Invocation,
-                $"No registered Udon extern implements method "
-                + $"'{request.Method.ToDisplayString()}' for ABI owner "
-                + $"'{request.Owner}'.");
+                standardFailure);
 
-        var last = method.Parameters.Length - 1;
-        if (last < 0
-            || !method.Parameters[last].IsParams
-            || operation.Arguments.Length != method.Parameters.Length
-            || operation.Arguments[last].ArgumentKind
-            != ArgumentKind.ParamArray)
+        if (paramsArray == null)
             return;
 
-        var value = operation.Arguments[last].Value;
-        while (value is IConversionOperation conversion)
-            value = conversion.Operand;
-        if (value is not IArrayCreationOperation array)
-            return;
-        var count = array.Initializer?.ElementValues.Length ?? 0;
+        var count =
+            paramsArray.Initializer?.ElementValues.Length ?? 0;
         var parameters = new List<string>();
         for (var index = 0; index < last; index++)
             parameters.Add(TypeName(method.Parameters[index].Type));
@@ -123,14 +134,18 @@ internal sealed class AbiDemandPlanner
                 request.ParameterOverride, out var expanded))
             _abi.RecordOperation(
                 operation, scope,
-                BoundAbiRole.ExpandedParamsInvocation,
+                BoundAbiRole.ParamsInvocation,
                 expanded);
+        else if (standard != null)
+            _abi.RecordOperation(
+                operation, scope,
+                BoundAbiRole.ParamsInvocation,
+                standard);
         else
             _abi.RecordOperationFailure(
                 operation, scope,
-                BoundAbiRole.ExpandedParamsInvocation,
-                $"No expanded params extern is registered for "
-                + $"'{request.Method.ToDisplayString()}'.");
+                BoundAbiRole.ParamsInvocation,
+                standardFailure + " No expanded params extern is registered.");
     }
 
     void PlanConversion(

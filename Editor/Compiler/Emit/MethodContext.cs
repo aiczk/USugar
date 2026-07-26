@@ -248,6 +248,7 @@ public sealed class MethodContext
         public ClosureSpec Closure { get; }
         public ImmutableArray<IMethodSymbol> OwnerSpecs { get; }
         public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParameterMap { get; }
+        internal CallSiteBindingScope BindingScope { get; }
 
         internal RegisteredCallableBody(RegisteredCallable callable, ClosureSpec closure)
         {
@@ -264,6 +265,28 @@ public sealed class MethodContext
             if (closure != null)
                 map = TypeEnvironment.ForMethod(closure.Definition, map);
             TypeParameterMap = map;
+
+            if (closure != null)
+            {
+                var coveredOwners = new HashSet<IMethodSymbol>(
+                    OwnerSpecs.Select(owner => owner.OriginalDefinition),
+                    SymbolEqualityComparer.Default);
+                for (var symbol = callable.Definition.ContainingSymbol;
+                     symbol is IMethodSymbol enclosing;
+                     symbol = enclosing.ContainingSymbol)
+                    if (!coveredOwners.Contains(enclosing.OriginalDefinition)
+                        && (enclosing.OriginalDefinition.TypeParameters.Length > 0
+                            || enclosing.ContainingType is { IsGenericType: true }))
+                        throw new InvalidOperationException(
+                            $"Closure '{callable.Definition.ToDisplayString()}' was registered "
+                            + "without its lexical owner specialization "
+                            + $"'{enclosing.OriginalDefinition.ToDisplayString()}'.");
+            }
+
+            var key = closure != null
+                ? new SpecializationKey(callable.Definition, closure.KeyArgs)
+                : SpecializationKey.ForMethod(callable.Definition);
+            BindingScope = CallSiteBindingScope.ForMethod(key);
         }
     }
 

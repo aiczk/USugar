@@ -27,18 +27,26 @@ internal readonly struct ClosedConversionPlan
     public readonly ITypeSymbol SourceType;
     public readonly IMethodSymbol OperatorMethod;
     public readonly bool AllowsProgramLocalClassErasure;
+    public readonly string DelegateWrapperName;
 
     public ClosedConversionPlan(
         ClosedConversionKind kind,
         ITypeSymbol sourceType,
         IMethodSymbol operatorMethod = null,
-        bool allowsProgramLocalClassErasure = false)
+        bool allowsProgramLocalClassErasure = false,
+        string delegateWrapperName = null)
     {
+        if (delegateWrapperName != null
+            && kind != ClosedConversionKind.None)
+            throw new ArgumentException(
+                "Delegate wrapper conversions must remain representation-preserving.",
+                nameof(kind));
         Kind = kind;
         SourceType = sourceType;
         OperatorMethod = operatorMethod;
         AllowsProgramLocalClassErasure =
             allowsProgramLocalClassErasure;
+        DelegateWrapperName = delegateWrapperName;
     }
 }
 
@@ -101,6 +109,22 @@ internal sealed class ConversionSemanticPlanner
         var allowsProgramLocalClassErasure =
             _lowering.State.Boundary.IsProvablyLocalClassErasure(
                 conversion, semanticSource, closedDestination);
+        if (DelegateDemandPolicy.TryGetVariantConversion(
+                _lowering.Compilation,
+                conversion,
+                _lowering.State.Types,
+                _lowering.State.TypeParamMap,
+                out var outerInvoke,
+                out var innerInvoke))
+            return new ClosedConversionPlan(
+                ClosedConversionKind.None,
+                semanticSource,
+                allowsProgramLocalClassErasure:
+                    allowsProgramLocalClassErasure,
+                delegateWrapperName: _lowering.PlanWrapperSig(
+                    outerInvoke,
+                    innerInvoke,
+                    _lowering.State.TypeParamMap));
         if (conversion.OperatorMethod != null
             || semanticSource?.SpecialType != SpecialType.System_Object
             || closedDestination == null

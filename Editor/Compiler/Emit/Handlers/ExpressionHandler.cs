@@ -621,18 +621,11 @@ internal sealed class ExpressionHandler
             // §5.4's sig-filter soundness (SigFilterCoupledToVarianceReject — now the widened-not-
             // rejected form, since the wrapper's own dispatch site is unconditionally Reentrant like the
             // fan-out, sidestepping the sig-filter question entirely for this arm).
-            if (DelegateDemandPolicy.TryGetVariantConversion(
-                    _lowering.Compilation, conv, _lowering.State.Types,
-                    _lowering.State.TypeParamMap,
-                    out var vDstInvoke, out var vSrcInvoke))
+            var wrapperName = _lowering
+                .RequireBoundConversion(conv)
+                .DelegateWrapperName;
+            if (wrapperName != null)
             {
-                // The wrapper's INNER dispatch must speak srcVal's OWN native protocol — vSrc's Invoke
-            // method (sig-T), never vDst's (sig-S): srcVal's DelegateAbi.Method names ITS OWN bridge (under
-                // sig-T's conv-var protocol), so staging under sig-S would silently drop values.
-                var wrapperName = _lowering.RequireWrapperSig(
-                    vDstInvoke, vSrcInvoke,
-                    _lowering.State.TypeParamMap);
-
                 // A null delegate VALUE converts to null (C# semantics: converting null is null) — never
                 // wrap it, or `o == null` and invoke-null-guard behavior would both silently diverge from
                 // a plain unwrapped null. Guarded at RUNTIME (not just the statically-known-null case

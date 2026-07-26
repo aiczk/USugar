@@ -617,18 +617,15 @@ public sealed class LayoutPlanBuilder
             var paramIds = new string[method.Parameters.Length];
             if (isUdonEvent && UdonEventParamNames.TryGetValue(method.Name, out var fixedNames))
             {
+                if (method.Parameters.Length > fixedNames.Length)
+                    throw new InvalidOperationException(
+                        $"Udon event '{method.Name}' has "
+                        + $"{method.Parameters.Length} parameters, but its "
+                        + $"installed SDK schema names only {fixedNames.Length}. "
+                        + "Regenerate the event registry fixture.");
                 // Event parameters: use fixed names, don't consume NameAllocator counter
                 for (int i = 0; i < method.Parameters.Length; i++)
-                {
-                    if (i < fixedNames.Length)
-                        paramIds[i] = fixedNames[i];
-                    else
-                    {
-                        // Fallback for parameters beyond fixedNames (SDK mismatch)
-                        var key = NameAllocator.ParamKey(method.Parameters[i].Name);
-                        paramIds[i] = NameAllocator.FormatId(key, alloc.Allocate(key));
-                    }
-                }
+                    paramIds[i] = fixedNames[i];
             }
             else
             {

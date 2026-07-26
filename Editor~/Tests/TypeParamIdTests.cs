@@ -111,15 +111,23 @@ public class TpCls : UdonSharpBehaviour {
         var mc = new MethodContext();
         var args = System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty
             .Add(comp.GetSpecialType(SpecialType.System_Int32));
+        var owner = comp.GetTypeByMetadataName("GBox`1")
+            .Construct(comp.GetSpecialType(SpecialType.System_Int32))
+            .GetMembers("Run")
+            .OfType<IMethodSymbol>()
+            .Single()
+            .Construct(comp.GetSpecialType(SpecialType.System_String));
+        var ownerSpecs =
+            System.Collections.Immutable.ImmutableArray.Create(owner);
         mc.AddClosureCallable(lfSym, args,
-            System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty,
+            ownerSpecs,
             new MethodSlot(0, "__0_lf"), "lf1",
             System.Array.Empty<string>(),
             System.Array.Empty<StorageType>(),
             System.Array.Empty<ReturnSlot>(), null, true);
         Assert.ThrowsAny<System.ArgumentException>(() =>
             mc.AddClosureCallable(lfSym, args,
-                System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty,
+                ownerSpecs,
                 new MethodSlot(1, "__1_lf"), "lf2",
                 System.Array.Empty<string>(),
                 System.Array.Empty<StorageType>(),

@@ -345,6 +345,8 @@ public class EditorSyntaxGuardTests
             "PlanMulticastSig(",
             "PlanWrapperSig(",
             "PlanEnumToStringDemand(",
+            "TryGetVariantConversion(",
+            "TryGetBoundAbi(",
             ".SyntheticDemandPlanner.Register",
         };
         var failures = Directory.GetFiles(
@@ -362,6 +364,66 @@ public class EditorSyntaxGuardTests
         Assert.True(failures.Length == 0,
             "Body handlers may only require synthetic helpers already present in "
             + "BoundProgram.SyntheticDemands.\n"
+            + string.Join("\n", failures));
+    }
+
+    [Fact]
+    public void BodyEmissionDoesNotReconstructPublishedSemantics()
+    {
+        var packageRoot = FindPackageRoot();
+        var compilerRoot = Path.Combine(
+            packageRoot, "Editor", "Compiler");
+        var forbiddenByFile = new Dictionary<string, string[]>
+        {
+            [Path.Combine(
+                compilerRoot, "Emit", "ProgramLoweringPipeline.cs")] =
+            [
+                "TypeEnvironment.ForMethod(",
+                "GetConvertMethodName(",
+            ],
+            [Path.Combine(
+                compilerRoot, "Emit", "Handlers",
+                "ExpressionHandler.cs")] =
+            [
+                "TryGetVariantConversion(",
+                "RequireWrapperSig(",
+            ],
+            [Path.Combine(
+                compilerRoot, "Emit", "Handlers",
+                "ExternInvocationLowerer.cs")] =
+            [
+                "TryGetBoundAbi(",
+            ],
+            [Path.Combine(
+                compilerRoot, "UdonTypeSystem.cs")] =
+            [
+                "LowerClrStorage(",
+                "GetUdonTypeName(Type ",
+                "GetStorageType(Type ",
+                "Describe(Type ",
+            ],
+            [Path.Combine(
+                compilerRoot, "LayoutPlanBuilder.cs")] =
+            [
+                "Fallback for parameters beyond",
+                "if (i < fixedNames.Length)",
+            ],
+        };
+        var failures = forbiddenByFile
+            .SelectMany(pair =>
+            {
+                var source = File.ReadAllText(pair.Key);
+                return pair.Value
+                    .Where(token => source.Contains(
+                        token, StringComparison.Ordinal))
+                    .Select(token =>
+                        $"{Path.GetRelativePath(packageRoot, pair.Key)}: {token}");
+            })
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Body emission must consume the materialized callable, conversion, "
+            + "ABI and type decisions without reopening their planning questions.\n"
             + string.Join("\n", failures));
     }
 

@@ -2,28 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace USugar.Tests;
 
 public class ClrStorageTypePolicyTests
 {
-    enum UserMode : short { A, B }
-    interface IUserContract { }
-    delegate int UserDelegate(int value);
-
-    static UdonTypeSystem RegistryTypes()
-    {
-        var compilation = CSharpCompilation.Create(
-            "ClrStoragePolicy",
-            references: TestHelper.StandardRefs,
-            options: new CSharpCompilationOptions(
-                OutputKind.DynamicallyLinkedLibrary));
-        return new CompilationSession(
-            compilation, TestHelper.RegistryFacts).Types;
-    }
-
     [Fact]
     public void ConstructedGenericClrNamesMatchTheRegistrySpelling()
     {
@@ -31,12 +15,6 @@ public class ClrStorageTypePolicyTests
             UdonTypeIdentity.FromStorage(typeof(List<int>)).Name);
         Assert.Equal("SystemCollectionsGenericIListSystemInt32",
             UdonTypeIdentity.FromStorage(typeof(IList<int>)).Name);
-
-        var types = RegistryTypes();
-        Assert.Equal("SystemCollectionsGenericListSystemInt32",
-            types.GetUdonTypeName(typeof(List<int>)));
-        Assert.Equal("SystemCollectionsGenericIListSystemInt32",
-            types.GetUdonTypeName(typeof(IList<int>)));
     }
 
     [Fact]
@@ -57,81 +35,6 @@ public class GenericNameCarrier
             session.Types.GetUdonTypeName(fields["list"].Type));
         Assert.Equal(UdonTypeIdentity.FromStorage(typeof(IList<int>)).Name,
             session.Types.GetUdonTypeName(fields["listInterface"].Type));
-    }
-
-    [Fact]
-    public void RegisteredSdkEnumKeepsItsUdonIdentity()
-        => Assert.Equal("SystemDayOfWeek",
-            RegistryTypes().GetUdonTypeName(typeof(DayOfWeek)));
-
-    [Fact]
-    public void UnregisteredUserEnumUsesItsUnderlyingStorage()
-        => Assert.Equal("SystemInt16",
-            RegistryTypes().GetUdonTypeName(typeof(UserMode)));
-
-    [Fact]
-    public void UserInterfaceAndItsArrayUseBehaviourStorage()
-    {
-        var types = RegistryTypes();
-        Assert.Equal("VRCUdonCommonInterfacesIUdonEventReceiver",
-            types.GetUdonTypeName(typeof(IUserContract)));
-        Assert.Equal("UnityEngineComponentArray",
-            types.GetUdonTypeName(typeof(IUserContract[])));
-    }
-
-    [Fact]
-    public void DelegateAndDelegateArrayUseObjectArrayBundles()
-    {
-        var types = RegistryTypes();
-        Assert.Equal("SystemObjectArray",
-            types.GetUdonTypeName(typeof(UserDelegate)));
-        Assert.Equal("SystemObjectArray",
-            types.GetUdonTypeName(typeof(UserDelegate[])));
-    }
-
-    [Fact]
-    public void NullableAndMultiDimensionalArraysUseTheirFoldedStorage()
-    {
-        var types = RegistryTypes();
-        Assert.Equal("SystemObject",
-            types.GetUdonTypeName(typeof(int?)));
-        Assert.Equal("SystemObjectArray",
-            types.GetUdonTypeName(typeof(int[,])));
-    }
-
-    [Fact]
-    public void ClrAndMetadataSymbolProducersAgreeOnTheEnumFamily()
-    {
-        var compilation = CSharpCompilation.Create(
-            "StorageTypeCrossProducerCensus",
-            references: TestHelper.StandardRefs.Concat(new[]
-            {
-                MetadataReference.CreateFromFile(typeof(ClrStorageTypePolicyTests)
-                    .Assembly.Location),
-            }),
-            options: new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        var session = new CompilationSession(compilation, TestHelper.RegistryFacts);
-
-        foreach (var type in new[]
-                 {
-                     typeof(DayOfWeek),
-                     typeof(DayOfWeek[]),
-                     typeof(UserMode),
-                     typeof(UserMode[]),
-                 })
-        {
-            var elementType = type.IsArray ? type.GetElementType() : type;
-            var symbol = compilation.GetTypeByMetadataName(elementType.FullName);
-            Assert.NotNull(symbol);
-            ITypeSymbol storageSymbol = type.IsArray
-                ? compilation.CreateArrayTypeSymbol(symbol)
-                : symbol;
-
-            var fromSymbol = session.Types.GetUdonTypeName(storageSymbol);
-            var fromClr = session.Types.GetUdonTypeName(type);
-
-            Assert.Equal(fromClr, fromSymbol);
-        }
     }
 
     [Fact]

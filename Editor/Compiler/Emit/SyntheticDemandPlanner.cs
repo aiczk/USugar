@@ -82,17 +82,6 @@ internal sealed class SyntheticDemandPlanner
             lowering.PlanDelegateBridge(creation);
             return;
         }
-        if (operation is IConversionOperation conversion
-            && DelegateDemandPolicy.TryGetVariantConversion(
-                lowering.Compilation, conversion, lowering.State.Types,
-                lowering.State.TypeParamMap,
-                out var outerInvoke, out var innerInvoke))
-        {
-            lowering.PlanWrapperSig(
-                outerInvoke, innerInvoke,
-                lowering.State.TypeParamMap);
-            return;
-        }
         if (operation is ICompoundAssignmentOperation compound
             && compound.OperatorKind
                 is BinaryOperatorKind.Add

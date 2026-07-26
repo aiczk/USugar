@@ -170,21 +170,6 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
                 storage, representation));
     }
 
-    public UdonTypeLowering Describe(Type type)
-    {
-        if (type == null) throw new ArgumentNullException(nameof(type));
-        if (type.IsByRef)
-            type = type.GetElementType()
-                ?? throw new InvalidOperationException(
-                    "A by-ref CLR type has no element type.");
-        var sourceType = UdonTypeIdentity.FromStorage(type);
-        var storage = LowerClrStorage(type);
-        var representation = Classify(type, sourceType, storage);
-        return Create(
-            sourceType, storage, representation,
-            UdonRuntimeTypeTest.Unsupported);
-    }
-
     public bool IsFoldedEnum(ITypeSymbol type)
         => Describe(type).IsFoldedEnum;
 
@@ -201,15 +186,9 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
         => Describe(type, typeParameterMap).Storage.Name;
 
-    public string GetUdonTypeName(Type type)
-        => Describe(type).Storage.Name;
-
     public StorageType GetStorageType(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap = null)
         => Describe(type, typeParameterMap).Storage;
-
-    public StorageType GetStorageType(Type type)
-        => Describe(type).Storage;
 
     UdonTypeLowering Create(UdonTypeId sourceType,
         StorageType storage,
@@ -276,86 +255,6 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
             && storage != StorageTypes.ComponentArray)
             return UdonRuntimeTypeTest.Exact;
         return UdonRuntimeTypeTest.Unsupported;
-    }
-
-    static UdonRepresentationKind Classify(
-        Type type, UdonTypeId sourceType, StorageType storage)
-    {
-        if (type.IsArray)
-        {
-            if (storage == StorageTypes.ComponentArray)
-                return UdonRepresentationKind.ComponentArray;
-            if (storage == StorageTypes.ObjectArray
-                && (type.GetArrayRank() > 1
-                    || type.GetElementType()?.IsArray == true
-                    || typeof(Delegate).IsAssignableFrom(
-                        type.GetElementType())))
-                return UdonRepresentationKind.ObjectArrayBundle;
-            return UdonRepresentationKind.NativeArray;
-        }
-        if (typeof(Delegate).IsAssignableFrom(type))
-            return UdonRepresentationKind.ObjectArrayBundle;
-        if (type.IsGenericType
-            && type.GetGenericTypeDefinition() == typeof(Nullable<>))
-            return UdonRepresentationKind.BoxedNullable;
-        if (storage == StorageTypes.UdonEventReceiver)
-            return UdonRepresentationKind.BehaviourReference;
-        if (type.IsEnum && storage.Id != sourceType)
-            return UdonRepresentationKind.FoldedEnum;
-        return storage == StorageTypes.ObjectArray
-            ? UdonRepresentationKind.ObjectArrayBundle
-            : UdonRepresentationKind.Exact;
-    }
-
-    StorageType LowerClrStorage(Type type)
-    {
-        if (type.IsByRef)
-            return LowerClrStorage(type.GetElementType()
-                ?? throw new InvalidOperationException(
-                    "A by-ref CLR type has no element type."));
-        if (type == typeof(void)) return StorageTypes.Void;
-
-        if (type.IsArray)
-        {
-            if (type.GetArrayRank() > 1)
-                return StorageTypes.ObjectArray;
-            var element = type.GetElementType();
-            if (element == null || element.IsArray
-                || typeof(Delegate).IsAssignableFrom(element))
-                return StorageTypes.ObjectArray;
-            var elementStorage = LowerClrStorage(element);
-            if (elementStorage == StorageTypes.UdonEventReceiver)
-                return StorageTypes.ComponentArray;
-            if (elementStorage == StorageTypes.ObjectArray)
-                return StorageTypes.ObjectArray;
-            return new StorageType(
-                UdonTypeIdentity.FromCanonicalStorageName(
-                    elementStorage.Name + "Array"));
-        }
-
-        if (typeof(Delegate).IsAssignableFrom(type))
-            return StorageTypes.ObjectArray;
-        if (type.IsGenericType
-            && type.GetGenericTypeDefinition() == typeof(Nullable<>))
-            return StorageTypes.Object;
-
-        var exactType = UdonTypeIdentity.FromStorage(type);
-        if (_abiCatalog.IsRegisteredType(exactType))
-            return new StorageType(exactType);
-        if (type.IsEnum)
-            return LowerClrStorage(Enum.GetUnderlyingType(type));
-        if (IsClrUdonSharpBehaviour(type) || type.IsInterface)
-            return StorageTypes.UdonEventReceiver;
-        return StorageTypes.ObjectArray;
-    }
-
-    static bool IsClrUdonSharpBehaviour(Type type)
-    {
-        for (var current = type; current != null;
-             current = current.BaseType)
-            if (current.Name == "UdonSharpBehaviour")
-                return true;
-        return false;
     }
 
     public ITypeSymbol Resolve(ITypeSymbol type,

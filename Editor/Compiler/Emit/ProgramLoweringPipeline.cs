@@ -26,10 +26,7 @@ public sealed class UasmEmitter
     FlatModule _module => _state.Module;
     CoreBuilder _builder => _state.Builder;
     FrozenLayoutPlan _planner => _state.Planner;
-    IReadOnlyDictionary<IMethodSymbol, FlatFunction> _methodFunctions => _state.Methods.Functions;
     IReadOnlyDictionary<IMethodSymbol, MethodSlot> _methodSlots => _state.Methods.Slots;
-    IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> _methodReturns => _state.Methods.Returns;
-    IReadOnlyDictionary<IMethodSymbol, string[]> _methodParamVarIds => _state.Methods.ParamVarIds;
     IMethodSymbol _currentMethod { get => _state.Methods.CurrentMethod; set => _state.Methods.CurrentMethod = value; }
     IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> _typeParamMap
         => _state.TypeParamMap;
@@ -1264,8 +1261,6 @@ public sealed class UasmEmitter
             fieldInitializers));
         PlanSyntheticDemands(
             fieldInitializers, methodBodies);
-        var syntheticDemands = _state.PublishSyntheticDemands();
-        var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var abiBuilder = new BoundAbiPlanBuilder(
             _session.AbiCatalog);
         var boundSource = BindSourceSemantics(
@@ -1274,6 +1269,8 @@ public sealed class UasmEmitter
             fieldInitializers,
             methodBodies,
             abiBuilder);
+        var syntheticDemands = _state.PublishSyntheticDemands();
+        var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);
         _state.SetRecursionPlan(recursion);
         var abi = abiBuilder.Publish();
@@ -1535,10 +1532,7 @@ public sealed class UasmEmitter
 
         foreach (var body in _state.Methods.RegisteredBodies)
         {
-            var methodKey = body.Closure != null
-                ? new SpecializationKey(body.Method, body.Closure.KeyArgs)
-                : SpecializationKey.ForMethod(body.Method);
-            var scope = CallSiteBindingScope.ForMethod(methodKey);
+            var scope = body.BindingScope;
             typePlanner.Plan(body.Method, body.TypeParameterMap);
             var boundBody =
                 methodBodies.Require(body.Method.OriginalDefinition);
@@ -1781,7 +1775,7 @@ public sealed class UasmEmitter
         // static classifies as a foreign static itself (IsForeignStatic has no MethodKind filter — its
         // reach leg seeding BodyByDef is the C2-proven recursion-node arm and stays), but local functions
         // register on demand at their declaration statement (or the [Y9] forward-reference arm), which
-        // overwrote this eager Phase-1 copy in _methodFunctions and left it emitted-but-unreachable (a
+        // overwrote this eager Phase-1 callable and left it emitted-but-unreachable (a
         // dead __N_ duplicate body + heap vars, probe-proven __2_Twice/__3_Twice). Gate the REGISTRATION
         // projection only.
         var foreignStatics = callables.ForeignStatics;
@@ -1899,7 +1893,7 @@ public sealed class UasmEmitter
         var methods = plan.Callables.ProgramMethods;
         foreach (var body in plan.CallableBodies)
             if (!body.Callable.IsDeferredBody)
-                EmitMethod(body.Method, body.Closure);
+                EmitMethod(body);
 
         // A behaviour can receive an exported event before its Start event.  Build one construction
         // barrier and later prepend it to every export; tying these operations to _start leaves a
@@ -1930,7 +1924,7 @@ public sealed class UasmEmitter
 
         foreach (var body in plan.CallableBodies)
             if (body.Callable.IsDeferredBody)
-                EmitMethod(body.Method, body.Closure);
+                EmitMethod(body);
 
         _state.VerifySyntheticEmissionComplete();
 
@@ -1972,44 +1966,19 @@ public sealed class UasmEmitter
 
     // ── EmitMethod ──
 
-    void EmitMethod(IMethodSymbol method, MethodContext.ClosureSpec closureSpec = null)
+    void EmitMethod(MethodContext.RegisteredCallableBody body)
     {
-        var func = closureSpec != null
-            ? _state.Methods.RequireFunction(closureSpec)
-            : _methodFunctions[method];
+        var callable = body.Callable;
+        var method = body.Method;
+        var closureSpec = body.Closure;
+        var func = _state.Methods.RequireFunction(callable);
 
-        // Struct instance methods/ctors carry the receiver object[] as synthetic param0; make `this`
-        // resolve to it for the body. Static (operator) struct methods have no receiver. B44: a hoisted
-        // lambda/local function declared INSIDE a struct method also reports ContainingType == the
-        // struct (Roslyn resolves a closure's ContainingType up to the nearest named type), but it was
-        // registered as a planned closure (envp-based, no receiver param0) — C# itself forbids a
-        // struct closure from referencing `this`'s members (CS1673), so it never needs the receiver;
-        // indexing ParamFieldNames[0] for it read past an empty list.
-        // CA-M1: a v1 class instance member uses the SAME param0 object[] receiver as a user struct member
-        // (reference semantics — no clone; the bundle flows through by reference).
-        var receiverParamId =
-            (_userClassDefaultMethods.Contains(method)
-                || method.ContainingType is INamedTypeSymbol structCt
-                   && IsObjectArrayEmulated(structCt) && !method.IsStatic
-                && method.MethodKind is not (MethodKind.LambdaMethod or MethodKind.LocalFunction))
-                ? func.ParamFieldNames[0] : null;
+        // Receiver ABI, owner specialization and binding identity were frozen with the callable.
+        var receiverParamId = callable.ReceiverFieldId;
 
-        // A "spec" is any constructed (non-definition) method symbol — a generic method instantiation,
-        // a member of a constructed generic struct (feature G, method itself need not be generic), or
-        // both. IsGenericMethod alone under-fires for the containing-type-generic case (Box<T>.Get()
-        // is not itself a generic method), which is exactly the G-M0-4 gap this predicate closes.
-        bool isSpec = !method.IsDefinition;
-
-        var ownerSpecs = closureSpec?.OwnerSpecs
-            ?? (isSpec ? System.Collections.Immutable.ImmutableArray.Create(method)
-                       : System.Collections.Immutable.ImmutableArray<IMethodSymbol>.Empty);
         using var _methodScope = _state.Methods.EnterCallableScope(
-            method, closureSpec, receiverParamId, ownerSpecs);
-        var bindingKey = closureSpec != null
-            ? new SpecializationKey(method, closureSpec.KeyArgs)
-            : SpecializationKey.ForMethod(method);
-        using var _bindingScope = _state.EnterBindingScope(
-            CallSiteBindingScope.ForMethod(bindingKey));
+            method, closureSpec, receiverParamId, body.OwnerSpecs);
+        using var _bindingScope = _state.EnterBindingScope(body.BindingScope);
 
         // FieldChangeCallback: check if this setter has an associated callback field
         string fcbFieldName = null;
@@ -2046,68 +2015,12 @@ public sealed class UasmEmitter
         // Switch to the method's function for body emission
         _builder.SetFunction(func);
 
-        // Set up type param map for generic specializations. Feature G: compose the method's OWN
-        // generic-method type args (if the method itself is generic) with its ContainingType's type
-        // args (if the containing type is generic — a generic-struct member); a method that is itself
-        // generic ON a generic struct (Box<T>.Map<U>()) merges both.
-        // Compose this method's type-param map locally, then open ONE scope for it just before body
-        // emission (below). Nothing between here and the scope reads the ambient map.
-        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeMap = null;
-        if (isSpec)
-            typeMap = TypeEnvironment.ForMethod(method);
-
-        // SS2B ambient owner chain: closure key composition during THIS emission resolves its
-        // lexical owners' args against this chain (ComposeClosureKeyArgs).
-        // Wave-9 round-8 [Y2]: a hoisted closure (lambda / local function) declared inside a GENERIC
-        // method body — its operation tree is the generic DEFINITION's, so T-typed expressions need
-        // the instantiation's type-param map during body emission (registration already substituted
-        // the signature types while the enclosing spec's map was active; without the map here the
-        // body type-checks as 'T' and CFG verification rejects a single legal instantiation). A closure
-        // whose semantics depend on T pins its generic to ONE instantiation (the [X6] r5 reject,
-        // widened in round 8 to type-param-referencing closures), so FirstGenericSpec is the exact
-        // owner. Walk up through enclosing closures to (possibly nested) generic owners.
-        // Round-9 [Y8]: also runs for a generic LOCAL FUNCTION spec (isSpec) nested in a
-        // generic method — the spec map above holds only the LF's OWN type params, so the
-        // enclosing generic's params are MERGED in (never replacing the spec map).
-        if (IsHoistedClosureMethod(method))
-        {
-            List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)> closureBindings = null;
-            // SS2B: a per-spec closure composes from ITS OWN registration-time owner-spec chain — the
-            // the old first-wins fallback was leg-B's silent first-spec-T bake. Owners not in
-            // the record's chain (an outer generic beyond the registration ambient — M2b bound) still
-            // fall through to the legacy walk below, which SKIPS owners the record already covered.
-            var coveredOwners = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
-            if (closureSpec != null)
-                foreach (var ownerSpec in closureSpec.OwnerSpecs)
-                {
-                    coveredOwners.Add(ownerSpec.OriginalDefinition);
-                    closureBindings ??= new();
-                    closureBindings.Add((ownerSpec.OriginalDefinition.TypeParameters, ownerSpec.TypeArguments));
-                    if (ownerSpec.ContainingType.IsGenericType)
-                        closureBindings.Add((ownerSpec.ContainingType.OriginalDefinition.TypeParameters,
-                            ownerSpec.ContainingType.TypeArguments));
-                }
-            for (var s = method.ContainingSymbol; s is IMethodSymbol enclosing; s = enclosing.ContainingSymbol)
-            {
-                if (coveredOwners.Contains(enclosing.OriginalDefinition)) continue;
-                // No IsGenericMethod pre-filter: FirstGenericSpec is keyed by OriginalDefinition
-                // regardless of WHY a method is a spec (generic method, generic-struct member, or
-                // both — feature G), so the dictionary lookup alone is the correct, sufficient gate.
-                if (enclosing.OriginalDefinition.TypeParameters.Length > 0
-                    || enclosing.ContainingType is { IsGenericType: true })
-                    throw new InvalidOperationException(
-                        $"Closure '{method.ToDisplayString()}' was registered without its lexical owner "
-                        + $"specialization '{enclosing.OriginalDefinition.ToDisplayString()}'.");
-            }
-            // Inherit the owner generic's args but let this method's own map keep colliding keys
-            // (newWins:false = add-if-missing, mirroring the former merge).
-            if (closureBindings != null)
-                typeMap = TypeParamScope.Compose(typeMap, newWins: false, closureBindings);
-        }
+        // Registration owns the complete specialization environment. Emission only installs it.
+        var typeMap = body.TypeParameterMap;
 
         // Get method body IOperation
-        var bodySource = isSpec ? method.OriginalDefinition : method;
-        var boundBody = _state.Program.MethodBodies.Require(bodySource);
+        var boundBody = _state.Program.MethodBodies.Require(
+            method.OriginalDefinition);
         {
             var syntax = boundBody.Declaration;
             var bodyOp = boundBody.Root;
@@ -2143,10 +2056,8 @@ public sealed class UasmEmitter
 
             // Consume every captured PARAMETER of this method out of its flat param field into its env
             // cell (the arg arrived positionally in the flat field; all body reads route through env).
-            var entryParamIds =
-                closureSpec?.ParamVarIds.ToArray();
-            if (entryParamIds == null) _methodParamVarIds.TryGetValue(method, out entryParamIds);
-            if (_state.Captures != null && entryParamIds != null)
+            var entryParamIds = callable.ParamVarIds;
+            if (_state.Captures != null)
                 foreach (var p in method.Parameters)
                     if (p.Ordinal < entryParamIds.Length && _state.TryGetEnvBinding(p, out _))
                         EnvEmit.Write(_builder, _state, p,
@@ -2193,10 +2104,8 @@ public sealed class UasmEmitter
                     _operations.VisitOperation(anonBlock);
                 else if (anonFunc.Body != null)
                 {
-                    var lambdaRets =
-                        closureSpec?.ReturnSlots.ToArray();
-                    if (lambdaRets == null) _methodReturns.TryGetValue(method, out lambdaRets);
-                    if (lambdaRets is { Length: 1 })
+                    var lambdaRets = callable.ReturnSlots;
+                    if (lambdaRets.Length == 1)
                     {
                         var resultVal = _operations.VisitExpression(anonFunc.Body);
                         _bridge.Store(lambdaRets[0].Id, resultVal);
@@ -2210,10 +2119,10 @@ public sealed class UasmEmitter
                      && propDecl.ExpressionBody != null)
             {
                 var exprOp = boundBody.ExpressionBody;
-                if (exprOp != null && _methodReturns.TryGetValue(method, out var propRets) && propRets.Length == 1)
+                if (exprOp != null && callable.ReturnSlots.Length == 1)
                 {
                     var resultVal = _operations.VisitExpression(exprOp);
-                    _bridge.Store(propRets[0].Id, resultVal);
+                    _bridge.Store(callable.ReturnSlots[0].Id, resultVal);
                 }
             }
             // Block-bodied property accessor: int X { get { return expr; } }
@@ -2228,14 +2137,20 @@ public sealed class UasmEmitter
                     var backingVar = AutoPropBackingVar(autoProp);
                     var propType = GetStorageTypeName(autoProp.Type);
                     if (method.MethodKind == MethodKind.PropertyGet
-                        && _methodReturns.TryGetValue(method, out var autoRets) && autoRets.Length == 1)
+                        && callable.ReturnSlots.Length == 1)
                     {
-                        _bridge.Store(autoRets[0].Id, _bridge.Load(backingVar, new StorageType(propType)));
+                        _bridge.Store(
+                            callable.ReturnSlots[0].Id,
+                            _bridge.Load(backingVar, new StorageType(propType)));
                     }
                     else if (method.MethodKind == MethodKind.PropertySet
-                        && _methodParamVarIds.TryGetValue(method, out var paramIds) && paramIds.Length > 0)
+                        && callable.ParamVarIds.Length > 0)
                     {
-                        _bridge.Store(backingVar, _bridge.Load(paramIds[0], new StorageType(propType)));
+                        _bridge.Store(
+                            backingVar,
+                            _bridge.Load(
+                                callable.ParamVarIds[0],
+                                new StorageType(propType)));
                     }
                 }
                 else
@@ -2329,27 +2244,6 @@ public sealed class UasmEmitter
                 }
 
                 var valueVal = _operations.VisitExpression(initOp);
-
-                // Type conversion for numeric type mismatch (e.g. int literal 0 → float field)
-                if (initOp.Type != null && fieldType != null
-                    && !SymbolEqualityComparer.Default.Equals(initOp.Type, fieldType)
-                    && ExternResolver.IsNumericType(initOp.Type)
-                    && ExternResolver.IsNumericType(fieldType))
-                {
-                    var methodName = ExternResolver.GetConvertMethodName(fieldType);
-                    if (methodName != null)
-                    {
-                        var srcType = GetStorageTypeName(initOp.Type);
-                        var dstType = GetStorageTypeName(fieldType);
-                        var converted = _bridge.CallExtern(new StorageType(dstType),
-                            UdonAbiKey.Method("SystemConvert", methodName,
-                                new[] { srcType }, dstType),
-                            new CLeaf[] { valueVal });
-                        _bridge.Store(fieldId, converted);
-                        continue;
-                    }
-                }
-
                 _bridge.Store(fieldId, valueVal);
             }
             catch (NotSupportedException ex)

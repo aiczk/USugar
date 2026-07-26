@@ -8,7 +8,7 @@ using Microsoft.CodeAnalysis.Operations;
 internal enum BoundAbiRole
 {
     Invocation,
-    ExpandedParamsInvocation,
+    ParamsInvocation,
     Conversion,
     Operator,
     RemainderDivision,
@@ -129,22 +129,29 @@ internal sealed class BoundAbiPlan
             + "was absent from the bound program.");
     }
 
-    internal bool TryFindOperation(
+    internal BoundExtern RequireParamsInvocation(
         IOperation operation,
         CallSiteBindingScope scope,
-        BoundAbiRole role,
-        out BoundExtern bound)
+        out bool expand)
     {
-        var key = new BoundAbiOperationKey(operation, scope, role);
-        if (_operations.TryGetValue(key, out bound))
-            return true;
-        if (_missingOperations.ContainsKey(key))
+        var selected = RequireOperation(
+            operation, scope, BoundAbiRole.ParamsInvocation);
+        var standardKey = new BoundAbiOperationKey(
+            operation, scope, BoundAbiRole.Invocation);
+        if (_operations.TryGetValue(standardKey, out var standard))
         {
-            bound = null;
-            return false;
+            expand = !string.Equals(
+                selected.Text, standard.Text,
+                StringComparison.Ordinal);
+            return selected;
+        }
+        if (_missingOperations.ContainsKey(standardKey))
+        {
+            expand = true;
+            return selected;
         }
         throw new InvalidOperationException(
-            $"ABI role '{role}' for '{operation?.Syntax}' "
+            $"ABI role '{BoundAbiRole.Invocation}' for '{operation?.Syntax}' "
             + "was absent from the bound program.");
     }
 

@@ -72,9 +72,9 @@ internal sealed class ExternInvocationLowerer
         // Trailing `params` expansion: SOME Udon variadic externs (e.g. SendCustomNetworkEvent) take N discrete
         // SystemObject args — one extern overload per arity — instead of a single SystemObjectArray. Others
         // (e.g. string.Format) only expose the SystemObjectArray overload. So when Roslyn synthesised the
-        // params array from loose call args (ArgumentKind.ParamArray), expand it into boxed elements ONLY IF
-        // the per-arity expanded extern actually exists; otherwise keep the array form. (An explicitly-passed
-        // array is ArgumentKind.Explicit and is always left as the array.)
+        // params array from loose call args (ArgumentKind.ParamArray). ABI planning has already selected
+        // either the exact per-arity extern or the array-form extern; lowering only executes that decision.
+        // An explicitly-passed array is ArgumentKind.Explicit and is always left as the array.
         System.Collections.Generic.IReadOnlyList<IOperation> paramsElems = null;
         BoundExtern expandedParamsExtern = null;
         int lastParamIdx = target.Parameters.Length - 1;
@@ -89,10 +89,9 @@ internal sealed class ExternInvocationLowerer
                 var elems = pac.Initializer != null
                     ? (System.Collections.Generic.IReadOnlyList<IOperation>)pac.Initializer.ElementValues
                     : System.Array.Empty<IOperation>();
-                if (_lowering.TryGetBoundAbi(
-                        op,
-                        BoundAbiRole.ExpandedParamsInvocation,
-                        out var candidate))
+                var candidate = _lowering.RequireParamsInvocation(
+                    op, out var expand);
+                if (expand)
                 {
                     paramsElems = elems;
                     expandedParamsExtern = candidate;
