@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -21,6 +22,7 @@ internal sealed class BoundProgram
     public readonly BoundConstantTable Constants;
     public readonly BoundMethodBodyTable MethodBodies;
     public readonly BoundValueTable Values;
+    public readonly IReadOnlyDictionary<IFieldSymbol, string> SourceStorageNames;
     public readonly BoundSyntheticDispatchTable SyntheticDispatch;
     public readonly BoundAbiPlan Abi;
     public readonly BoundUdonTypeSystem Types;
@@ -48,6 +50,7 @@ internal sealed class BoundProgram
         BoundConstantTable constants,
         BoundMethodBodyTable methodBodies,
         BoundValueTable values,
+        IReadOnlyDictionary<IFieldSymbol, string> sourceStorageNames,
         BoundSyntheticDispatchTable syntheticDispatch,
         BoundAbiPlan abi,
         BoundUdonTypeSystem types,
@@ -75,6 +78,11 @@ internal sealed class BoundProgram
         MethodBodies = methodBodies
             ?? throw new ArgumentNullException(nameof(methodBodies));
         Values = values ?? throw new ArgumentNullException(nameof(values));
+        SourceStorageNames = new ReadOnlyDictionary<IFieldSymbol, string>(
+            new Dictionary<IFieldSymbol, string>(
+                sourceStorageNames
+                ?? throw new ArgumentNullException(nameof(sourceStorageNames)),
+                SymbolEqualityComparer.Default));
         SyntheticDispatch = syntheticDispatch
             ?? throw new ArgumentNullException(nameof(syntheticDispatch));
         Abi = abi ?? throw new ArgumentNullException(nameof(abi));
@@ -90,5 +98,14 @@ internal sealed class BoundProgram
             ?? throw new ArgumentNullException(nameof(aggregates));
         ClassTypes = classTypes
             ?? throw new ArgumentNullException(nameof(classTypes));
+    }
+
+    public string RequireSourceStorageName(IFieldSymbol field)
+    {
+        if (field != null
+            && SourceStorageNames.TryGetValue(field, out var name))
+            return name;
+        throw new InvalidOperationException(
+            $"Source storage name for '{field?.ToDisplayString()}' was not bound.");
     }
 }

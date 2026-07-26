@@ -355,7 +355,7 @@ internal sealed class ProgramLoweringPipeline
             var udonType = GetStorageTypeName(prop.Type);
             var flags = FieldFlags.None;
             if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
-            var storageName = _state.SourceStorageName(prop);
+            var storageName = _environment.SourceStorageName(prop);
             _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                 isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
         }
@@ -443,7 +443,7 @@ internal sealed class ProgramLoweringPipeline
                             constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
                             if (constValue == null)
                                 _fieldDiscovery.InstanceInitializers.Add(new FieldInitializerPlan(
-                                    _state.SourceStorageName(member), initOp, member.Type));
+                                    _environment.SourceStorageName(member), initOp, member.Type));
                         }
                     }
                 }
@@ -457,7 +457,7 @@ internal sealed class ProgramLoweringPipeline
                 // the field compiled clean but shipped unsynced (networking silently dead on device).
                 var baseSyncMode = ReadFieldSyncMode(member, udonType, ref baseFlags);
 
-                var memberStorageName = _state.SourceStorageName(member);
+                var memberStorageName = _environment.SourceStorageName(member);
                 _fieldDiscovery.DeclareField(
                     memberStorageName,
                     new StorageType(udonType),
@@ -517,8 +517,8 @@ internal sealed class ProgramLoweringPipeline
                     // names on collision), so `new`-shadowing it stays legal (wave-7 pinned).
                     if (isAuto)
                         _fieldDiscovery.DeclareGeneratedField(
-                            _state.SourceStorageName(prop), GetStorageType(prop.Type),
-                            ResolveAutoPropInitializer(_state.SourceStorageName(prop), prop));
+                            _environment.SourceStorageName(prop), GetStorageType(prop.Type),
+                            ResolveAutoPropInitializer(_environment.SourceStorageName(prop), prop));
                     continue;
                 }
                 if (!isAuto && prop.DeclaredAccessibility != Accessibility.Public) continue;
@@ -526,7 +526,7 @@ internal sealed class ProgramLoweringPipeline
                 var flags = FieldFlags.None;
                 if (prop.DeclaredAccessibility == Accessibility.Public) flags |= FieldFlags.Export;
                 declaredMemberSyms[prop.Name] = prop;
-                var storageName = _state.SourceStorageName(prop);
+                var storageName = _environment.SourceStorageName(prop);
                 _fieldDiscovery.DeclareField(storageName, new StorageType(udonType), flags,
                     isAuto ? ResolveAutoPropInitializer(storageName, prop) : null);
             }
@@ -906,7 +906,7 @@ internal sealed class ProgramLoweringPipeline
             foreach (var p in t.GetMembers(autoProp.Name).OfType<IPropertySymbol>())
                 if (IsOverrideChainAncestor(p, autoProp))
                     return BaseAutoPropBackingName(autoProp);
-        return _state.SourceStorageName(autoProp);
+        return _environment.SourceStorageName(autoProp);
     }
 
     /// <summary>Round-8 [R2]: auto-property initializers (IPropertyInitializerOperation) were
@@ -1061,6 +1061,7 @@ internal sealed class ProgramLoweringPipeline
             boundSource.Constants,
             methodBodies,
             boundSource.Values,
+            boundSource.SourceStorageNames,
             syntheticDispatch,
             abi,
             types,
@@ -1115,7 +1116,8 @@ internal sealed class ProgramLoweringPipeline
         BoundDeconstructionTable Deconstructions,
         BoundConversionTable Conversions,
         BoundConstantTable Constants,
-        BoundValueTable Values)
+        BoundValueTable Values,
+        IReadOnlyDictionary<IFieldSymbol, string> SourceStorageNames)
         BindSourceSemantics(
             ProgramDiscovery discovery,
             BoundMethodBodyTable methodBodies,
@@ -1145,6 +1147,9 @@ internal sealed class ProgramLoweringPipeline
         var constantFields =
             new HashSet<IFieldSymbol>(
                 SymbolEqualityComparer.Default);
+        var sourceStorageNames =
+            new Dictionary<IFieldSymbol, string>(
+                SymbolEqualityComparer.Default);
         var typePlanner =
             new TypeDemandPlanner(
                 _environment.Types, _compilation, _state.Aggregates);
@@ -1173,7 +1178,26 @@ internal sealed class ProgramLoweringPipeline
                     body?.StableLocalInitializers)));
             abiPlanner.Plan(operation);
             if (operation is IFieldReferenceOperation fieldReference)
+            {
                 constantFields.Add(fieldReference.Field);
+                var storageName = _environment.SourceStorageName(
+                    fieldReference.Field);
+                if (sourceStorageNames.TryGetValue(
+                        fieldReference.Field, out var existingName))
+                {
+                    if (!string.Equals(
+                            storageName, existingName,
+                            StringComparison.Ordinal))
+                        throw new InvalidOperationException(
+                            $"Field '{fieldReference.Field}' was bound "
+                            + "to two source storage names.");
+                }
+                else
+                {
+                    sourceStorageNames.Add(
+                        fieldReference.Field, storageName);
+                }
+            }
             if (operation is IConversionOperation conversion)
             {
                 var conversionKey = new BoundConversionKey(
@@ -1379,7 +1403,8 @@ internal sealed class ProgramLoweringPipeline
             new BoundConversionTable(conversions),
             BoundConstantTable.Materialize(
                 _compilation, constantFields),
-            new BoundValueTable(values, methodPayloads));
+            new BoundValueTable(values, methodPayloads),
+            sourceStorageNames);
     }
 
     void PlanSyntheticDemands(

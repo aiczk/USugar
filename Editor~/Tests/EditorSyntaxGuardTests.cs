@@ -245,6 +245,7 @@ public class EditorSyntaxGuardTests
             "_plannedCapture",
             "_plannedRecursion",
             "TypeEnvironment.CloseType",
+            "Environment.SourceStorageName",
         };
         var failures = forbidden.Where(token =>
             source.Contains(token, StringComparison.Ordinal))

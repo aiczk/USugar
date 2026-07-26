@@ -153,7 +153,8 @@ internal sealed class LoweringState
         return Types.Resolve(type, map);
     }
 
-    public string SourceStorageName(ISymbol member) => Environment.SourceStorageName(member);
+    public string SourceStorageName(IFieldSymbol field)
+        => RequireProgram().RequireSourceStorageName(field);
 
     public bool TryGetEnvBinding(
         ISymbol symbol,
