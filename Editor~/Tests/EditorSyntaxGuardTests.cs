@@ -192,6 +192,7 @@ public class EditorSyntaxGuardTests
             Path.Combine(emitRoot, "ReceiverBridgeEmitter.cs"),
             Path.Combine(emitRoot, "WrapperBridgeEmitter.cs"),
             Path.Combine(emitRoot, "MulticastDelegateEmitter.cs"),
+            Path.Combine(emitRoot, "NullableAbi.cs"),
         };
         var forbidden = new[]
         {
@@ -204,6 +205,9 @@ public class EditorSyntaxGuardTests
             "RecordSourceLowering",
             "VirtualDispatch.FindAccessor(",
             "VirtualDispatch.IsDispatchSite(",
+            "TypeClassifier.",
+            "ResolveBuiltInBinaryExtern(",
+            "ResolveBuiltInUnaryExtern(",
         };
         var failures = roots.SelectMany(path => Directory.Exists(path)
                 ? Directory.GetFiles(
@@ -222,8 +226,47 @@ public class EditorSyntaxGuardTests
 
         Assert.True(failures.Length == 0,
             "Body lowering must consume only frozen BoundProgram semantics; "
-            + "live catalog, type-system, and Roslyn classification "
-            + "authorities are planning-only.\n"
+            + "live catalog, type-system, Roslyn classification, and "
+            + "source-operation ABI resolution are planning-only.\n"
+            + string.Join("\n", failures));
+    }
+
+    [Fact]
+    public void BodyOperatorsConsumeOnlyPlannedAbiBindings()
+    {
+        var packageRoot = FindPackageRoot();
+        var emitRoot = Path.Combine(
+            packageRoot, "Editor", "Compiler", "Emit");
+        var files = new[]
+        {
+            Path.Combine(
+                emitRoot, "Handlers", "OperatorHandler.cs"),
+            Path.Combine(
+                emitRoot, "Handlers",
+                "CompoundAssignmentHandler.cs"),
+            Path.Combine(emitRoot, "NullableAbi.cs"),
+        };
+        var forbidden = new[]
+        {
+            "RequireExact(",
+            "ResolveBuiltInBinaryExtern(",
+            "ResolveBuiltInUnaryExtern(",
+        };
+        var failures = files
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .SelectMany(path => File.ReadLines(path)
+                .Select((line, index) => (line, index))
+                .Where(item => forbidden.Any(token =>
+                    item.line.Contains(
+                        token, StringComparison.Ordinal)))
+                .Select(item =>
+                    $"{Path.GetRelativePath(packageRoot, path)}:"
+                    + $"{item.index + 1}: {item.line.Trim()}"))
+            .ToArray();
+
+        Assert.True(failures.Length == 0,
+            "Source operators must consume BoundProgram.Abi roles; "
+            + "only planning may select their externs.\n"
             + string.Join("\n", failures));
     }
 
