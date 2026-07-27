@@ -154,6 +154,7 @@ public static class UdonAbi
     public static readonly UdonAbiKey Int32Subtract = Int32("op_Subtraction");
     public static readonly UdonAbiKey Int32Multiply = Int32("op_Multiplication");
     public static readonly UdonAbiKey Int32LessThan = Int32Comparison("op_LessThan");
+    public static readonly UdonAbiKey Int32Equality = Int32Comparison("op_Equality");
     public static readonly UdonAbiKey BooleanNot =
         UdonAbiKey.Unary("SystemBoolean", "op_UnaryNegation",
             "SystemBoolean", "SystemBoolean");
@@ -172,6 +173,12 @@ public static class UdonAbi
     public static readonly UdonAbiKey ObjectEquals =
         UdonAbiKey.Binary("SystemObject", "Equals",
             "SystemObject", "SystemObject", "SystemBoolean");
+    public static readonly UdonAbiKey ObjectToString =
+        UdonAbiKey.Method(
+            "SystemObject", "ToString", "SystemString");
+    public static readonly UdonAbiKey ObjectGetHashCode =
+        UdonAbiKey.Method(
+            "SystemObject", "GetHashCode", "SystemInt32");
     public static readonly UdonAbiKey BooleanLogicalAnd =
         BooleanBinary("op_LogicalAnd");
     public static readonly UdonAbiKey BooleanLogicalOr =

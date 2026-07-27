@@ -52,6 +52,7 @@ internal sealed class InvocationHandler
         IInterpolatedStringOperation op => _members.VisitInterpolatedString(op),
         ITypeParameterObjectCreationOperation op => _members.VisitTypeParameterObjectCreation(op),
         IAnonymousObjectCreationOperation op => _members.VisitAnonymousObjectCreation(op),
+        IWithOperation op => _members.VisitWithExpression(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
 
@@ -59,6 +60,35 @@ internal sealed class InvocationHandler
 
     CLeaf VisitInvocation(IInvocationOperation op)
     {
+        if (op.Instance != null
+            && _lowering.IsIteratorProtocol(
+                _lowering.ResolveType(op.Instance.Type)))
+        {
+            var iterator = _lowering.VisitExpression(
+                op.Instance);
+            switch (op.TargetMethod.Name)
+            {
+                case "MoveNext"
+                    when op.Arguments.Length == 0:
+                    return _lowering.EmitIteratorMoveNext(
+                        iterator);
+                case "GetEnumerator"
+                    when op.Arguments.Length == 0:
+                    return _lowering.EmitIteratorGetEnumerator(
+                        iterator);
+                case "Dispose"
+                    when op.Arguments.Length == 0:
+                    _lowering.EmitIteratorDispose(iterator);
+                    return null;
+                case "Reset"
+                    when op.Arguments.Length == 0:
+                    throw new System.NotSupportedException(
+                        "Iterator Reset() is not supported. "
+                        + "Request a fresh enumerator with "
+                        + "GetEnumerator().");
+            }
+        }
+
         // Wave-9 round-5 [X8]: the delegate-Equals arms run BEFORE the erasing-channel argument
         // guard — the operands are consumed HERE by the value comparison, never laundered through
         // Equals' erasing System.Object parameter, but the guard saw that parameter first and
@@ -70,6 +100,78 @@ internal sealed class InvocationHandler
         var boundSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.Method);
         var target = boundSite.Target;
+
+        if (target.IsStatic
+            && target.Name == nameof(object.Equals)
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && op.Arguments.Length == 2
+            && (op.Arguments.Any(argument =>
+                    _lowering.State.Boundary
+                        .ClassifyValue(argument.Value)
+                        .MayContainCompilerBundle)))
+            return _lowering.EmitDynamicObjectEquals(
+                _lowering.VisitExpression(
+                    op.Arguments[0].Value),
+                _lowering.VisitExpression(
+                    op.Arguments[1].Value));
+
+        if (!target.IsStatic
+            && target.Name == nameof(object.GetType)
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && op.Arguments.Length == 0
+            && _lowering.State.Boundary
+                .ClassifyValue(op.Instance)
+                .MayContainCompilerBundle)
+            return _lowering.EmitDynamicObjectGetType(
+                op,
+                _lowering.VisitExpression(op.Instance));
+
+        if (op.Instance != null
+            && _lowering.ResolveType(op.Instance.Type)
+                is INamedTypeSymbol { IsRecord: true }
+                    recordType)
+        {
+            if (target.Name == "Equals"
+                && op.Arguments.Length == 1)
+            {
+                var left =
+                    _lowering.VisitExpression(op.Instance);
+                var right =
+                    _lowering.VisitExpression(
+                        op.Arguments[0].Value);
+                var argumentType = _lowering.ResolveType(
+                    op.Arguments[0].Value.Type);
+                if (argumentType
+                    is INamedTypeSymbol argumentRecord
+                    && argumentRecord.IsRecord)
+                    return _lowering.EmitBundleValueEquality(
+                        left, right, recordType);
+
+                var result = _lowering.Builder
+                    .AllocScratch(StorageTypes.Boolean);
+                var isRecord = _lowering.EmitTypeCheck(
+                    right, recordType);
+                _lowering.Builder.EmitIf(
+                    isRecord,
+                    _ => _lowering.EmitAssign(
+                        result,
+                        _lowering.EmitBundleValueEquality(
+                            left, right, recordType)),
+                    _ => _lowering.EmitAssign(
+                        result,
+                        _lowering.Const(
+                            false,
+                            StorageTypes.Boolean)));
+                return _lowering.SlotRef(result);
+            }
+            if (target.Name == "GetHashCode"
+                && target.Parameters.Length == 0)
+                return _lowering.EmitBundleValueHash(
+                    _lowering.VisitExpression(op.Instance),
+                    recordType);
+        }
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
@@ -164,6 +266,66 @@ internal sealed class InvocationHandler
                 default: // Equals(object)
                     return _lowering.ExternCall(UdonAbi.ObjectEquals,
                         new List<CLeaf> { nulBox, _lowering.VisitExpression(op.Arguments[0].Value) }, StorageTypes.Boolean);
+            }
+        }
+
+        if (op.Instance != null
+            && target.Name == "ToString"
+            && target.Parameters.Length == 0
+            && target.DeclaringSyntaxReferences.Length == 0)
+        {
+            var instanceType =
+                _lowering.ResolveType(op.Instance.Type);
+            if (instanceType != null
+                && _lowering.SourceShape(instanceType)
+                    is var instanceShape
+                && instanceShape.IsBundle
+                && (instanceShape.Bundle
+                        != RuntimeBundleKind.Class
+                    || instanceType
+                        is INamedTypeSymbol
+                            { IsRecord: true }))
+                return _lowering.EmitKnownBundleToString(
+                    _lowering.VisitExpression(op.Instance),
+                    instanceType,
+                    nullIsError: true);
+            if (instanceType?.SpecialType
+                    == SpecialType.System_Object
+                || instanceType is INamedTypeSymbol
+                    { TypeKind: TypeKind.Interface })
+            {
+                // `base.ToString()` in a source class is not a dynamic
+                // object call. Its receiver is typed as System.Object by
+                // Roslyn, but Object.ToString reads the runtime class
+                // identity. Leave this shape to the class dispatch arm
+                // below, which uses the enclosing class as its family.
+                var isSourceClassBaseObject =
+                    op.Instance is IInstanceReferenceOperation
+                    {
+                        Syntax:
+                            Microsoft.CodeAnalysis.CSharp.Syntax
+                                .BaseExpressionSyntax
+                    }
+                    && instanceType.SpecialType
+                        == SpecialType.System_Object
+                    && _lowering.IsUserClass(
+                        _lowering.CurrentMethod?.ContainingType);
+                if (!isSourceClassBaseObject)
+                {
+                    var converted =
+                        _lowering.ConvertConcatOperand(
+                            _lowering.VisitExpression(op.Instance),
+                            op.Instance);
+                    return _lowering.ExternCall(
+                        UdonAbi.StringConcatObjects,
+                        new List<CLeaf>
+                        {
+                            _lowering.Const(
+                                "", StorageTypes.String),
+                            converted
+                        },
+                        StorageTypes.String);
+                }
             }
         }
 
@@ -263,6 +425,15 @@ internal sealed class InvocationHandler
                 var rhs = _lowering.VisitExpression(op.Arguments[0].Value);
                 return ClassAbi.EmitObjectEquals(_lowering.Builder, lhs, rhs);
             }
+            if (target.Name == "GetHashCode"
+                && op.Arguments.Length == 0)
+                return _lowering.ExternCall(
+                    UdonAbi.ObjectGetHashCode,
+                    new List<CLeaf>
+                    {
+                        _lowering.VisitExpression(op.Instance)
+                    },
+                    StorageTypes.Int32);
             throw new System.NotSupportedException(ClassAbi.UnsupportedObjectMethodMessage(clsRecv, target));
         }
 

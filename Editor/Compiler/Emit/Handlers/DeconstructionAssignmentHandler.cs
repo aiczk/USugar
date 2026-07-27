@@ -95,10 +95,19 @@ internal sealed class DeconstructionAssignmentHandler
                 && dlgInvocation.TargetMethod.MethodKind == MethodKind.DelegateInvoke)
             {
                 var dlgResult = _lowering.VisitExpression(op.Value);
+                var resultType =
+                    _lowering.ResolveType(dlgInvocation.Type)
+                    as INamedTypeSymbol;
+                var resultLayout =
+                    _lowering.State.Aggregates
+                        .GetLayout(resultType);
                 var dlgSnaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = AggregateAbi.ReadSlot(_lowering.Builder, dlgResult, i, StorageTypes.Object);
+                    var raw = AggregateAbi.ReadSlot(
+                        _lowering.Builder, dlgResult,
+                        resultLayout.Fields[i].Index,
+                        StorageTypes.Object);
                     dlgSnaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
                         _lowering.ResolveType(targetTuple.Elements[i].Type),
                         _lowering.State.Aggregates.GetLayout,
@@ -114,13 +123,22 @@ internal sealed class DeconstructionAssignmentHandler
             // before any store (value semantics + swap safety), deep-cloning aggregate elements so a later
             // mutation of a target does not alias the source tuple.
             if (callValue is not IInvocationOperation
-                && callValue.Type is INamedTypeSymbol valAggType && _lowering.IsAggregateValue(valAggType))
+                && _lowering.ResolveType(callValue.Type)
+                    is INamedTypeSymbol valAggType
+                && (_lowering.IsAggregateValue(valAggType)
+                    || valAggType.IsRecord))
             {
                 var arrVal = _lowering.LoadInstanceRaw(callValue);
+                var valueLayout =
+                    _lowering.State.Aggregates
+                        .GetLayout(valAggType);
                 var snaps = new List<CLeaf>(targetTuple.Elements.Length);
                 for (int i = 0; i < targetTuple.Elements.Length; i++)
                 {
-                    var raw = AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object);
+                    var raw = AggregateAbi.ReadSlot(
+                        _lowering.Builder, arrVal,
+                        valueLayout.Fields[i].Index,
+                        StorageTypes.Object);
                     snaps.Add(AggregateAbi.CloneIfAggregate(_lowering.Builder, raw,
                         _lowering.ResolveType(targetTuple.Elements[i].Type),
                         _lowering.State.Aggregates.GetLayout,
@@ -214,12 +232,19 @@ internal sealed class DeconstructionAssignmentHandler
                 if (callReturns.Length == 1 && callReturns[0].StorageType.Name == AggregateAbi.ArrayType)
                 {
                     var arrExpr = _lowering.LoadField(callReturns[0].Id, new StorageType(AggregateAbi.ArrayType));
+                    var returnLayout =
+                        _lowering.State.Aggregates.GetLayout(
+                            (INamedTypeSymbol)_lowering.ResolveType(
+                                callTarget.ReturnType));
                     for (int i = 0; i < targetTuple.Elements.Length; i++)
                     {
                         // CW29: same clone rule as the sibling arms — this arm relied on every
                         // return-site materialization being fresh, an invariant enforced nowhere.
                         var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
-                            AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, i, StorageTypes.Object),
+                            AggregateAbi.ReadSlot(
+                                _lowering.Builder, arrExpr,
+                                returnLayout.Fields[i].Index,
+                                StorageTypes.Object),
                             _lowering.ResolveType(targetTuple.Elements[i].Type),
                             _lowering.State.Aggregates.GetLayout,
                             _lowering.IsAggregateValue);
@@ -375,11 +400,18 @@ internal sealed class DeconstructionAssignmentHandler
                 callReturns,
                 new StorageType(AggregateAbi.ArrayType),
                 _lowering.TryMarkReentrantCrossDispatch(invocation, callTarget));
+            var returnLayout =
+                _lowering.State.Aggregates.GetLayout(
+                    (INamedTypeSymbol)_lowering.ResolveType(
+                        callTarget.ReturnType));
             for (int i = 0; i < targetTuple.Elements.Length; i++)
             {
                 // CW29: same clone rule as the sibling arms (see the same-class call arm).
                 var elemVal = AggregateAbi.CloneIfAggregate(_lowering.Builder,
-                    AggregateAbi.ReadSlot(_lowering.Builder, arrVal, i, StorageTypes.Object),
+                    AggregateAbi.ReadSlot(
+                        _lowering.Builder, arrVal,
+                        returnLayout.Fields[i].Index,
+                        StorageTypes.Object),
                     _lowering.ResolveType(targetTuple.Elements[i].Type),
                     _lowering.State.Aggregates.GetLayout,
                     _lowering.IsAggregateValue);

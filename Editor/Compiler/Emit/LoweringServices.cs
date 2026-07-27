@@ -33,6 +33,8 @@ internal sealed class LoweringServices
     }
     internal IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParamMap => _typeParamMap;
     internal Dictionary<ILocalSymbol, LocalBinding> LocalBindings => _localBindings;
+    internal Dictionary<ILocalSymbol, RefLocalBinding>
+        RefLocalBindings => _state.Storage.RefLocalBindings;
     internal Stack<CLeaf> ConditionalAccessStack => _conditionalAccessStack;
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => _usingDisposableStack;
     internal List<EmitDiagnostic> Diagnostics => _diagnostics;
@@ -131,6 +133,11 @@ internal sealed class LoweringServices
 
     internal bool IsAggregateValue(ITypeSymbol type)
         => SourceShape(type).Bundle == RuntimeBundleKind.Aggregate;
+
+    internal bool IsIteratorProtocol(ITypeSymbol type)
+        => type != null
+           && SourceShape(type).Bundle
+           == RuntimeBundleKind.Iterator;
 
     internal bool IsObjectArrayEmulated(ITypeSymbol type)
     {
@@ -265,11 +272,58 @@ internal sealed class LoweringServices
         // of every MINTED class that is-or-derives-from the target (closed-world). A laundered value's
         // slot 0 (delegate KindTag / env Kind / struct first field / tuple / Foo[] element) is never a
         // family typeobj, so this stays sound for the laundered five without a per-node guard (charter #7).
-        if (ResolveType(targetType) is INamedTypeSymbol targetClass && IsUserClass(targetClass))
+        var resolvedTarget = ResolveType(targetType);
+        var targetShape = _state.Types.SourceShape(
+            targetType, _state.TypeParamMap);
+        if (targetShape.IsBundle)
         {
-            ClassAbiPolicy.AssertClosed(targetClass, "runtime type test");
-            var vars = _state.ClassTypes.TypeObjVarsAssignableTo(targetClass).ToList();
-            if (vars.Count == 0) return Const(false, StorageTypes.Boolean); // no minted class satisfies it
+            ClassAbiPolicy.AssertClosed(
+                resolvedTarget, "runtime type test");
+            if (targetShape.Bundle
+                    == RuntimeBundleKind.Delegate
+                && _state.Program.Types
+                    .DelegateRuntimeTestNeedsVariantAdapter(
+                        targetType,
+                        _state.TypeParamMap))
+                throw new NotSupportedException(
+                    $"Runtime type test against delegate "
+                    + $"'{resolvedTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "cannot safely recover a variant delegate from object: "
+                    + "the matching runtime value needs a signature adapter "
+                    + "that an erased cast cannot bind statically.");
+            var acceptedTypeIds = new List<CLeaf>();
+            if (targetShape.Bundle == RuntimeBundleKind.Class
+                && resolvedTarget is INamedTypeSymbol targetClass)
+                acceptedTypeIds.AddRange(
+                    _state.ClassTypes
+                        .TypeObjVarsAssignableTo(targetClass)
+                        .Select(v => (CLeaf)LoadField(
+                            v, StorageTypes.String)));
+            else if (targetShape.Bundle
+                     == RuntimeBundleKind.Iterator)
+            {
+                var target = resolvedTarget
+                    as INamedTypeSymbol;
+                foreach (var iterator
+                         in _state.Program.IteratorPlans)
+                {
+                    if (target?.IsGenericType == true
+                        && !SymbolEqualityComparer.Default.Equals(
+                            target.TypeArguments[0],
+                            ResolveType(
+                                iterator.ElementType)))
+                        continue;
+                    acceptedTypeIds.Add(Const(
+                        iterator.RuntimeTypeId,
+                        StorageTypes.String));
+                }
+            }
+            else
+                acceptedTypeIds.Add(Const(
+                    BundleAbi.RuntimeTypeId(resolvedTarget),
+                    StorageTypes.String));
+            if (acceptedTypeIds.Count == 0)
+                return Const(false, StorageTypes.Boolean);
             // Charter #7 soundness: read bundle[0] ONLY when the value is actually a SystemObjectArray
             // (a class bundle — also structs/tuples/delegates/env/Foo[], whose [0] is never a family
             // typeobj, so the compare is false for them). An `object`-typed value holding a scalar or a
@@ -284,10 +338,11 @@ internal sealed class LoweringServices
             {
                 var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, StorageTypes.String);
                 CLeaf test = null;
-                foreach (var v in vars)
+                foreach (var typeId in acceptedTypeIds)
                 {
                     var eq = ExternCall(UdonAbi.StringEquality,
-                        new List<CLeaf> { typeSlot, LoadField(v, StorageTypes.String) }, StorageTypes.Boolean);
+                        new List<CLeaf> { typeSlot, typeId },
+                        StorageTypes.Boolean);
                     test = test == null ? eq
                         : ExternCall(UdonAbi.BooleanLogicalOr,
                             new List<CLeaf> { test, eq }, StorageTypes.Boolean);
@@ -297,7 +352,7 @@ internal sealed class LoweringServices
             return SlotRef(guarded);
         }
         ClassAbiPolicy.ValidateRuntimeTypeTest(
-            ResolveType(targetType), _state.TypeParamMap,
+            resolvedTarget, _state.TypeParamMap,
             _state.Types);
         // The type token is baked through the shared choke point (B51 silent-class armor: an unresolved
         // type parameter would bake a null System.Type constant no validator catches → loud reject there).
@@ -312,6 +367,472 @@ internal sealed class LoweringServices
     // checks, so an UNRESOLVED type parameter would silently resolve to a null System.Type and NRE at
     // runtime (B51 silent class) — reject loudly instead. The IUdonEventReceiver collapse tag is not
     // VM-resolvable as a token; the concrete UdonBehaviour type is (GetComponent<T>'s prior remap).
+    internal CLeaf EmitIteratorFactory(
+        MethodContext.IteratorPlan plan)
+    {
+        if (plan == null)
+            throw new ArgumentNullException(nameof(plan));
+        var bundleSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(bundleSlot,
+            AggregateAbi.Allocate(
+                _builder, BundleAbi.IteratorSize));
+        var bundle = SlotRef(bundleSlot);
+        AggregateAbi.WriteSlot(_builder, bundle, BundleAbi.Type,
+            Const(plan.RuntimeTypeId, StorageTypes.String));
+        AggregateAbi.WriteSlot(_builder, bundle, BundleAbi.IteratorState,
+            Const(0, StorageTypes.Int32));
+        AggregateAbi.WriteSlot(_builder, bundle, BundleAbi.IteratorCurrent,
+            Const(null, StorageTypes.Object));
+
+        var currentFrame = EmitIteratorInitialFrame(plan);
+        var initialFrame = EmitIteratorInitialFrame(plan);
+        AggregateAbi.WriteSlot(_builder, bundle, BundleAbi.IteratorFrame,
+            currentFrame);
+        AggregateAbi.WriteSlot(_builder, bundle,
+            BundleAbi.IteratorInitialFrame, initialFrame);
+        return bundle;
+    }
+
+    CLeaf EmitIteratorInitialFrame(MethodContext.IteratorPlan plan)
+    {
+        var count = plan.Factory.ParamVarIds.Length
+                    + (plan.Factory.ReceiverFieldId == null ? 0 : 1);
+        var frameSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(frameSlot,
+            AggregateAbi.Allocate(_builder, count));
+        var frame = SlotRef(frameSlot);
+        for (var i = 0; i < plan.Factory.ParamVarIds.Length; i++)
+        {
+            CLeaf value = LoadField(plan.Factory.ParamVarIds[i],
+                plan.Factory.ParamStorageTypes[i]);
+            if (i < plan.Factory.Definition.Parameters.Length)
+                value = CloneIteratorValue(value,
+                    plan.Factory.Definition.Parameters[i].Type);
+            AggregateAbi.WriteSlot(_builder, frame, i, value);
+        }
+        if (plan.Factory.ReceiverFieldId != null)
+            AggregateAbi.WriteSlot(_builder, frame,
+                plan.Factory.ParamVarIds.Length,
+                LoadField(plan.Factory.ReceiverFieldId,
+                    StorageTypes.ObjectArray));
+        return frame;
+    }
+
+    internal void EmitIteratorEntryDispatch(
+        MethodContext.IteratorPlan plan,
+        IReadOnlyDictionary<SyntaxNode, int> states)
+    {
+        var bundle = _state.CurrentIteratorBundle
+            ?? throw new InvalidOperationException(
+                "Iterator entry has no current bundle.");
+        var state = AggregateAbi.ReadSlot(_builder, bundle,
+            BundleAbi.IteratorState, StorageTypes.Int32);
+
+        void EmitState(int value, string label, Action restore)
+        {
+            var matches = ExternCall(UdonAbi.Int32Equality,
+                new List<CLeaf>
+                {
+                    state,
+                    Const(value, StorageTypes.Int32)
+                }, StorageTypes.Boolean);
+            _builder.EmitIf(matches, _ =>
+            {
+                AggregateAbi.WriteSlot(_builder, bundle,
+                    BundleAbi.IteratorState,
+                    Const(-2, StorageTypes.Int32));
+                restore?.Invoke();
+                _builder.EmitGoto(label);
+            });
+        }
+
+        EmitState(0, IteratorStartLabel(plan),
+            () => RestoreIteratorInitialFrame(plan));
+        foreach (var pair in states.OrderBy(pair => pair.Value))
+            EmitState(pair.Value,
+                IteratorResumeLabel(plan, pair.Value), null);
+        _builder.EmitReturn(Const(false, StorageTypes.Boolean));
+        _builder.EmitLabel(IteratorStartLabel(plan));
+    }
+
+    void RestoreIteratorInitialFrame(MethodContext.IteratorPlan plan)
+    {
+        var frame = AggregateAbi.ReadSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorFrame,
+            StorageTypes.ObjectArray);
+        for (var i = 0; i < plan.FrameParamIds.Length; i++)
+            EmitStoreField(plan.FrameParamIds[i],
+                AggregateAbi.ReadSlot(_builder, frame, i,
+                    plan.FrameParamTypes[i]));
+        if (plan.FrameReceiverId != null)
+            EmitStoreField(plan.FrameReceiverId,
+                AggregateAbi.ReadSlot(_builder, frame,
+                    plan.FrameParamIds.Length,
+                    StorageTypes.ObjectArray));
+    }
+
+    internal void EmitIteratorYield(IReturnOperation operation)
+    {
+        if (_state.CurrentIteratorPlan == null
+            || _state.CurrentIteratorStates == null
+            || !_state.CurrentIteratorStates.TryGetValue(
+                operation.Syntax, out var state))
+            throw new InvalidOperationException(
+                $"Yield '{operation.Syntax}' has no iterator state.");
+        if (operation.ReturnedValue == null)
+            throw new InvalidOperationException(
+                "yield return has no value.");
+
+        var value = CloneIteratorValue(
+            VisitExpression(operation.ReturnedValue),
+            operation.ReturnedValue.Type);
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorCurrent,
+            value);
+        CaptureIteratorFrame(out var frame,
+            out var fields, out var slots);
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorFrame,
+            frame);
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorState,
+            Const(state, StorageTypes.Int32));
+        _builder.EmitReturn(Const(true, StorageTypes.Boolean));
+        _builder.EmitLabel(IteratorResumeLabel(
+            _state.CurrentIteratorPlan, state));
+        var resumedFrame = AggregateAbi.ReadSlot(
+            _builder, _state.CurrentIteratorBundle,
+            BundleAbi.IteratorFrame,
+            StorageTypes.ObjectArray);
+        RestoreIteratorFrame(resumedFrame, fields, slots);
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorState,
+            Const(-2, StorageTypes.Int32));
+    }
+
+    internal void EmitIteratorComplete()
+    {
+        if (_state.CurrentIteratorBundle == null)
+            throw new InvalidOperationException(
+                "Iterator completion has no current bundle.");
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorState,
+            Const(-1, StorageTypes.Int32));
+        AggregateAbi.WriteSlot(_builder,
+            _state.CurrentIteratorBundle, BundleAbi.IteratorCurrent,
+            Const(null, StorageTypes.Object));
+        _builder.EmitReturn(Const(false, StorageTypes.Boolean));
+    }
+
+    internal CLeaf EmitIteratorMoveNext(CLeaf bundle)
+    {
+        var reentrant =
+            _state.CurrentIteratorPlan != null;
+        if (reentrant)
+            RegisterIteratorReentrantSpill();
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(result, Const(false, StorageTypes.Boolean));
+        EmitForRecognizedIterator(bundle, "MoveNext", plan =>
+            EmitAssign(
+                result, _builder.InternalCall(
+                    plan.ResumeName,
+                    new List<CLeaf> { bundle },
+                    StorageTypes.Boolean,
+                    reentrant: reentrant)));
+        return SlotRef(result);
+    }
+
+    internal CLeaf EmitIteratorCurrent(
+        CLeaf bundle, ITypeSymbol resultType)
+    {
+        var result = _builder.AllocScratch(
+            GetStorageType(resultType));
+        EmitAssign(result, IteratorDefault(resultType));
+        EmitForRecognizedIterator(bundle, "Current", _ =>
+        {
+            var value = AggregateAbi.ReadSlot(
+                _builder, bundle,
+                BundleAbi.IteratorCurrent,
+                GetStorageType(resultType));
+            EmitAssign(
+                result,
+                CloneIteratorValue(value, resultType));
+        });
+        return SlotRef(result);
+    }
+
+    internal CLeaf EmitIteratorGetEnumerator(CLeaf source)
+    {
+        var result =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(result, Const(null, StorageTypes.ObjectArray));
+        EmitForRecognizedIterator(source, "GetEnumerator",
+            plan => EmitAssign(result,
+                CloneIteratorBundle(source, plan)));
+        return SlotRef(result);
+    }
+
+    internal void EmitIteratorDispose(CLeaf bundle)
+    {
+        EmitForRecognizedIterator(bundle, "Dispose", _ =>
+        {
+            AggregateAbi.WriteSlot(_builder, bundle,
+                BundleAbi.IteratorState,
+                Const(-1, StorageTypes.Int32));
+            AggregateAbi.WriteSlot(_builder, bundle,
+                BundleAbi.IteratorCurrent,
+                Const(null, StorageTypes.Object));
+        });
+    }
+
+    void EmitForRecognizedIterator(
+        CLeaf bundle,
+        string operation,
+        Action<MethodContext.IteratorPlan> emit)
+    {
+        var objectArrayType =
+            _compilation.CreateArrayTypeSymbol(
+                _compilation.GetSpecialType(
+                    SpecialType.System_Object));
+        var isBundle = ExternCall(
+            UdonAbiKey.Method(
+                "SystemType", "IsInstanceOfType",
+                new[] { "SystemObject" },
+                "SystemBoolean"),
+            new List<CLeaf>
+            {
+                ConstTypeToken(objectArrayType),
+                bundle
+            },
+            StorageTypes.Boolean);
+        _builder.EmitIf(isBundle, _ =>
+        {
+            var tag = AggregateAbi.ReadSlot(
+                _builder, bundle,
+                BundleAbi.Type, StorageTypes.String);
+            var matched = _builder.AllocScratch(
+                StorageTypes.Boolean);
+            EmitAssign(
+                matched,
+                Const(false, StorageTypes.Boolean));
+            foreach (var plan
+                     in _state.Program.IteratorPlans)
+            {
+                var matches = ExternCall(
+                    UdonAbi.StringEquality,
+                    new List<CLeaf>
+                    {
+                        tag,
+                        Const(plan.RuntimeTypeId,
+                            StorageTypes.String)
+                    },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(matches, __ =>
+                {
+                    EmitAssign(
+                        matched,
+                        Const(true, StorageTypes.Boolean));
+                    emit(plan);
+                }, null);
+            }
+            var noMatch = ExternCall(
+                UdonAbi.BooleanNot,
+                new List<CLeaf> { SlotRef(matched) },
+                StorageTypes.Boolean);
+            _builder.EmitIf(
+                noMatch,
+                __ => EmitInvalidIterator(operation),
+                null);
+        }, _ => EmitInvalidIterator(operation));
+    }
+
+    void EmitInvalidIterator(string operation)
+        => EmitExternVoid(
+            UdonAbi.DebugLogError,
+            new List<CLeaf>
+            {
+                Const(
+                    $"USugar: {operation} received a null or foreign iterator bundle.",
+                    StorageTypes.String)
+            });
+
+    CLeaf IteratorDefault(ITypeSymbol type)
+    {
+        var resolved = ResolveType(type);
+        var shape = _state.Types.SourceShape(
+            type, _state.TypeParamMap);
+        if (shape.Bundle == RuntimeBundleKind.Aggregate
+            && resolved is INamedTypeSymbol aggregate)
+            return AggregateAbi.MintDefault(
+                _builder,
+                _state.Aggregates.GetLayout(aggregate),
+                _state.Aggregates.GetLayout,
+                GetStorageTypeName);
+        if (!resolved.IsValueType
+            || EmitPolicy.IsNullableT(resolved, out _))
+            return Const(null, GetStorageType(type));
+        return EmitValueTypeDefault(
+            GetStorageTypeName(type));
+    }
+
+    CLeaf CloneIteratorBundle(
+        CLeaf source, MethodContext.IteratorPlan plan)
+    {
+        var destinationSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(destinationSlot,
+            AggregateAbi.Allocate(
+                _builder, BundleAbi.IteratorSize));
+        var destination = SlotRef(destinationSlot);
+        AggregateAbi.WriteSlot(_builder, destination,
+            BundleAbi.Type,
+            Const(plan.RuntimeTypeId, StorageTypes.String));
+        AggregateAbi.WriteSlot(_builder, destination,
+            BundleAbi.IteratorState,
+            Const(0, StorageTypes.Int32));
+        AggregateAbi.WriteSlot(_builder, destination,
+            BundleAbi.IteratorCurrent,
+            Const(null, StorageTypes.Object));
+
+        var sourceInitial = AggregateAbi.ReadSlot(_builder, source,
+            BundleAbi.IteratorInitialFrame,
+            StorageTypes.ObjectArray);
+        var current = CloneIteratorInitialFrame(
+            sourceInitial, plan);
+        var initial = CloneIteratorInitialFrame(
+            sourceInitial, plan);
+        AggregateAbi.WriteSlot(_builder, destination,
+            BundleAbi.IteratorFrame, current);
+        AggregateAbi.WriteSlot(_builder, destination,
+            BundleAbi.IteratorInitialFrame, initial);
+        return destination;
+    }
+
+    CLeaf CloneIteratorInitialFrame(
+        CLeaf source, MethodContext.IteratorPlan plan)
+    {
+        var count = plan.FrameParamIds.Length
+                    + (plan.FrameReceiverId == null ? 0 : 1);
+        var resultSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(resultSlot,
+            AggregateAbi.Allocate(_builder, count));
+        var result = SlotRef(resultSlot);
+        for (var i = 0; i < plan.FrameParamIds.Length; i++)
+        {
+            var value = AggregateAbi.ReadSlot(_builder, source, i,
+                plan.FrameParamTypes[i]);
+            if (i < plan.Factory.Definition.Parameters.Length)
+                value = CloneIteratorValue(value,
+                    plan.Factory.Definition.Parameters[i].Type);
+            AggregateAbi.WriteSlot(_builder, result, i, value);
+        }
+        if (plan.FrameReceiverId != null)
+            AggregateAbi.WriteSlot(_builder, result,
+                plan.FrameParamIds.Length,
+                AggregateAbi.ReadSlot(_builder, source,
+                    plan.FrameParamIds.Length,
+                    StorageTypes.ObjectArray));
+        return result;
+    }
+
+    CLeaf CloneIteratorValue(CLeaf value, ITypeSymbol type)
+        => ResolveType(type) is INamedTypeSymbol aggregate
+           && IsAggregateValue(aggregate)
+            ? AggregateAbi.DeepClone(_builder, value, aggregate,
+                _state.Aggregates.GetLayout)
+            : value;
+
+    void CaptureIteratorFrame(
+        out CLeaf frame,
+        out (string Id, StorageType Type)[] fields,
+        out SlotDecl[] slots)
+    {
+        fields = IteratorFrameFields();
+        var slotCount = _builder.CurrentFunction.Slots.Count;
+        slots = _builder.CurrentFunction.Slots
+            .Take(slotCount).ToArray();
+        var frameSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(frameSlot,
+            AggregateAbi.Allocate(_builder,
+                fields.Length + slots.Length));
+        frame = SlotRef(frameSlot);
+        var index = 0;
+        foreach (var field in fields)
+            AggregateAbi.WriteSlot(_builder, frame, index++,
+                LoadField(field.Id, field.Type));
+        foreach (var slot in slots)
+            AggregateAbi.WriteSlot(_builder, frame, index++,
+                SlotRef(slot.Id));
+    }
+
+    void RestoreIteratorFrame(
+        CLeaf frame,
+        IReadOnlyList<(string Id, StorageType Type)> fields,
+        IReadOnlyList<SlotDecl> slots)
+    {
+        var index = 0;
+        foreach (var field in fields)
+            EmitStoreField(field.Id,
+                AggregateAbi.ReadSlot(_builder, frame, index++,
+                    field.Type));
+        foreach (var slot in slots)
+            EmitAssign(slot.Id,
+                AggregateAbi.ReadSlot(_builder, frame, index++,
+                    slot.Type));
+    }
+
+    (string Id, StorageType Type)[] IteratorFrameFields()
+    {
+        var plan = _state.CurrentIteratorPlan
+            ?? throw new InvalidOperationException(
+                "No iterator frame is active.");
+        var fields = new List<(string, StorageType)>();
+        for (var i = 0; i < plan.FrameParamIds.Length; i++)
+            fields.Add((plan.FrameParamIds[i],
+                plan.FrameParamTypes[i]));
+        if (plan.FrameReceiverId != null)
+            fields.Add((plan.FrameReceiverId,
+                StorageTypes.ObjectArray));
+        foreach (var pair in LocalBindings)
+        {
+            if (pair.Key.ContainingSymbol is not IMethodSymbol owner
+                || !SymbolEqualityComparer.Default.Equals(
+                    owner.OriginalDefinition,
+                    plan.Factory.Definition.OriginalDefinition))
+                continue;
+            var type = _state.Storage.GetFieldType(pair.Value.Id);
+            if (type.HasValue)
+                fields.Add((pair.Value.Id, type.Value));
+        }
+        return fields.Distinct().ToArray();
+    }
+
+    void RegisterIteratorReentrantSpill()
+    {
+        _state.Storage.EnsureRecursionStack();
+        var function = _builder.CurrentFunction;
+        foreach (var field in IteratorFrameFields())
+            if (!function.RecursionSpillFields.Any(
+                    existing =>
+                        existing.Name == field.Id))
+                function.RecursionSpillFields.Add(
+                    (field.Id, field.Type));
+    }
+
+    static string IteratorStartLabel(
+        MethodContext.IteratorPlan plan)
+        => "__iter_start_" + plan.Factory.Slot.Index;
+
+    static string IteratorResumeLabel(
+        MethodContext.IteratorPlan plan, int state)
+        => "__iter_resume_" + plan.Factory.Slot.Index
+           + "_" + state;
+
     internal CLeaf ConstTypeToken(ITypeSymbol typeSymbol)
         => Const(TypeTokenName(typeSymbol), StorageTypes.Type);
 
@@ -711,6 +1232,13 @@ internal sealed class LoweringServices
 
     internal string GetParamVarId(IParameterSymbol param)
     {
+        if (_state.CurrentIteratorPlan is { } iterator
+            && param.ContainingSymbol is IMethodSymbol iteratorMethod
+            && SymbolEqualityComparer.Default.Equals(
+                iteratorMethod.OriginalDefinition,
+                iterator.Factory.Definition.OriginalDefinition)
+            && param.Ordinal < iterator.FrameParamIds.Length)
+            return iterator.FrameParamIds[param.Ordinal];
         // SS2B: a closure's own parameter lives in its per-spec record, not the definition-keyed map.
         if (_state.Methods.CurrentClosureSpec is { } pcs
             && param.ContainingSymbol is IMethodSymbol pcm
@@ -1259,6 +1787,141 @@ internal sealed class LoweringServices
         return write == null ? null : new LValuePlan(write);
     }
 
+    internal RefLocalBinding PrepareRefLocalBinding(
+        IOperation target)
+    {
+        target = UnwrapConversions(target);
+        RefLocalBinding Bind(
+            System.Func<CLeaf> read,
+            System.Action<CLeaf> write)
+            => new RefLocalBinding(
+                _builder, GetStorageType(target.Type),
+                read, write);
+        switch (target)
+        {
+            case ILocalReferenceOperation local
+                when RefLocalBindings.TryGetValue(
+                    local.Local, out var alias):
+                return alias.Clone();
+            case ILocalReferenceOperation local:
+            {
+                if (_state.TryGetEnvBinding(local.Local, out _))
+                    return Bind(
+                        () => EnvEmit.Read(
+                            _builder, _state, local.Local,
+                            GetStorageType(local.Type)),
+                        value => EnvEmit.Write(
+                            _builder, _state, local.Local, value));
+                if (!LocalBindings.TryGetValue(
+                        local.Local, out var binding))
+                    throw new InvalidOperationException(
+                        $"Cannot bind ref local to '{local.Local.Name}'.");
+                var storage = GetStorageType(local.Type);
+                return Bind(
+                    () => LoadField(binding.Id, storage),
+                    value => EmitStoreField(binding.Id, value));
+            }
+            case IParameterReferenceOperation parameter:
+            {
+                if (_state.TryGetEnvBinding(
+                        parameter.Parameter, out _))
+                    return Bind(
+                        () => EnvEmit.Read(
+                            _builder, _state, parameter.Parameter,
+                            GetStorageType(parameter.Type)),
+                        value => EnvEmit.Write(
+                            _builder, _state,
+                            parameter.Parameter, value));
+                var id = GetParamVarId(parameter.Parameter);
+                var storage = GetStorageType(parameter.Type);
+                return Bind(
+                    () => LoadField(id, storage),
+                    value => EmitStoreField(id, value));
+            }
+            case IFieldReferenceOperation field
+                when AggregateAbi.TryGetMemberTarget(
+                    field, out var aggregateInstance,
+                    out var aggregateMember)
+                     && ResolveType(aggregateInstance.Type)
+                         is INamedTypeSymbol aggregateType
+                     && IsObjectArrayEmulated(aggregateType)
+                     && _state.Aggregates.GetLayout(aggregateType)
+                         .TryGetIndex(
+                             aggregateMember, out var memberIndex):
+            {
+                var instance = LoadInstanceRaw(aggregateInstance);
+                return Bind(
+                    () => AggregateAbi.ReadSlot(
+                        _builder, instance, memberIndex,
+                        StorageTypes.Object),
+                    value => AggregateAbi.WriteSlot(
+                        _builder, instance, memberIndex, value));
+            }
+            case IFieldReferenceOperation field
+                when field.Instance is IInstanceReferenceOperation:
+            {
+                var id = _state.SourceStorageName(field.Field);
+                var storage = GetStorageType(field.Type);
+                return Bind(
+                    () => LoadField(id, storage),
+                    value => EmitStoreField(id, value));
+            }
+            case IFieldReferenceOperation field
+                when field.Instance != null
+                     && ExternResolver.IsUdonSharpBehaviour(
+                         field.Field.ContainingType):
+            {
+                var instance = VisitExpression(field.Instance);
+                var storage = GetStorageType(field.Type);
+                return Bind(
+                    () => LoadProgramVariable(
+                        instance, field.Field.Name, storage),
+                    value => StoreProgramVariable(
+                        instance, field.Field.Name,
+                        storage, value));
+            }
+            case IArrayElementReferenceOperation element
+                when element.Indices.Length > 1:
+            {
+                var prepared = Ndim.PrepareNdimRefOutArg(element);
+                return Bind(
+                    prepared.read, prepared.store);
+            }
+            case IArrayElementReferenceOperation element
+                when element.Indices.Length == 1
+                     && element.Indices[0]
+                         is not IRangeOperation:
+            {
+                var array = VisitExpression(
+                    element.ArrayReference);
+                var arrayType =
+                    (IArrayTypeSymbol)element.ArrayReference.Type;
+                var udonArrayType = GetArrayType(arrayType);
+                var index = ResolveArrayIndex(
+                    array, udonArrayType, element.Indices[0]);
+                var elementType = GetArrayElemType(arrayType);
+                return Bind(
+                    () => ExternCall(
+                        UdonAbi.ArrayGet(
+                            udonArrayType, elementType),
+                        new List<CLeaf> { array, index },
+                        GetStorageType(element.Type)),
+                    value => EmitExternVoid(
+                        UdonAbi.ArraySet(
+                            udonArrayType, elementType),
+                        new List<CLeaf>
+                        {
+                            array, index, value
+                        }));
+            }
+            default:
+                throw new NotSupportedException(
+                    $"A ref local cannot bind to "
+                    + $"'{target?.Syntax}': the lvalue has no stable "
+                    + "USugar storage location.");
+        }
+    }
+
     enum FieldSetKind { AggregateSlot, CrossBehaviour, ExternValueType, ExternReferenceType }
 
     readonly struct FieldSetPlan
@@ -1681,7 +2344,6 @@ internal sealed class LoweringServices
         var identity = _state.ResolveClosureIdentity(localFunc);
         var keyArgs = identity.KeyArgs;
         if (_state.Methods.TryGetClosureSpec(localFunc, keyArgs, out _)) return;
-        EmitPolicy.RejectInParameters(localFunc);
         var funcName = string.IsNullOrEmpty(localFunc.Name) ? "lambda" : localFunc.Name;
         var parameters = localFunc.Parameters.Select(parameter => new CallableParameterPlan(
             index => NameAllocator.ParamId(parameter.Name, index), GetStorageType(parameter.Type))).ToArray();
@@ -1822,10 +2484,50 @@ internal sealed class LoweringServices
     internal INamedTypeSymbol PlanClassToStringDemand(ITypeSymbol type)
     {
         var resolved = ResolveType(type) as INamedTypeSymbol;
-        if (resolved == null || !IsUserClass(resolved))
+        if (resolved == null || resolved.IsRecord
+            || !IsUserClass(resolved))
             return null;
         _state.SyntheticDemandPlanner.RegisterClassToString(resolved);
         return resolved;
+    }
+
+    internal void PlanBundleStringDemands(ITypeSymbol type)
+        => PlanBundleStringDemands(
+            ResolveType(type),
+            new HashSet<ITypeSymbol>(
+                SymbolEqualityComparer.Default));
+
+    void PlanBundleStringDemands(
+        ITypeSymbol type,
+        HashSet<ITypeSymbol> visited)
+    {
+        if (type == null || !visited.Add(type)) return;
+        if (type is INamedTypeSymbol enumType
+            && enumType.TypeKind == TypeKind.Enum)
+        {
+            PlanEnumToStringDemand(
+                enumType, rejectFlags: false);
+            return;
+        }
+
+        var shape = SourceShape(type);
+        if (!shape.IsBundle) return;
+        if (shape.Bundle == RuntimeBundleKind.Class
+            && type is INamedTypeSymbol classType
+            && !classType.IsRecord)
+        {
+            PlanClassToStringDemand(classType);
+            return;
+        }
+        if (shape.Bundle != RuntimeBundleKind.Aggregate
+            && type is not INamedTypeSymbol { IsRecord: true })
+            return;
+        if (type is not INamedTypeSymbol aggregate) return;
+
+        foreach (var field in _state.Aggregates
+                     .GetLayout(aggregate).Fields)
+            PlanBundleStringDemands(
+                ResolveType(field.Type), visited);
     }
 
     INamedTypeSymbol ClassifyEnumToStringDemand(
@@ -2002,7 +2704,6 @@ internal sealed class LoweringServices
                     constructed, closureKeyArgs, out _)
                 : _state.Methods.Callables.ContainsKey(constructed))
             return;
-        EmitPolicy.RejectInParameters(constructed);
 
         if (!closureKind)
         {
@@ -2165,9 +2866,7 @@ internal sealed class LoweringServices
     internal void RejectProgramLocalErasure(IConversionOperation conversion,
         ITypeSymbol sourceType, ITypeSymbol destinationType)
         => _state.Boundary.RequireCanEraseProgramLocalPayload(
-            conversion, sourceType, destinationType,
-            RequireBoundConversion(conversion)
-                .AllowsProgramLocalClassErasure);
+            conversion, sourceType, destinationType);
 
     internal MaterializedDelegateBinding ResolveDelegateBridge(IDelegateCreationOperation op)
     {
@@ -2239,6 +2938,13 @@ internal sealed class LoweringServices
                     $"Wrapper binding '{plan.BridgeName}' is incomplete.");
             var innerBundle = DelegateAbi.EmitBundleMint(
                 _builder,
+                Const(
+                    BundleAbi.KindTag(RuntimeBundleKind.Delegate)
+                    + "internal:"
+                    + DelegateAbi.BuildSigPart(
+                        plan.TargetMethod, _state.Types,
+                        _state.TypeParamMap),
+                    StorageTypes.String),
                 () => targetInstance,
                 Const(plan.InnerBridgeName, StorageTypes.String),
                 Const(0u, StorageTypes.UInt32),
@@ -2747,11 +3453,701 @@ internal sealed class LoweringServices
     /// sits beside a class operand (the pre-share class arm returned before the reject ran).</summary>
     internal CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
     {
-        if (ResolveType(unwrapped.Type) is INamedTypeSymbol cls && IsUserClass(cls))
-            return EmitClassToStringDispatch(cls, value, nullIsError: false, useOverrides: true);
-        ClassAbi.RejectImplicitToString(
-            unwrapped.Type, IsAggregateValue(unwrapped.Type));
-        return TryEmitEnumToString(value, unwrapped.Type) ?? value;
+        var type = ResolveType(unwrapped.Type);
+        if (type != null && SourceShape(type).IsBundle)
+            return EmitKnownBundleToString(
+                value, type, nullIsError: false);
+        var enumString =
+            TryEmitEnumToString(value, type);
+        if (enumString != null) return enumString;
+        if (type?.SpecialType == SpecialType.System_Object
+            || type is INamedTypeSymbol
+                { TypeKind: TypeKind.Interface })
+            return EmitDynamicBundleStringOperand(value);
+        return value;
+    }
+
+    internal CLeaf EmitKnownBundleToString(
+        CLeaf value, ITypeSymbol type, bool nullIsError)
+    {
+        type = ResolveType(type);
+        var shape = SourceShape(type);
+        if (!shape.IsBundle)
+            throw new InvalidOperationException(
+                $"'{type}' is not a compiler-owned bundle.");
+
+        if (type is INamedTypeSymbol record
+            && record.IsRecord)
+            return EmitAggregateString(value, record);
+        if (shape.Bundle == RuntimeBundleKind.Class
+            && type is INamedTypeSymbol classType)
+            return EmitClassToStringDispatch(
+                classType, value, nullIsError,
+                useOverrides: true);
+        if (shape.Bundle == RuntimeBundleKind.Aggregate
+            && type is INamedTypeSymbol aggregate)
+            return EmitAggregateString(value, aggregate);
+
+        var result =
+            _builder.AllocScratch(StorageTypes.String);
+        _builder.EmitIf(
+            NullableAbi.IsNull(_builder, value),
+            _ =>
+            {
+                if (nullIsError)
+                    EmitExternVoid(
+                        UdonAbi.DebugLogError,
+                        new List<CLeaf>
+                        {
+                            Const(
+                                $"USugar: ToString() on null "
+                                + "'"
+                                + type.ToDisplayString(
+                                    SymbolDisplayFormat.MinimallyQualifiedFormat)
+                                + "'. "
+                                + "Returning \"\".",
+                                StorageTypes.String)
+                        });
+                EmitAssign(
+                    result,
+                    Const("", StorageTypes.String));
+            },
+            _ => EmitAssign(
+                result,
+                Const(
+                    ClassAbi.RuntimeTypeName(type),
+                    StorageTypes.String)));
+        return SlotRef(result);
+    }
+
+    CLeaf EmitAggregateString(
+        CLeaf value, INamedTypeSymbol type)
+    {
+        var layout = _state.Aggregates.GetLayout(type);
+        if (!type.IsTupleType
+            && !type.IsAnonymousType
+            && !type.IsRecord)
+            return Const(
+                ClassAbi.RuntimeTypeName(type),
+                StorageTypes.String);
+
+        string opening;
+        string closing;
+        if (type.IsTupleType)
+        {
+            opening = "(";
+            closing = ")";
+        }
+        else if (type.IsAnonymousType)
+        {
+            opening = "{ ";
+            closing = " }";
+        }
+        else
+        {
+            opening = type.Name + " { ";
+            closing = " }";
+        }
+
+        CLeaf result = Const(opening, StorageTypes.String);
+        for (var i = 0; i < layout.Fields.Count; i++)
+        {
+            var field = layout.Fields[i];
+            if (i != 0)
+                result = ConcatString(
+                    result,
+                    Const(", ", StorageTypes.String));
+            if (!type.IsTupleType)
+                result = ConcatString(
+                    result,
+                    Const(
+                        field.Name + " = ",
+                        StorageTypes.String));
+            var fieldValue = AggregateAbi.ReadSlot(
+                _builder, value, field.Index,
+                StorageTypes.Object);
+            result = ConcatString(
+                result,
+                EmitFieldString(fieldValue, field.Type));
+        }
+        return ConcatString(
+            result, Const(closing, StorageTypes.String));
+    }
+
+    internal CLeaf EmitBundleValueEquality(
+        CLeaf left, CLeaf right,
+        INamedTypeSymbol type)
+    {
+        var shape = SourceShape(type);
+        var leftSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        var rightSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(leftSlot, left);
+        EmitAssign(rightSlot, right);
+
+        if (shape.Bundle != RuntimeBundleKind.Class)
+            return EmitBundleFieldsEqual(
+                SlotRef(leftSlot), SlotRef(rightSlot), type);
+
+        var referenceEqual = ExternCall(
+            UdonAbi.ObjectEquality,
+            new List<CLeaf>
+            {
+                SlotRef(leftSlot), SlotRef(rightSlot)
+            },
+            StorageTypes.Boolean);
+        var leftPresent = ExternCall(
+            UdonAbi.ObjectInequality,
+            new List<CLeaf>
+            {
+                SlotRef(leftSlot),
+                Const(null, StorageTypes.Object)
+            },
+            StorageTypes.Boolean);
+        var rightPresent = ExternCall(
+            UdonAbi.ObjectInequality,
+            new List<CLeaf>
+            {
+                SlotRef(rightSlot),
+                Const(null, StorageTypes.Object)
+            },
+            StorageTypes.Boolean);
+        var bothPresent = ExternCall(
+            UdonAbi.BooleanLogicalAnd,
+            new List<CLeaf>
+            {
+                leftPresent, rightPresent
+            },
+            StorageTypes.Boolean);
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        _builder.EmitIf(
+            referenceEqual,
+            _ => EmitAssign(
+                result,
+                Const(true, StorageTypes.Boolean)),
+            _ => _builder.EmitIf(
+                bothPresent,
+                __ => EmitAssign(
+                    result,
+                    EmitBundleFieldsEqual(
+                        SlotRef(leftSlot),
+                        SlotRef(rightSlot), type)),
+                __ => EmitAssign(
+                    result,
+                    Const(false, StorageTypes.Boolean))));
+        return SlotRef(result);
+    }
+
+    CLeaf EmitBundleFieldsEqual(
+        CLeaf left, CLeaf right,
+        INamedTypeSymbol type)
+    {
+        var layout = _state.Aggregates.GetLayout(type);
+        CLeaf result = ExternCall(
+            UdonAbi.StringEquality,
+            new List<CLeaf>
+            {
+                AggregateAbi.ReadSlot(
+                    _builder, left, BundleAbi.Type,
+                    StorageTypes.String),
+                AggregateAbi.ReadSlot(
+                    _builder, right, BundleAbi.Type,
+                    StorageTypes.String)
+            },
+            StorageTypes.Boolean);
+        foreach (var field in layout.Fields)
+        {
+            var leftValue = AggregateAbi.ReadSlot(
+                _builder, left, field.Index,
+                StorageTypes.Object);
+            var rightValue = AggregateAbi.ReadSlot(
+                _builder, right, field.Index,
+                StorageTypes.Object);
+            var fieldType = ResolveType(field.Type);
+            var fieldShape = SourceShape(fieldType);
+            CLeaf equal;
+            if (fieldType is INamedTypeSymbol nested
+                && (fieldShape.Bundle
+                        == RuntimeBundleKind.Aggregate
+                    || nested.IsRecord))
+                equal = EmitBundleValueEquality(
+                    leftValue, rightValue, nested);
+            else if (fieldType
+                     is INamedTypeSymbol
+                         { DelegateInvokeMethod: not null })
+                equal = DelegateAbi.CompareDelegates(
+                    _builder, leftValue, rightValue,
+                    isNotEquals: false);
+            else
+                equal = ExternCall(
+                    UdonAbi.ObjectEquals,
+                    new List<CLeaf>
+                    {
+                        leftValue, rightValue
+                    },
+                    StorageTypes.Boolean);
+            result = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf> { result, equal },
+                StorageTypes.Boolean);
+        }
+        return result;
+    }
+
+    internal CLeaf EmitBundleValueHash(
+        CLeaf value, INamedTypeSymbol type)
+    {
+        var layout = _state.Aggregates.GetLayout(type);
+        CLeaf hash = ExternCall(
+            UdonAbi.ObjectGetHashCode,
+            new List<CLeaf>
+            {
+                AggregateAbi.ReadSlot(
+                    _builder, value, BundleAbi.Type,
+                    StorageTypes.String)
+            },
+            StorageTypes.Int32);
+        foreach (var field in layout.Fields)
+        {
+            var fieldValue = AggregateAbi.ReadSlot(
+                _builder, value, field.Index,
+                StorageTypes.Object);
+            CLeaf fieldHash;
+            if (SourceShape(ResolveType(field.Type))
+                    .IsBundle)
+            {
+                // A constant contribution keeps the equality/hash contract
+                // for structural bundle fields without falling back to the
+                // object[] reference hash.
+                fieldHash = Const(0, StorageTypes.Int32);
+            }
+            else
+            {
+                var hashSlot =
+                    _builder.AllocScratch(StorageTypes.Int32);
+                _builder.EmitIf(
+                    NullableAbi.IsNull(
+                        _builder, fieldValue),
+                    _ => EmitAssign(
+                        hashSlot,
+                        Const(0, StorageTypes.Int32)),
+                    _ => EmitAssign(
+                        hashSlot,
+                        ExternCall(
+                            UdonAbi.ObjectGetHashCode,
+                            new List<CLeaf>
+                                { fieldValue },
+                            StorageTypes.Int32)));
+                fieldHash = SlotRef(hashSlot);
+            }
+            hash = ExternCall(
+                UdonAbi.Int32Add,
+                new List<CLeaf>
+                {
+                    ExternCall(
+                        UdonAbi.Int32Multiply,
+                        new List<CLeaf>
+                        {
+                            hash,
+                            Const(
+                                -1521134295,
+                                StorageTypes.Int32)
+                        },
+                        StorageTypes.Int32),
+                    fieldHash
+                },
+                StorageTypes.Int32);
+        }
+        return hash;
+    }
+
+    CLeaf EmitFieldString(CLeaf value, ITypeSymbol type)
+    {
+        type = ResolveType(type);
+        if (type != null && SourceShape(type).IsBundle)
+            return EmitKnownBundleToString(
+                value, type, nullIsError: false);
+        var enumString = TryEmitEnumToString(value, type);
+        if (enumString != null) return enumString;
+        return ExternCall(
+            UdonAbi.StringConcatObjects,
+            new List<CLeaf>
+            {
+                Const("", StorageTypes.String),
+                value
+            },
+            StorageTypes.String);
+    }
+
+    CLeaf ConcatString(CLeaf left, CLeaf right)
+        => ExternCall(
+            UdonAbi.StringConcatObjects,
+            new List<CLeaf> { left, right },
+            StorageTypes.String);
+
+    internal CLeaf EmitDynamicObjectEquals(
+        CLeaf left, CLeaf right)
+    {
+        var leftSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        var rightSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        EmitAssign(leftSlot, left);
+        EmitAssign(rightSlot, right);
+        var leftValue = SlotRef(leftSlot);
+        var rightValue = SlotRef(rightSlot);
+        var leftBundle = EmitIsCompilerBundle(leftValue);
+        var rightBundle = EmitIsCompilerBundle(rightValue);
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(
+            result,
+            Const(false, StorageTypes.Boolean));
+
+        _builder.EmitIf(leftBundle, _ =>
+        {
+            _builder.EmitIf(rightBundle, __ =>
+                EmitKnownBundleEquality(
+                    leftValue, rightValue, result), null);
+        }, _ =>
+        {
+            _builder.EmitIf(rightBundle, null, __ =>
+                EmitAssign(
+                    result,
+                    ExternCall(
+                        UdonAbi.ObjectEquals,
+                        new List<CLeaf>
+                        {
+                            leftValue, rightValue
+                        },
+                        StorageTypes.Boolean)));
+        });
+        return SlotRef(result);
+    }
+
+    internal CLeaf EmitDynamicObjectGetType(
+        IInvocationOperation operation, CLeaf value)
+    {
+        var result = _builder.AllocScratch(
+            GetStorageType(operation.Type));
+        EmitAssign(
+            result,
+            Const(null, GetStorageType(operation.Type)));
+        _builder.EmitIf(
+            EmitIsCompilerBundle(value),
+            _ => EmitExternVoid(
+                UdonAbi.DebugLogError,
+                new List<CLeaf>
+                {
+                    Const(
+                        "USugar: GetType() is unavailable for a compiler bundle.",
+                        StorageTypes.String)
+                }),
+            _ => EmitAssign(
+                result,
+                ExternCall(
+                    RequireBoundAbi(
+                        operation,
+                        BoundAbiRole.Invocation),
+                    new List<CLeaf> { value },
+                    GetStorageType(operation.Type))));
+        return SlotRef(result);
+    }
+
+    CLeaf EmitIsCompilerBundle(CLeaf value)
+    {
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(
+            result,
+            Const(false, StorageTypes.Boolean));
+        var objectArray =
+            _compilation.CreateArrayTypeSymbol(
+                _compilation.GetSpecialType(
+                    SpecialType.System_Object));
+        var stringType =
+            _compilation.GetSpecialType(
+                SpecialType.System_String);
+        var isArray = ExternCall(
+            UdonAbiKey.Method(
+                "SystemType", "IsInstanceOfType",
+                new[] { "SystemObject" },
+                "SystemBoolean"),
+            new List<CLeaf>
+            {
+                ConstTypeToken(objectArray), value
+            },
+            StorageTypes.Boolean);
+        _builder.EmitIf(isArray, _ =>
+        {
+            var length = ExternCall(
+                UdonAbi.ArrayLength(
+                    AggregateAbi.ArrayType),
+                new List<CLeaf> { value },
+                StorageTypes.Int32);
+            var hasHeader = ExternCall(
+                UdonAbi.Int32LessThan,
+                new List<CLeaf>
+                {
+                    Const(0, StorageTypes.Int32),
+                    length
+                },
+                StorageTypes.Boolean);
+            _builder.EmitIf(hasHeader, __ =>
+            {
+                var header = AggregateAbi.ReadSlot(
+                    _builder, value, BundleAbi.Type,
+                    StorageTypes.Object);
+                var isString = ExternCall(
+                    UdonAbiKey.Method(
+                        "SystemType",
+                        "IsInstanceOfType",
+                        new[] { "SystemObject" },
+                        "SystemBoolean"),
+                    new List<CLeaf>
+                    {
+                        ConstTypeToken(stringType),
+                        header
+                    },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(isString, ___ =>
+                {
+                    var typeId = AggregateAbi.ReadSlot(
+                        _builder, value,
+                        BundleAbi.Type,
+                        StorageTypes.String);
+                    EmitAssign(
+                        result,
+                        ExternCall(
+                            UdonAbiKey.Method(
+                                "SystemString",
+                                "StartsWith",
+                                new[] { "SystemString" },
+                                "SystemBoolean"),
+                            new List<CLeaf>
+                            {
+                                typeId,
+                                Const(
+                                    BundleAbi.Prefix,
+                                    StorageTypes.String)
+                            },
+                            StorageTypes.Boolean));
+                }, null);
+            }, null);
+        }, null);
+        return SlotRef(result);
+    }
+
+    void EmitKnownBundleEquality(
+        CLeaf left,
+        CLeaf right,
+        int destination)
+    {
+        var leftType = AggregateAbi.ReadSlot(
+            _builder, left, BundleAbi.Type,
+            StorageTypes.String);
+        var rightType = AggregateAbi.ReadSlot(
+            _builder, right, BundleAbi.Type,
+            StorageTypes.String);
+        var recognizedLeft =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        var recognizedRight =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(
+            recognizedLeft,
+            Const(false, StorageTypes.Boolean));
+        EmitAssign(
+            recognizedRight,
+            Const(false, StorageTypes.Boolean));
+        var seen = new HashSet<string>(
+            StringComparer.Ordinal);
+
+        void EmitCandidate(
+            string runtimeTypeId,
+            Func<CLeaf> equality)
+        {
+            if (!seen.Add(runtimeTypeId))
+                return;
+            var leftMatches = ExternCall(
+                UdonAbi.StringEquality,
+                new List<CLeaf>
+                {
+                    leftType,
+                    Const(runtimeTypeId,
+                        StorageTypes.String)
+                },
+                StorageTypes.Boolean);
+            var rightMatches = ExternCall(
+                UdonAbi.StringEquality,
+                new List<CLeaf>
+                {
+                    rightType,
+                    Const(runtimeTypeId,
+                        StorageTypes.String)
+                },
+                StorageTypes.Boolean);
+            _builder.EmitIf(leftMatches, _ =>
+                EmitAssign(
+                    recognizedLeft,
+                    Const(true, StorageTypes.Boolean)), null);
+            _builder.EmitIf(rightMatches, _ =>
+                EmitAssign(
+                    recognizedRight,
+                    Const(true, StorageTypes.Boolean)), null);
+            var both = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf>
+                    { leftMatches, rightMatches },
+                StorageTypes.Boolean);
+            _builder.EmitIf(both, _ =>
+                EmitAssign(destination, equality()), null);
+        }
+
+        foreach (var candidate
+                 in _state.Program.Types.KnownBundleTypes)
+        {
+            var resolved = ResolveType(candidate);
+            if (resolved == null) continue;
+            var shape = SourceShape(resolved);
+            var runtimeTypeId =
+                BundleAbi.RuntimeTypeId(resolved);
+            if (shape.Bundle
+                    == RuntimeBundleKind.Delegate
+                && resolved is INamedTypeSymbol)
+                EmitCandidate(
+                    runtimeTypeId,
+                    () => DelegateAbi.CompareDelegates(
+                        _builder, left, right,
+                        isNotEquals: false));
+            else if (resolved
+                         is INamedTypeSymbol aggregate
+                     && (shape.Bundle
+                             == RuntimeBundleKind.Aggregate
+                         || aggregate.IsRecord))
+                EmitCandidate(
+                    runtimeTypeId,
+                    () => EmitBundleValueEquality(
+                        left, right, aggregate));
+            else
+                EmitCandidate(
+                    runtimeTypeId,
+                    () => ExternCall(
+                        UdonAbi.ObjectEquality,
+                        new List<CLeaf> { left, right },
+                        StorageTypes.Boolean));
+        }
+        foreach (var iterator
+                 in _state.Program.IteratorPlans)
+            EmitCandidate(
+                iterator.RuntimeTypeId,
+                () => ExternCall(
+                    UdonAbi.ObjectEquality,
+                    new List<CLeaf> { left, right },
+                    StorageTypes.Boolean));
+
+        var bothRecognized = ExternCall(
+            UdonAbi.BooleanLogicalAnd,
+            new List<CLeaf>
+            {
+                SlotRef(recognizedLeft),
+                SlotRef(recognizedRight)
+            },
+            StorageTypes.Boolean);
+        var unknown = ExternCall(
+            UdonAbi.BooleanNot,
+            new List<CLeaf> { bothRecognized },
+            StorageTypes.Boolean);
+        _builder.EmitIf(unknown, _ =>
+            EmitExternVoid(
+                UdonAbi.DebugLogError,
+                new List<CLeaf>
+                {
+                    Const(
+                        "USugar: object.Equals received a foreign compiler bundle.",
+                        StorageTypes.String)
+                }), null);
+    }
+
+    CLeaf EmitDynamicBundleStringOperand(CLeaf value)
+    {
+        var result = _builder.AllocScratch(StorageTypes.Object);
+        EmitAssign(result, value);
+        var objectArray = _compilation.CreateArrayTypeSymbol(
+            _compilation.GetSpecialType(
+                SpecialType.System_Object));
+        var isBundle = ExternCall(
+            UdonAbiKey.Method(
+                "SystemType", "IsInstanceOfType",
+                new[] { "SystemObject" },
+                "SystemBoolean"),
+            new List<CLeaf>
+            {
+                ConstTypeToken(objectArray), value
+            },
+            StorageTypes.Boolean);
+        _builder.EmitIf(isBundle, _ =>
+        {
+            var typeId = AggregateAbi.ReadSlot(
+                _builder, value, BundleAbi.Type,
+                StorageTypes.String);
+            var seen = new HashSet<string>(
+                StringComparer.Ordinal);
+            foreach (var candidate
+                     in _state.Program.Types
+                         .KnownBundleTypes)
+            {
+                var resolved = ResolveType(candidate);
+                if (resolved == null) continue;
+                var id = BundleAbi.RuntimeTypeId(resolved);
+                if (!seen.Add(id)) continue;
+                var matches = ExternCall(
+                    UdonAbi.StringEquality,
+                    new List<CLeaf>
+                    {
+                        typeId,
+                        Const(id, StorageTypes.String)
+                    },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(matches, __ =>
+                {
+                    EmitAssign(
+                        result,
+                        EmitKnownBundleToString(
+                            value, resolved,
+                            nullIsError: false));
+                }, null);
+            }
+            foreach (var iterator
+                     in _state.Program.IteratorPlans)
+            {
+                if (!seen.Add(
+                        iterator.RuntimeTypeId))
+                    continue;
+                var matches = ExternCall(
+                    UdonAbi.StringEquality,
+                    new List<CLeaf>
+                    {
+                        typeId,
+                        Const(
+                            iterator.RuntimeTypeId,
+                            StorageTypes.String)
+                    },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(matches, __ =>
+                {
+                    EmitAssign(
+                        result,
+                        Const(
+                            ClassAbi.RuntimeTypeName(
+                                iterator.Factory.Definition
+                                    .ReturnType),
+                            StorageTypes.String));
+                }, null);
+            }
+        }, null);
+        return SlotRef(result);
     }
 
     /// <summary>M4b: stringify a v1-class receiver through the object.ToString dispatch slot — the third

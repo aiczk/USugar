@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
@@ -10,6 +11,14 @@ internal sealed class AggregateLayoutTable
 {
     readonly Dictionary<ITypeSymbol, AggregateLayout> _layoutCache = new(SymbolEqualityComparer.Default);
     bool _published;
+
+    public IReadOnlyList<KeyValuePair<ITypeSymbol, AggregateLayout>>
+        Layouts
+        => _layoutCache
+            .OrderBy(
+                pair => ClassTypeObjectContext.SpecKey(pair.Key),
+                StringComparer.Ordinal)
+            .ToArray();
 
     public AggregateLayout GetLayout(INamedTypeSymbol type)
     {

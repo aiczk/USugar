@@ -54,7 +54,6 @@ public sealed class DelegateBridgeEmitter
             var method = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;
             var target = RequireTarget(method, bridgeName);
-            DelegateAbi.ValidateNoRefOutParams(method);
             EmitBody(bridgeName, demand.SignatureMethod, demand.TypeParameterMap, target, method);
         }
     }
@@ -66,7 +65,6 @@ public sealed class DelegateBridgeEmitter
             var targetMethod = demand.Binding.TargetMethod;
             var adapterName = demand.Binding.BridgeName;
             var target = RequireTarget(targetMethod, adapterName);
-            DelegateAbi.ValidateNoRefOutParams(targetMethod);
             EmitBody(adapterName, demand.SignatureMethod, demand.TypeParameterMap, target, targetMethod);
         }
     }
@@ -118,6 +116,9 @@ public sealed class DelegateBridgeEmitter
             void EmitCall()
             {
                 var result = _bridge.Dispatch(plan, arguments);
+                _bridge.CopyRefParameters(
+                    _context, signatureMethod, target,
+                    typeParameterMap);
                 _bridge.StoreReturn(plan, result);
             }
 

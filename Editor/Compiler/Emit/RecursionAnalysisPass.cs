@@ -380,7 +380,7 @@ internal sealed class RecursionAnalysisPass
     // anywhere in the body tree, nested closures included) is a delegate CREATION has a provably
     // exact callee set: locals are not foreign-writable through the sanctioned surface
     // (SetProgramVariable targets symbols by name only via the documented accepted-risk raw boundary,
-    // ref locals and delegate-typed ref/out params are rejected), so the bundle can only be one the
+    // ref-local selectors are program-local), so the bundle can only be one the
     // scanned creations minted. The §5.4 same-signature widening — sound and required for
     // foreign-writable storage (fields, params, elements, foreign receivers) — over-approximated
     // these sites too: every same-sig bridge-bearing method joined the callee set, so a per-frame

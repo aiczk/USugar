@@ -69,12 +69,17 @@ public sealed class MulticastDelegateEmitter
     /// <summary>Mint a fresh multicast bundle (§1.1/§1.4): a tagged delegate ABI bundle with
     /// Target=this, Method=this sig's fan-out export name, Addr=that bridge's funcaddr
     /// (back-patched CFuncRef, §1.3 addr discipline), Env=the given invocation list.</summary>
-    CLeaf EmitMulticastMintBundle(string sigPart, CLeaf listLeaf)
+    CLeaf EmitMulticastMintBundle(
+        string sigPart, CLeaf listLeaf, CLeaf sourceBundle)
     {
         var fanoutName = DelegateAbi.MulticastFanoutName(sigPart);
         var mSlot = _ctx.Builder.AllocScratch(StorageTypes.ObjectArray);
         var thisType = _ctx.Types.GetUdonTypeName(_classSymbol);
-        return DelegateAbi.EmitBundleMintToSlot(_builder, mSlot,
+        var runtimeTypeId = DelegateAbi.ReadSlot(
+            _builder, sourceBundle, DelegateAbi.Type,
+            StorageTypes.String.Name);
+        return DelegateAbi.EmitBundleMintToSlot(
+            _builder, mSlot, runtimeTypeId,
             () => _bridge.Load(_ctx.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
             _builder.Const(fanoutName, StorageTypes.String),
             _builder.FuncRef(fanoutName),
@@ -179,7 +184,8 @@ public sealed class MulticastDelegateEmitter
         EmitMulticastArrayBlit(lxSlot, _bridge.ConstInt(0), catSlot, _bridge.ConstInt(0), lenLxSlot);
         EmitMulticastArrayBlit(lySlot, _bridge.ConstInt(0), catSlot, _builder.SlotRef(lenLxSlot), lenLySlot);
 
-        _builder.EmitReturn(EmitMulticastMintBundle(sigPart, _builder.SlotRef(catSlot)));
+        _builder.EmitReturn(EmitMulticastMintBundle(
+            sigPart, _builder.SlotRef(catSlot), xLeaf));
 
         if (prevFunc != null) _builder.SetFunction(prevFunc);
     }
@@ -315,7 +321,8 @@ public sealed class MulticastDelegateEmitter
         _builder.EmitIf(rLenIsOne, _ => _builder.EmitReturn( // single collapse → bare bundle, not re-wrapped
             _bridge.CallExtern(StorageTypes.ObjectArray, MulticastArrGet, new CLeaf[] { _builder.SlotRef(rSlot), _bridge.ConstInt(0) })));
 
-        _builder.EmitReturn(EmitMulticastMintBundle(sigPart, _builder.SlotRef(rSlot)));
+        _builder.EmitReturn(EmitMulticastMintBundle(
+            sigPart, _builder.SlotRef(rSlot), xLeaf));
 
         if (prevFunc != null) _builder.SetFunction(prevFunc);
     }
@@ -415,7 +422,13 @@ public sealed class MulticastDelegateEmitter
                             new CLeaf[] { _builder.SlotRef(listSlot), _builder.SlotRef(iSlot) }));
 
                         var argLeaves = new CLeaf[argSlots.Length];
-                        for (int k = 0; k < argSlots.Length; k++) argLeaves[k] = _builder.SlotRef(argSlots[k]);
+                        for (int k = 0; k < argSlots.Length; k++)
+                            argLeaves[k] = invoke.Parameters[k].RefKind
+                                is RefKind.Ref or RefKind.Out
+                                ? _bridge.Load(
+                                    DelegateAbi.ConvArgName(sigPart, k),
+                                    argTypes[k])
+                                : _builder.SlotRef(argSlots[k]);
 
                         var elemRet = dispatch.EmitFanoutElementDispatch(_builder.SlotRef(elemSlot), invoke, typeParamMap, argLeaves);
                         if (retSlot >= 0 && elemRet != null)

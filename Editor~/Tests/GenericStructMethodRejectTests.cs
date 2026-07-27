@@ -319,11 +319,11 @@ public class GR1NonCapturing : UdonSharpBehaviour {
     // regression guard only. ──
 
     [Fact]
-    public void GenericStructIsType_ThrowsNotSupported()
+    public void GenericStructIsType_UsesClosedBundleIdentity()
     {
         // WaveJoint R2 [D10]: boxing the struct itself now rejects at the erasure choke, so the box
         // here is an int — the pin isolates the runtime-type-test choke on the generic-struct TARGET.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct Box<T> { public T value; }
 public class GR2User : UdonSharpBehaviour {
@@ -332,8 +332,10 @@ public class GR2User : UdonSharpBehaviour {
         object box = seed;
         bool b = box is Box<int>;
     }
-}", "GR2User"));
-        Assert.Contains("Runtime type test", ex.Message);
+}", "GR2User");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     // ── G-R3: a generic struct in a static-readonly field / field initializer (the B41-fixed S1 path)

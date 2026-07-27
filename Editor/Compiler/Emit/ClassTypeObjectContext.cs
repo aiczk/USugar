@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using Microsoft.CodeAnalysis;
 
@@ -91,6 +92,16 @@ public sealed class ClassTypeObjectContext
         return b.ToString();
     }
 
+    /// <summary>Reflection-side spelling of <see cref="SpecKey(ITypeSymbol)"/> used by the Unity
+    /// serializer. It deliberately mirrors Roslyn documentation IDs instead of using
+    /// AssemblyQualifiedName, so recompiling an asmdef does not invalidate serialized bundles.</summary>
+    public static string SpecKey(Type type)
+    {
+        var b = new StringBuilder();
+        AppendTypeKey(b, type);
+        return b.ToString();
+    }
+
     public static string RuntimeTypeId(INamedTypeSymbol type) => "usugar-class:" + SpecKey(type);
 
     static string LegacyName(INamedTypeSymbol type)
@@ -132,6 +143,86 @@ public sealed class ClassTypeObjectContext
                 return;
         }
     }
+
+    static void AppendTypeKey(StringBuilder b, Type type)
+    {
+        if (type.IsArray)
+        {
+            b.Append('A').Append(type.GetArrayRank()).Append('_');
+            AppendTypeKey(b, type.GetElementType());
+            return;
+        }
+        if (type.IsGenericParameter)
+        {
+            b.Append('P');
+            AppendSegment(b, ReflectionOwnerId(type.DeclaringMethod)
+                             ?? ReflectionOwnerId(type.DeclaringType)
+                             ?? "");
+            AppendSegment(b, type.Name);
+            return;
+        }
+
+        var definition = type.IsGenericType
+            ? type.GetGenericTypeDefinition()
+            : type;
+        if (definition.DeclaringType != null)
+        {
+            b.Append('O');
+            AppendTypeKey(b, ClosedDeclaringType(type));
+        }
+        b.Append('N');
+        AppendSegment(b, "T:" + ReflectionDeclarationName(definition));
+        var ownArguments = OwnGenericArguments(type);
+        b.Append(ownArguments.Length).Append('_');
+        foreach (var argument in ownArguments)
+            AppendTypeKey(b, argument);
+    }
+
+    static Type ClosedDeclaringType(Type type)
+    {
+        var declaring = type.DeclaringType;
+        if (declaring == null || !declaring.IsGenericTypeDefinition)
+            return declaring;
+        var parentArity = declaring.GetGenericArguments().Length;
+        var arguments = type.GetGenericArguments();
+        if (parentArity == 0 || arguments.Length < parentArity)
+            return declaring;
+        return declaring.MakeGenericType(
+            arguments.Take(parentArity).ToArray());
+    }
+
+    static Type[] OwnGenericArguments(Type type)
+    {
+        if (!type.IsGenericType) return Array.Empty<Type>();
+        var all = type.GetGenericArguments();
+        var inherited = type.DeclaringType?.GetGenericArguments().Length ?? 0;
+        return inherited == 0
+            ? all
+            : all.Skip(Math.Min(inherited, all.Length)).ToArray();
+    }
+
+    static string ReflectionDeclarationName(Type type)
+    {
+        var segments = new Stack<string>();
+        for (var current = type; current != null;
+             current = current.DeclaringType)
+            segments.Push(current.Name);
+        var prefix = string.IsNullOrEmpty(type.Namespace)
+            ? ""
+            : type.Namespace + ".";
+        return prefix + string.Join(".", segments);
+    }
+
+    static string ReflectionOwnerId(MemberInfo member)
+        => member switch
+        {
+            Type t => "T:" + ReflectionDeclarationName(
+                t.IsGenericType ? t.GetGenericTypeDefinition() : t),
+            MethodBase m => "M:"
+                + ReflectionDeclarationName(m.DeclaringType)
+                + "." + m.Name,
+            _ => null,
+        };
 
     static void AppendSegment(StringBuilder b, string value)
     {

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 internal sealed class CallableParameterPlan
 {
@@ -123,20 +125,47 @@ internal sealed class CallableRegistrar
             returns[i] = new ReturnSlot(slotId, result.Type);
         }
 
+        MethodContext.RegisteredCallable callable;
         if (plan.IsClosure)
-            return _context.Methods.AddClosureCallable(
+            callable = _context.Methods.AddClosureCallable(
                 plan.Method, plan.ClosureKeyArgs,
                 plan.ClosureOwnerSpecs,
                 plan.ClosureContainingTypeSpec,
                 slot, name,
                 parameterIds, parameterTypes, returns,
                 environmentId, deferredBody);
-        return _context.Methods.AddCallable(
-            plan.Method, slot, name, plan.ExportName,
-            receiverId, parameterIds, parameterTypes,
-            returns, plan.Receiver, plan.Layout,
-            deferredBody);
+        else
+            callable = _context.Methods.AddCallable(
+                plan.Method, slot, name, plan.ExportName,
+                receiverId, parameterIds, parameterTypes,
+                returns, plan.Receiver, plan.Layout,
+                deferredBody);
+
+        if (ContainsYield(plan.Method))
+            _context.Methods.AddIteratorPlan(
+                callable,
+                $"__iter_{index}_{Sanitize(plan.Method.Name)}",
+                $"__iter_bundle_{index}",
+                $"__iter_result_{index}");
+        return callable;
     }
+
+    static bool ContainsYield(IMethodSymbol method)
+        => method.DeclaringSyntaxReferences
+            .Select(reference => reference.GetSyntax())
+            .Any(declaration => declaration.DescendantNodes()
+                .OfType<YieldStatementSyntax>()
+                .Any(yieldStatement => ReferenceEquals(
+                    yieldStatement.Ancestors().FirstOrDefault(
+                        node => node
+                            is MethodDeclarationSyntax
+                            or LocalFunctionStatementSyntax
+                            or AccessorDeclarationSyntax
+                            or AnonymousFunctionExpressionSyntax),
+                    declaration)));
+
+    static string Sanitize(string value)
+        => NameAllocator.Sanitize(value);
 
     public void Materialize(BoundProgram program)
     {
@@ -184,6 +213,35 @@ internal sealed class CallableRegistrar
                         : function.ReturnType;
             _context.Methods.AddMaterializedFunction(
                 callable, function);
+        }
+
+        foreach (var iterator in program.IteratorPlans)
+        {
+            var function = _context.Module.AddFunction(
+                iterator.ResumeName);
+            _context.Storage.DeclareVar(
+                iterator.BundleParamId,
+                StorageTypes.ObjectArray);
+            function.ParamFieldNames.Add(
+                iterator.BundleParamId);
+            _context.Storage.DeclareVar(
+                iterator.ReturnId,
+                StorageTypes.Boolean);
+            function.ReturnSlots.Add(
+                new ReturnSlot(
+                    iterator.ReturnId,
+                    StorageTypes.Boolean));
+            function.ReturnType = StorageTypes.Boolean;
+            for (var i = 0;
+                 i < iterator.FrameParamIds.Length;
+                 i++)
+                _context.Storage.DeclareVar(
+                    iterator.FrameParamIds[i],
+                    iterator.FrameParamTypes[i]);
+            if (iterator.FrameReceiverId != null)
+                _context.Storage.DeclareVar(
+                    iterator.FrameReceiverId,
+                    StorageTypes.ObjectArray);
         }
     }
 }

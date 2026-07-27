@@ -153,6 +153,8 @@ public static class ExternResolver
             // element recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
             if (elementType is INamedTypeSymbol elemDlg && elemDlg.DelegateInvokeMethod != null)
                 return "SystemObjectArray";
+            if (TypeClassifier.IsIteratorProtocol(elementType))
+                return "SystemObjectArray";
             // struct[] / tuple[] / class[] → object[] of boxed object[] elements (no SystemObjectArrayArray).
             if (TypeClassifier.IsObjectArrayEmulated(elementType))
                 return "SystemObjectArray";
@@ -167,6 +169,9 @@ public static class ExternResolver
         // {kind, target, method, addr, env} object[] bundle. Must precede the constructed-generic
         // branch below, which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32.
         if (type is INamedTypeSymbol dlgWithMap && dlgWithMap.DelegateInvokeMethod != null)
+            return "SystemObjectArray";
+
+        if (TypeClassifier.IsIteratorProtocol(type))
             return "SystemObjectArray";
 
         // A constructed generic UdonSharpBehaviour is still represented by its scene
@@ -232,6 +237,9 @@ public static class ExternResolver
             // recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
             if (arrayType.ElementType is INamedTypeSymbol arrElemDlg && arrElemDlg.DelegateInvokeMethod != null)
                 return "SystemObjectArray";
+            if (TypeClassifier.IsIteratorProtocol(
+                    arrayType.ElementType))
+                return "SystemObjectArray";
             // struct[] / tuple[] / class[] → object[] whose elements are the boxed per-element object[]. Udon
             // has no SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be
             // used; a plain object[] holds the object[] elements as boxed objects.
@@ -250,6 +258,9 @@ public static class ExternResolver
         // {kind, target, method, addr, env} object[] bundle. Must precede the generic branch,
         // which would otherwise fabricate fake names like SystemFuncSystemInt32SystemInt32 / SystemAction.
         if (type is INamedTypeSymbol dlgNamed && dlgNamed.DelegateInvokeMethod != null)
+            return "SystemObjectArray";
+
+        if (TypeClassifier.IsIteratorProtocol(type))
             return "SystemObjectArray";
 
         // UdonSharpBehaviour derivatives (not UdonSharpBehaviour itself) → IUdonEventReceiver
@@ -326,6 +337,7 @@ public static class ExternResolver
         SpecialType.System_Delegate => "System.Delegate",
         SpecialType.System_MulticastDelegate => "System.MulticastDelegate",
         SpecialType.System_Collections_IEnumerable => "System.Collections.IEnumerable",
+        SpecialType.System_Collections_IEnumerator => "System.Collections.IEnumerator",
         SpecialType.System_IDisposable => "System.IDisposable",
         SpecialType.System_Nullable_T => "System.Nullable",
         _ => throw new System.NotSupportedException($"Unsupported SpecialType: {st}")

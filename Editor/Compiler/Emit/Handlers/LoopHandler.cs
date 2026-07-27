@@ -121,6 +121,13 @@ internal sealed class LoopHandler
         // Collection is wrapped in IConversionOperation (array → IEnumerable), unwrap it
         var collectionOp = op.Collection is IConversionOperation conv ? conv.Operand : op.Collection;
 
+        if (_lowering.IsIteratorProtocol(
+                _lowering.ResolveType(collectionOp.Type)))
+        {
+            VisitIteratorForEach(op, collectionOp);
+            return;
+        }
+
         if (collectionOp.Type is not IArrayTypeSymbol)
             throw new System.NotSupportedException(
                 $"foreach over '{collectionOp.Type?.ToDisplayString() ?? "unknown"}' is not supported. Only arrays are supported.");
@@ -222,6 +229,75 @@ internal sealed class LoopHandler
                     _lowering.State.SwitchBreakLabels.Pop();
                 }
             });
+    }
+
+    void VisitIteratorForEach(
+        IForEachLoopOperation op,
+        IOperation collectionOp)
+    {
+        var collection = _lowering.VisitExpression(
+            collectionOp);
+        var protocol = _lowering.ResolveType(
+            collectionOp.Type) as INamedTypeSymbol;
+        var iterator = protocol?.Name == "IEnumerable"
+            ? _lowering.EmitIteratorGetEnumerator(collection)
+            : collection;
+
+        var loopLocal = op.Locals.FirstOrDefault()
+            ?? throw new System.InvalidOperationException(
+                "foreach has no loop variable");
+        var loopType =
+            _lowering.GetStorageType(loopLocal.Type);
+        var captured = _lowering.State.TryGetEnvBinding(
+            loopLocal, out _);
+        string loopId = null;
+        if (!captured)
+        {
+            loopId = _lowering.State.Storage.DeclareLocal(
+                loopLocal.Name, loopType);
+            _lowering.LocalBindings[loopLocal] =
+                new LocalBinding(loopId);
+        }
+        _lowering.State.ForeachIterationLocals.Add(
+            loopLocal);
+
+        _lowering.Builder.EmitWhile(
+            () => _lowering.EmitIteratorMoveNext(iterator),
+            _ =>
+            {
+                EnvEmit.Alloc(
+                    _lowering.Builder,
+                    _lowering.State,
+                    _lowering.State.Captures?.ScopeFor(
+                        op,
+                        CaptureScopeKind.Iteration));
+                var current =
+                    _lowering.EmitIteratorCurrent(
+                        iterator, loopLocal.Type);
+                if (captured)
+                    EnvEmit.Write(
+                        _lowering.Builder,
+                        _lowering.State,
+                        loopLocal, current);
+                else
+                    _lowering.EmitStoreField(
+                        loopId, current);
+
+                _lowering.State.SwitchBreakLabels.Push(
+                    null);
+                try
+                {
+                    _lowering.State.LoopUsingDepthStack.Push(
+                        _lowering.UsingDisposableStack.Count);
+                    _lowering.VisitOperation(op.Body);
+                    _lowering.State.LoopUsingDepthStack.Pop();
+                }
+                finally
+                {
+                    _lowering.State.SwitchBreakLabels.Pop();
+                }
+            });
+        _lowering.EmitIteratorDispose(iterator);
     }
 
 }

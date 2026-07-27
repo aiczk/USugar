@@ -206,18 +206,20 @@ public class NA_ExternArg : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void ArrayCopyStaticExternArgument_Rejects()
+    public void ArrayCopyStaticIntrinsic_Compiles()
     {
         // Array.Copy(src, dst, n) resolves to a real SystemArray extern — a Rank>1 bundle passed as an
         // argument here is exactly the N-R1 hazard (its runtime shape is not a real System*Array).
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NA_ArrayCopy : UdonSharpBehaviour {
     public int[,] a;
     public int[,] b;
     public void M() { System.Array.Copy(a, b, 4); }
-}", "NA_ArrayCopy"));
-        Assert.Contains("extern call boundary", ex.Message);
+}", "NA_ArrayCopy");
+        Assert.Contains(
+            "SystemInt32Array.__Set__SystemInt32_SystemInt32__SystemVoid",
+            uasm);
     }
 
     // ── N-R2: [UdonSynced] reject (already-free via IsSyncableType — pin only) ──
@@ -236,44 +238,48 @@ public class NA_Synced : UdonSharpBehaviour {
     // ── N-R3: is-test reject (already-free via IsRuntimeDistinguishable — pin only) ──
 
     [Fact]
-    public void IsTest_Rejects()
+    public void IsTest_UsesBundleRuntimeIdentity()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NA_IsTest : UdonSharpBehaviour {
     public object o;
     public bool result;
     void Start() { result = o is int[,]; }
-}", "NA_IsTest"));
-        Assert.NotNull(ex);
+}", "NA_IsTest");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     // ── N-R4: unsupported Array member reject (audit-surfaced — Clone is a REAL valid extern for
     // SystemObjectArray, so this is NOT already covered by "unresolved extern"; see the N-M0 report) ──
 
     [Fact]
-    public void Clone_Rejects()
+    public void Clone_DeepCopiesLogicalArray()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NA_Clone : UdonSharpBehaviour {
     public int[,] a;
     public void M() { var b = a.Clone(); }
-}", "NA_Clone"));
-        Assert.Contains("is not supported on a multi-dimensional array", ex.Message);
+}", "NA_Clone");
+        Assert.NotNull(uasm);
     }
 
     [Fact]
-    public void CopyTo_Rejects()
+    public void CopyTo_CopiesLogicalElements()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NA_CopyTo : UdonSharpBehaviour {
     public int[,] a;
     public object[] dst;
     public void M() { a.CopyTo(dst, 0); }
-}", "NA_CopyTo"));
-        Assert.Contains("is not supported on a multi-dimensional array", ex.Message);
+}", "NA_CopyTo");
+        Assert.Contains(
+            "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            uasm);
     }
 
     // ── Jagged control (must still compile unchanged — no regression) ──

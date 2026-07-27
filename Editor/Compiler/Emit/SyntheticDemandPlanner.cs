@@ -141,6 +141,8 @@ internal sealed class SyntheticDemandPlanner
                 instanceType = nullable.TypeArguments[0];
             lowering.PlanEnumToStringDemand(
                 instanceType, rejectFlags: false);
+            lowering.PlanBundleStringDemands(
+                instanceType);
             var isBase = invocation.Instance
                 is IInstanceReferenceOperation
                 {
@@ -160,6 +162,8 @@ internal sealed class SyntheticDemandPlanner
             lowering.PlanEnumToStringDemand(
                 interpolation.Expression.Type,
                 rejectFlags: false);
+            lowering.PlanBundleStringDemands(
+                interpolation.Expression.Type);
             lowering.PlanClassToStringDemand(
                 interpolation.Expression.Type);
         }
@@ -180,6 +184,8 @@ internal sealed class SyntheticDemandPlanner
                 left, rejectFlags: false);
             lowering.PlanEnumToStringDemand(
                 right, rejectFlags: false);
+            lowering.PlanBundleStringDemands(left);
+            lowering.PlanBundleStringDemands(right);
             lowering.PlanClassToStringDemand(left);
             lowering.PlanClassToStringDemand(right);
         }
@@ -196,6 +202,7 @@ internal sealed class SyntheticDemandPlanner
                     compoundConcat.Value)?.Type;
             lowering.PlanEnumToStringDemand(
                 value, rejectFlags: false);
+            lowering.PlanBundleStringDemands(value);
             lowering.PlanClassToStringDemand(value);
         }
     }

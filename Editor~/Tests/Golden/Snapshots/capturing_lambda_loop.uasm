@@ -45,13 +45,14 @@
     __const_SystemInt32_13: %SystemInt32, null
     __const_SystemInt32_14: %SystemInt32, null
     __const_SystemString_15: %SystemString, null
+    __const_SystemString_16: %SystemString, null
     __intnl_SystemObjectArray_c3: %SystemObjectArray, null
     __intnl_SystemInt32_c2: %SystemInt32, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
     __intnl_SystemBoolean_c3: %SystemBoolean, null
-    __const_SystemString_16: %SystemString, null
-    __intnl_SystemString_c1: %SystemString, null
     __const_SystemString_17: %SystemString, null
+    __intnl_SystemString_c1: %SystemString, null
+    __const_SystemString_18: %SystemString, null
     __intnl_SystemInt32_c3: %SystemInt32, null
     __const_retaddr_SystemUInt32_0: %SystemUInt32, null
     __const_retaddr_SystemUInt32_1: %SystemUInt32, null
@@ -127,7 +128,7 @@
         PUSH, __intnl_SystemString_c0
         PUSH, __const_SystemString_7
         PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
+        EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
         JUMP_IF_FALSE, 0x000001f0
         JUMP, 0x00000208
@@ -266,7 +267,7 @@
         PUSH, __intnl_SystemString_c0
         PUSH, __const_SystemString_7
         PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
+        EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
         JUMP_IF_FALSE, 0x000005b4
         JUMP, 0x000005cc
@@ -405,7 +406,7 @@
         COPY
         PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_1
-        PUSH, __const_SystemString_7
+        PUSH, __const_SystemString_15
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_4
@@ -413,7 +414,7 @@
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_0
-        PUSH, __const_SystemString_15
+        PUSH, __const_SystemString_16
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObjectArray_c2
         PUSH, __const_SystemInt32_2
@@ -468,7 +469,7 @@
         JUMP_IF_FALSE, 0x00000b04
         JUMP, 0x00000b30
     ____dlg___1_lambda_bb2:
-        PUSH, __const_SystemString_16
+        PUSH, __const_SystemString_17
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_1
         PUSH, __dlgc_Void__SystemInt32__ret
@@ -487,7 +488,7 @@
         JUMP_IF_FALSE, 0x00000b88
         JUMP, 0x00000bb4
     ____dlg___1_lambda_bb5:
-        PUSH, __const_SystemString_17
+        PUSH, __const_SystemString_18
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_1
         PUSH, __dlgc_Void__SystemInt32__ret

@@ -104,49 +104,55 @@ public class L2Dlg : UdonSharpBehaviour {
     // ── REJECT: folded targets are loud (accepted over-rejection) ──
 
     [Fact]
-    public void IsFuncDelegate_Throws()
+    public void IsFuncDelegate_UsesBundleRuntimeIdentity()
     {
-        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class L2RFunc : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
     void Start() { Func<int> f = () => seed; boxed = f; result = boxed is Func<int> ? 1 : 0; }
-}", "L2RFunc"));
-        Assert.Contains("cannot tell delegate signatures apart", ex.Message);
+}", "L2RFunc");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     [Fact]
-    public void IsUserStruct_Throws()
+    public void IsUserStruct_UsesBundleRuntimeIdentity()
     {
         // WaveJoint R2 [D10]: boxing the struct itself now rejects at the erasure choke, so the box
         // here is an int — the pin isolates the runtime-type-test choke on the aggregate TARGET.
-        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct L2S { public int v; }
 public class L2RStruct : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
     void Start() { boxed = seed; result = boxed is L2S ? 1 : 0; }
-}", "L2RStruct"));
-        Assert.Contains("Runtime type test against", ex.Message);
+}", "L2RStruct");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     [Fact]
-    public void IsTuple_Throws()
+    public void IsTuple_UsesBundleRuntimeIdentity()
     {
         // WaveJoint R2 [D10]: boxing the tuple itself now rejects at the erasure choke, so the box
         // here is an int — the pin isolates the runtime-type-test choke on the aggregate TARGET.
-        var ex = Assert.Throws<System.NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class L2RTuple : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
     void Start() { boxed = seed; result = boxed is ValueTuple<int, int> ? 1 : 0; }
-}", "L2RTuple"));
-        Assert.Contains("Runtime type test against", ex.Message);
+}", "L2RTuple");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     [Fact]

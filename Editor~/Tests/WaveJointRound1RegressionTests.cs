@@ -11,8 +11,8 @@ namespace USugar.Tests;
 /// Built-in ABI resolution must promote enum underlyings for And/Or/Xor.
 /// D02: an object[]-emulated value type (user struct / tuple / anonymous type) in an implicit stringify
 /// surface (interpolation hole, string concat operand, compound `s += x`) silently printed
-/// "System.Object[]" — RejectImplicitToString gains an aggregate arm and the compound-concat surface
-/// now runs the same choke as the binary surface.
+/// "System.Object[]" — implicit stringification now dispatches through the shared compiler-bundle
+/// runtime identity, including the compound-concat surface.
 /// </summary>
 public class WaveJointRound1RegressionTests
 {
@@ -93,78 +93,81 @@ public class WjrIntOr : UdonSharpBehaviour {
     // ── D02: aggregate (object[]-emulated value type) implicit stringify is a loud reject ──
 
     [Fact]
-    public void StructInterpolation_IsRejected()
+    public void StructInterpolation_UsesBundleStringification()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct WjrS1 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructInterp : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ WjrS1 t; t.v = seed; s = $""{t}""; }
-}", "WjrStructInterp"));
-        Assert.Contains("System.Object[]", ex.Message);
+}", "WjrStructInterp");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void StructConcat_IsRejected()
+    public void StructConcat_UsesBundleStringification()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct WjrS2 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructConcat : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ WjrS2 t; t.v = seed; s = ""x"" + t; }
-}", "WjrStructConcat"));
-        Assert.Contains("System.Object[]", ex.Message);
+}", "WjrStructConcat");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void StructCompoundConcat_IsRejected()
+    public void StructCompoundConcat_UsesBundleStringification()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct WjrS3 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructCompound : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ WjrS3 t; t.v = seed; s = ""x""; s += t; }
-}", "WjrStructCompound"));
-        Assert.Contains("System.Object[]", ex.Message);
+}", "WjrStructCompound");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void PlainStructInterpolation_IsRejected()
+    public void PlainStructInterpolation_UsesSynthesizedValueString()
     {
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct WjrS4 { public int v; }
 public class WjrPlainStruct : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ WjrS4 t; t.v = seed; s = $""{t}""; }
-}", "WjrPlainStruct"));
+}", "WjrPlainStruct");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void TupleInterpolation_IsRejected()
+    public void TupleInterpolation_UsesTupleString()
     {
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class WjrTuple : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ (int, int) t = (seed, seed + 1); s = $""{t}""; }
-}", "WjrTuple"));
+}", "WjrTuple");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void NdimCompoundConcat_IsRejected()
+    public void NdimCompoundConcat_UsesRuntimeTypeName()
     {
-        // The compound `s += x` surface now runs the same RejectImplicitToString choke as the binary
-        // surface — pin that an ndim operand stays a loud reject there.
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // The compound `s += x` surface now runs the same compiler-bundle stringification dispatch as
+        // the binary surface.
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class WjrNdim : UdonSharpBehaviour {
     public string s;
     void Start(){ int[,] m = new int[2,2]; s = ""x""; s += m; }
-}", "WjrNdim"));
+}", "WjrNdim");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]

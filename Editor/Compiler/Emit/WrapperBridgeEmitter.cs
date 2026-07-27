@@ -66,6 +66,20 @@ public sealed class WrapperBridgeEmitter
         var result = _bridge.Dispatch(plan, new List<CLeaf>(arguments), delegatePayload: () =>
             new InvocationHandler(new LoweringServices(_context)).EmitFanoutElementDispatch(
                 builder.SlotRef(innerSlot), innerInvoke, typeParameterMap, arguments));
+        for (var i = 0; i < outerInvoke.Parameters.Length; i++)
+        {
+            if (outerInvoke.Parameters[i].RefKind
+                is not (RefKind.Ref or RefKind.Out))
+                continue;
+            var type = _context.ResolveStorageType(
+                outerInvoke.Parameters[i].Type,
+                typeParameterMap);
+            _bridge.Store(
+                DelegateAbi.ConvArgName(outerSignature, i),
+                _bridge.Load(
+                    DelegateAbi.ConvArgName(innerSignature, i),
+                    type));
+        }
         _bridge.StoreReturn(plan, result);
 
         });

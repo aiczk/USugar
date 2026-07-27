@@ -8,12 +8,14 @@
     __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemObjectArray_c0: %SystemObjectArray, null
     __const_SystemInt32_1: %SystemInt32, null
-    __const_SystemObject_2: %SystemObject, null
+    __const_SystemString_2: %SystemString, null
     __const_SystemInt32_3: %SystemInt32, null
+    __const_SystemObject_4: %SystemObject, null
+    __const_SystemInt32_5: %SystemInt32, null
     __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemString_c0: %SystemString, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
-    __const_SystemString_4: %SystemString, null
+    __const_SystemString_6: %SystemString, null
 .data_end
 .code_start
     .export _start
@@ -24,55 +26,59 @@
         PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __lcl_t_SystemObjectArray_0
-        COPY
-        PUSH, __lcl_t_SystemObjectArray_0
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
-        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_1
-        PUSH, __const_SystemObject_2
+        PUSH, __const_SystemString_2
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __lcl_t_SystemObjectArray_0
+        COPY
+        PUSH, __lcl_t_SystemObjectArray_0
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_3
+        PUSH, __const_SystemObject_4
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __lcl_t_SystemObjectArray_0
+        PUSH, __intnl_SystemObjectArray_c0
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_5
+        PUSH, __const_SystemObject_4
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __lcl_t_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_3
-        PUSH, __const_SystemObject_2
-        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __lcl_t_SystemObjectArray_0
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0
         PUSH, __intnl_SystemString_c0
         COPY
         PUSH, __intnl_SystemString_c0
-        PUSH, __const_SystemObject_2
+        PUSH, __const_SystemObject_4
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x0000011c
-        JUMP, 0x00000124
+        JUMP_IF_FALSE, 0x0000013c
+        JUMP, 0x00000144
     ___start_bb3:
-        JUMP, 0x00000158
+        JUMP, 0x00000178
     ___start_bb2:
-        PUSH, __const_SystemString_4
+        PUSH, __const_SystemString_6
         PUSH, __intnl_SystemString_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __const_SystemInt32_1
-        PUSH, __const_SystemString_4
+        PUSH, __const_SystemInt32_3
+        PUSH, __const_SystemString_6
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
     ___start_bb4:
         PUSH, __lcl_t_SystemObjectArray_0
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __const_SystemInt32_1
+        PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c0

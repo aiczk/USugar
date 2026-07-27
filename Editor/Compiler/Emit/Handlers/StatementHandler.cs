@@ -136,6 +136,23 @@ internal sealed class StatementHandler
 
     void VisitReturn(IReturnOperation op)
     {
+        if (_lowering.State.CurrentIteratorPlan != null)
+        {
+            if (op.Kind == OperationKind.YieldReturn)
+            {
+                _lowering.EmitIteratorYield(op);
+                return;
+            }
+            if (op.Kind == OperationKind.YieldBreak)
+            {
+                _lowering.EmitIteratorComplete();
+                return;
+            }
+            throw new System.InvalidOperationException(
+                $"Iterator '{_lowering.CurrentMethod?.Name}' contains "
+                + $"an unexpected '{op.Kind}' return.");
+        }
+
         var tailCall = op.ReturnedValue as IInvocationOperation;
         var tailTarget = tailCall == null
             ? null
@@ -479,10 +496,19 @@ internal sealed class StatementHandler
             // struct member 0 vs 9, delegate 2 vs 11). ref/out PARAMS stay legal (caller-side
             // copy-back convention, struct_ref_param-pinned).
             if (local.IsRef)
-                throw new System.NotSupportedException(
-                    $"ref local '{local.Name}' is not supported: the flat-heap Udon VM has no "
-                    + "variable aliases, so a ref local would silently degrade to a value copy. "
-                    + "Use the referenced variable directly, or index the array element instead.");
+            {
+                if (_lowering.State.TryGetEnvBinding(local, out _))
+                    throw new System.NotSupportedException(
+                        $"ref local '{local.Name}' cannot be captured: "
+                        + "its alias is valid only in the declaring frame.");
+                if (declarator.Initializer == null)
+                    throw new System.InvalidOperationException(
+                        $"ref local '{local.Name}' has no initializer.");
+                _lowering.RefLocalBindings[local] =
+                    _lowering.PrepareRefLocalBinding(
+                        declarator.Initializer.Value);
+                continue;
+            }
 
             // Stage 2 §4.1: a CAPTURED local has no flat storage — its cell lives in the owning
             // scope's env record. The initializer value routes into the cell (VisitExpression
@@ -563,7 +589,8 @@ internal sealed class StatementHandler
             for (int i = 0; i < tupleLit.Elements.Length && i < layout.Count; i++)
             {
                 AggregateAbi.WriteSlot(_lowering.Builder, _lowering.LoadField(localId, new StorageType(AggregateAbi.ArrayType)),
-                    i, _lowering.VisitExpression(tupleLit.Elements[i]));
+                    layout.Fields[i].Index,
+                    _lowering.VisitExpression(tupleLit.Elements[i]));
             }
         }
         else if (value is IDefaultValueOperation)

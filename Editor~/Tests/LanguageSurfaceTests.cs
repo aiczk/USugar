@@ -67,7 +67,8 @@ public class LanguageSurfaceTests
     // Designed non-VM rejects (documented boundary, loud message exists).
     static readonly OperationKind[] DocumentedReject =
     {
-        OperationKind.With,                     // records family (record types rejected)
+        // Empty: `with` and iterator yield nodes are first-class handled
+        // operations; remaining rejects are sub-kind semantic boundaries.
     };
 
     // Out of scope: VB-only, CFG-lowered-only (never in a semantic-model tree), above C# 9,
@@ -99,8 +100,7 @@ public class LanguageSurfaceTests
         // EMPTY (2026-07-11): every C# 9 OperationKind is now HANDLED, VM_FUNDAMENTAL, DOCUMENTED_REJECT,
         // or OUT_OF_SCOPE. "Everything outside VM constraints is writable" is now machine-checked at the
         // kind level. Remaining capability holes are SUB-kind (guarded by loud per-arm rejects): v2b
-        // (typeobj/is-cast/virtual), interface method groups. flag-level (ref locals, iterators) are
-        // pinned separately (FlagLevelBoundaryTests / IteratorRejectTests).
+        // (typeobj/is-cast/virtual) and interface method groups.
     };
 
     [Fact]

@@ -11,6 +11,10 @@ internal sealed class ExpressionHandler
     public CLeaf Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
+        ILocalReferenceOperation localRef
+            when _lowering.RefLocalBindings.TryGetValue(
+                localRef.Local, out var refBinding)
+            => refBinding.Read(),
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _lowering.State.TryGetEnvBinding(localRef.Local, out _)
@@ -637,7 +641,12 @@ internal sealed class ExpressionHandler
                     _ =>
                     {
                         var wThisType = _lowering.GetStorageTypeName(_lowering.ClassSymbol);
-                        var wrapperBundle = DelegateAbi.EmitBundleMint(_lowering.Builder, () => _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(new StorageType(wThisType)), new StorageType(wThisType)),
+                        var wrapperBundle = DelegateAbi.EmitBundleMint(
+                            _lowering.Builder,
+                            _lowering.Const(
+                                BundleAbi.RuntimeTypeId(convDstType),
+                                StorageTypes.String),
+                            () => _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(new StorageType(wThisType)), new StorageType(wThisType)),
                             _lowering.Const(wrapperName, StorageTypes.String), _lowering.FuncRef(wrapperName), srcVal);
                         _lowering.EmitAssign(wrapResultSlot, wrapperBundle);
                     },
@@ -854,8 +863,23 @@ internal sealed class ExpressionHandler
         // faults far from the cast). An upcast/identity conversion (destination assignable from the
         // resolved source) is an object[]-shared no-op and stays passthrough; a statically-null operand
         // casts to null with no check (C#: casting null never throws).
-        if (_lowering.ResolveType(conv.Type) is INamedTypeSymbol castDst && _lowering.IsUserClass(castDst)
-            && !(_lowering.ResolveType(conv.Operand.Type) is INamedTypeSymbol castSrc && VirtualDispatch.IsAssignable(castSrc, castDst)))
+        var castDestination = _lowering.ResolveType(conv.Type);
+        var castDst = castDestination;
+        var castSource = _lowering.ResolveType(conv.Operand.Type);
+        var destinationShape = _lowering.State.Types.SourceShape(
+            conv.Type, _lowering.State.TypeParamMap);
+        var staticallyCompatibleBundle =
+            SymbolEqualityComparer.Default.Equals(
+                castSource, castDestination)
+            || castSource is INamedTypeSymbol castSourceClass
+               && castDestination is INamedTypeSymbol
+                   castDestinationClass
+               && _lowering.IsUserClass(castSourceClass)
+               && _lowering.IsUserClass(castDestinationClass)
+               && VirtualDispatch.IsAssignable(
+                   castSourceClass, castDestinationClass);
+        if (destinationShape.IsBundle
+            && !staticallyCompatibleBundle)
         {
             var castOperand = conv.Operand;
             while (castOperand is IConversionOperation innerCast) castOperand = innerCast.Operand;
@@ -874,7 +898,18 @@ internal sealed class ExpressionHandler
                             new List<CLeaf> { _lowering.Const(
                                 $"USugar: InvalidCastException — cast to '{castDst.Name}' on a value that is not a '{castDst.Name}' ({_lowering.ClassSymbol.Name}). Returning null.",
                                 StorageTypes.String) });
-                        _lowering.EmitAssign(castSlot, _lowering.Const(null, new StorageType(castUdon)));
+                        var fallback =
+                            castDestination is INamedTypeSymbol aggregate
+                            && _lowering.IsAggregateValue(aggregate)
+                                ? AggregateAbi.MintDefault(
+                                    _lowering.Builder,
+                                    _lowering.State.Aggregates
+                                        .GetLayout(aggregate),
+                                    _lowering.State.Aggregates.GetLayout,
+                                    _lowering.GetStorageTypeName)
+                                : _lowering.Const(
+                                    null, new StorageType(castUdon));
+                        _lowering.EmitAssign(castSlot, fallback);
                     });
                 return _lowering.SlotRef(castSlot);
             }
@@ -1067,7 +1102,13 @@ internal sealed class ExpressionHandler
 
         // Stage 2 §3.7: DelegateAbi.Env carries the binding-scope env for a CAPTURING closure target, else
         // a null const (capture-free lambda / named method / base.M) = byte-identical to Stage 1.
-        var bundle = DelegateAbi.EmitBundleMint(_lowering.Builder, () => thirdParty ?? _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
+        var bundle = DelegateAbi.EmitBundleMint(
+            _lowering.Builder,
+            _lowering.Const(
+                BundleAbi.RuntimeTypeId(
+                    _lowering.ResolveType(op.Type)),
+                StorageTypes.String),
+            () => thirdParty ?? _lowering.LoadField(_lowering.State.Storage.DeclareThisOnce(new StorageType(thisType)), new StorageType(thisType)),
             _lowering.Const(bridgeName, StorageTypes.String), addr, envLeaf);
 
         return bundle;
@@ -1077,7 +1118,11 @@ internal sealed class ExpressionHandler
 
     CLeaf VisitTupleLiteral(ITupleOperation op)
     {
-        return AggregateAbi.MintTupleLiteral(_lowering.Builder, op, _lowering.VisitExpression);
+        return AggregateAbi.MintTupleLiteral(
+            _lowering.Builder, op,
+            _lowering.State.Aggregates.GetLayout(
+                (INamedTypeSymbol)_lowering.ResolveType(op.Type)),
+            _lowering.VisitExpression);
     }
 
 }

@@ -35,15 +35,17 @@ public class B62A : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void B62_AsCast_CollapseSetTarget_RejectsLikeIs()
+    public void B62_AsCast_ExactDelegateTarget_UsesBundleIdentity()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public class B62D : UdonSharpBehaviour {
   public int result;
   void Start(){ object o = ""x""; Func<int> f = o as Func<int>; result = (f == null) ? 1 : 0; }
-}", "B62D"));
-        Assert.Contains("'as'", ex.Message);
+}", "B62D");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     // ── B63 (immediate-use-only): a collapse-set typeof (non-injective Udon tag) may exist ONLY as a direct

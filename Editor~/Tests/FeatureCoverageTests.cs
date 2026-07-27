@@ -1312,24 +1312,29 @@ public class SelfDelegateTest : UdonSharpBehaviour {
     // ── Record type diagnostic ──
 
     [Fact]
-    public void RecordClass_ThrowsNotSupported()
+    public void RecordClass_CompilesWithValueSemantics()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public record class MyRecord(int Value);
-public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
-", "MyRecord"));
-        Assert.Contains("Record type", ex.Message);
-        Assert.Contains("not supported", ex.Message, StringComparison.OrdinalIgnoreCase);
+public class Dummy : UdonSharp.UdonSharpBehaviour {
+    public int result;
+    void Start() { var a = new MyRecord(1); var b = a with { Value = 2 }; result = b.Value; }
+}
+", "Dummy");
+        Assert.NotNull(uasm);
     }
 
     [Fact]
-    public void RecordStruct_ThrowsNotSupported()
+    public void RecordStruct_CompilesWithValueSemantics()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public record struct Point(int X, int Y);
-public class Dummy : UdonSharp.UdonSharpBehaviour { void Start() { } }
-", "Point"));
-        Assert.Contains("Record type", ex.Message);
+public class Dummy : UdonSharp.UdonSharpBehaviour {
+    public int result;
+    void Start() { var a = new Point(1, 2); var b = a with { X = 3 }; result = b.X + b.Y; }
+}
+", "Dummy");
+        Assert.NotNull(uasm);
     }
 
     // ── Delegate value as argument: ordinary bundle value (design §2.4, fcd15/16) ──

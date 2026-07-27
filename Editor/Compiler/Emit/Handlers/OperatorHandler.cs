@@ -32,6 +32,26 @@ internal sealed class OperatorHandler
 
         LoweringServices.RejectChecked(op.IsChecked);
 
+        if (op.OperatorKind
+                is BinaryOperatorKind.Equals
+                or BinaryOperatorKind.NotEquals
+            && _lowering.ResolveType(op.LeftOperand.Type)
+                is INamedTypeSymbol { IsRecord: true }
+                    recordType)
+        {
+            var equal = _lowering.EmitBundleValueEquality(
+                _lowering.VisitExpression(op.LeftOperand),
+                _lowering.VisitExpression(op.RightOperand),
+                recordType);
+            return op.OperatorKind
+                    == BinaryOperatorKind.NotEquals
+                ? _lowering.ExternCall(
+                    UdonAbi.BooleanNot,
+                    new List<CLeaf> { equal },
+                    StorageTypes.Boolean)
+                : equal;
+        }
+
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
             return VisitConditionalAnd(op);
@@ -98,7 +118,6 @@ internal sealed class OperatorHandler
         {
             var delegateType = (INamedTypeSymbol)op.Type;
             var invoke = delegateType.DelegateInvokeMethod;
-            DelegateAbi.ValidateNoRefOutParams(invoke);
 
             var combineLeftVal = _lowering.VisitExpression(op.LeftOperand);
             var combineRightVal = _lowering.VisitExpression(op.RightOperand);
@@ -177,32 +196,12 @@ internal sealed class OperatorHandler
             // lowering as an interpolation hole; the M3 sealed-only fast path dissolved into the
             // helper's devirt arm). Both operand VALUES evaluate first — C# order: Concat's operands
             // are fully evaluated before either ToString runs — then each class operand dispatches.
-            var lCls = _lowering.ResolveType(lOp.Type) as INamedTypeSymbol;
-            var rCls = _lowering.ResolveType(rOp.Type) as INamedTypeSymbol;
-            bool lIsClass = lCls != null && _lowering.IsUserClass(lCls);
-            bool rIsClass = rCls != null && _lowering.IsUserClass(rCls);
-            if (lIsClass || rIsClass)
-            {
-                var l = _lowering.VisitExpression(lOp);
-                var r = _lowering.VisitExpression(rOp);
-                l = _lowering.ConvertConcatOperand(l, lOp);
-                r = _lowering.ConvertConcatOperand(r, rOp);
-                return _lowering.ExternCall(UdonAbi.StringConcatObjects,
-                    new List<CLeaf> { l, r }, StorageTypes.String);
-            }
-            ClassAbi.RejectImplicitToString(
-                lOp.Type, _lowering.IsAggregateValue(lOp.Type));
-            ClassAbi.RejectImplicitToString(
-                rOp.Type, _lowering.IsAggregateValue(rOp.Type));
-            if (_lowering.IsFoldedEnum(_lowering.ResolveType(lOp.Type)) || _lowering.IsFoldedEnum(_lowering.ResolveType(rOp.Type)))
-            {
-                var l = _lowering.VisitExpression(lOp);
-                l = _lowering.ConvertConcatOperand(l, lOp);
-                var r = _lowering.VisitExpression(rOp);
-                r = _lowering.ConvertConcatOperand(r, rOp);
-                return _lowering.ExternCall(UdonAbi.StringConcatObjects,
-                    new List<CLeaf> { l, r }, StorageTypes.String);
-            }
+            var l = _lowering.VisitExpression(lOp);
+            var r = _lowering.VisitExpression(rOp);
+            l = _lowering.ConvertConcatOperand(l, lOp);
+            r = _lowering.ConvertConcatOperand(r, rOp);
+            return _lowering.ExternCall(UdonAbi.StringConcatObjects,
+                new List<CLeaf> { l, r }, StorageTypes.String);
         }
 
         var leftVal = _lowering.VisitExpression(op.LeftOperand);
@@ -696,7 +695,9 @@ internal sealed class OperatorHandler
         for (int i = 0; i < rec.DeconstructionSubpatterns.Length; i++)
         {
             var elemType = layout.Fields[i].Type;
-            var elemRaw = AggregateAbi.ReadSlot(_lowering.Builder, valueVal, i, StorageTypes.Object);
+            var elemRaw = AggregateAbi.ReadSlot(
+                _lowering.Builder, valueVal,
+                layout.Fields[i].Index, StorageTypes.Object);
             // Materialize into a typed temp (Udon COPY unboxes) so the sub-pattern compares with
             // the correct type tag.
             var elemSlot = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(elemType));
@@ -920,52 +921,34 @@ internal sealed class OperatorHandler
         if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
             throw new System.NotSupportedException(
                 $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
-        return EmitTupleStructuralEquality(
-            _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), aggType,
-            op.OperatorKind == BinaryOperatorKind.NotEquals);
+        var result = _lowering.EmitBundleValueEquality(
+            _lowering.VisitExpression(op.LeftOperand),
+            _lowering.VisitExpression(op.RightOperand),
+            aggType);
+        return op.OperatorKind == BinaryOperatorKind.NotEquals
+            ? _lowering.ExternCall(
+                UdonAbi.BooleanNot,
+                new List<CLeaf> { result },
+                StorageTypes.Boolean)
+            : result;
     }
 
     // ── Aggregate (tuple) equality (via IBinaryOperation shape) ──
 
-    CLeaf EmitAggregateEquality(IBinaryOperation op, INamedTypeSymbol aggType)
-        => EmitTupleStructuralEquality(
-            _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), aggType,
-            op.OperatorKind == BinaryOperatorKind.NotEquals);
-
-    CLeaf EmitTupleStructuralEquality(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType, bool isNotEquals)
+    CLeaf EmitAggregateEquality(
+        IBinaryOperation op,
+        INamedTypeSymbol aggType)
     {
-        var result = EmitAggregateElementsEqual(leftArr, rightArr, aggType);
-        if (isNotEquals)
-            result = _lowering.ExternCall(UdonAbi.BooleanNot,
-                new List<CLeaf> { result }, StorageTypes.Boolean);
-        return result;
-    }
-
-    // Field-by-field structural equality of two object[]-backed tuples. A nested-tuple element recurses
-    // (boxed object.Equals would otherwise do REFERENCE equality on the nested object[] and never match);
-    // a scalar element uses SystemObject.__Equals (object.Equals = VALUE equality, NOT __op_Equality which
-    // is reference equality). Caveat: float NaN compares equal under object.Equals.
-    CLeaf EmitAggregateElementsEqual(CValue leftArr, CValue rightArr, INamedTypeSymbol aggType)
-    {
-        var layout = _lowering.State.Aggregates.GetLayout(aggType);
-        var leftSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(leftSlot, leftArr);
-        var rightSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType)); _lowering.EmitAssign(rightSlot, rightArr);
-
-        CLeaf result = _lowering.Const(true, StorageTypes.Boolean);
-        for (int i = 0; i < layout.Count; i++)
-        {
-            var leftElem = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(leftSlot), i, StorageTypes.Object);
-            var rightElem = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(rightSlot), i, StorageTypes.Object);
-
-            CLeaf elemEq = layout.Fields[i].Type is INamedTypeSymbol nested && nested.IsTupleType
-                ? EmitAggregateElementsEqual(leftElem, rightElem, nested) // nested tuple → recurse
-                : _lowering.ExternCall(UdonAbi.ObjectEquals,
-                    new List<CLeaf> { leftElem, rightElem }, StorageTypes.Boolean);
-
-            result = _lowering.ExternCall(UdonAbi.BooleanLogicalAnd,
-                new List<CLeaf> { result, elemEq }, StorageTypes.Boolean);
-        }
-        return result;
+        var result = _lowering.EmitBundleValueEquality(
+            _lowering.VisitExpression(op.LeftOperand),
+            _lowering.VisitExpression(op.RightOperand),
+            aggType);
+        return op.OperatorKind == BinaryOperatorKind.NotEquals
+            ? _lowering.ExternCall(
+                UdonAbi.BooleanNot,
+                new List<CLeaf> { result },
+                StorageTypes.Boolean)
+            : result;
     }
 
     // ── Delegate comparison helpers (design §2.5) ──

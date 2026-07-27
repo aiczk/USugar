@@ -201,15 +201,15 @@ public class EvtTupleRet : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void RefOutDelegateEvent_Throws()
+    public void RefOutDelegateEvent_UsesBundleAbi()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate void RefDel(ref int x);
 public class EvtRefOut : UdonSharpBehaviour {
     public event RefDel Foo;
-}", "EvtRefOut"));
-        Assert.Contains("ref/out", ex.Message, StringComparison.OrdinalIgnoreCase);
+}", "EvtRefOut");
+        Assert.Contains("Foo: %SystemObjectArray", uasm);
     }
 
     // ── design §8 item 6: event name colliding with an inherited field/prop (or vice versa) is

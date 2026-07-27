@@ -70,6 +70,7 @@ public class ExternSilentDefaultCensusTests
         ["SystemDelegate"] = "reference type; only null",
         ["SystemMulticastDelegate"] = "reference type; only null",
         ["SystemCollectionsIEnumerable"] = "interface; only null",
+        ["SystemCollectionsIEnumerator"] = "interface; only null",
         ["SystemIDisposable"] = "interface; only null",
         ["SystemNullable"] = "boxed-object emulation; a constant T? is either null or folds to T's tag",
     };

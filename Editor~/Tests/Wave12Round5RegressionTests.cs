@@ -96,7 +96,7 @@ public class W12R5ObjAs : UdonSharpBehaviour {
     }
 }", "W12R5ObjAs"));
         Assert.Contains("delegate", ex.Message);
-        Assert.Contains("'as'", ex.Message);
+        Assert.Contains("signature adapter", ex.Message);
     }
 
     [Fact]
@@ -232,7 +232,7 @@ public class W12CPat : UdonSharpBehaviour {
         result = boxed is Func<object> f ? (f() == null ? 0 : 1) : -1;
     }
 }", "W12CPat"));
-        Assert.Contains("cannot tell delegate signatures apart", ex.Message);
+        Assert.Contains("signature adapter", ex.Message);
     }
 
     // ── [W3] planner invariant: the `new` declaration is the mangled one ──

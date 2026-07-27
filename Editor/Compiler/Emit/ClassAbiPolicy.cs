@@ -18,7 +18,6 @@ internal static class ClassAbiPolicy
     {
         if (types == null) throw new ArgumentNullException(nameof(types));
         if (types.IsRuntimeDistinguishable(resolvedTarget, map)) return;
-        ClassAbi.RejectRuntimeTypeTest(resolvedTarget);
         var display = resolvedTarget.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat);
         var hint = resolvedTarget is INamedTypeSymbol named && named.DelegateInvokeMethod != null
             ? " (Udon represents every delegate as one runtime type, so it cannot tell delegate signatures "

@@ -156,8 +156,34 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
     {
         RequireMutable();
         _published = true;
+        var delegateVariantTargets = new HashSet<string>(
+            StringComparer.Ordinal);
+        var delegateTypes = _sourceShapes
+            .Where(pair => pair.Value.Bundle
+                == RuntimeBundleKind.Delegate)
+            .Select(pair => (
+                Key: pair.Key,
+                Type: _resolutions.TryGetValue(
+                    pair.Key, out var type) ? type : null))
+            .Where(pair => pair.Type
+                is INamedTypeSymbol
+                    { DelegateInvokeMethod: not null })
+            .ToArray();
+        foreach (var target in delegateTypes)
+            foreach (var source in delegateTypes)
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                        source.Type, target.Type))
+                    continue;
+                var conversion =
+                    _compilation.ClassifyCommonConversion(
+                        source.Type, target.Type);
+                if (conversion.IsImplicit)
+                    delegateVariantTargets.Add(target.Key);
+            }
         return new BoundUdonTypeSystem(
-            _lowerings, _resolutions, _sourceShapes);
+            _lowerings, _resolutions, _sourceShapes,
+            delegateVariantTargets);
     }
 
     void RequireMutable()
@@ -402,11 +428,18 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
     readonly IReadOnlyDictionary<string, UdonTypeLowering> _lowerings;
     readonly IReadOnlyDictionary<string, ITypeSymbol> _resolutions;
     readonly IReadOnlyDictionary<string, RuntimeShape> _sourceShapes;
+    readonly IReadOnlyList<ITypeSymbol> _knownBundleTypes;
+    readonly IReadOnlyCollection<string>
+        _delegateVariantRuntimeTestTargets;
+
+    public IReadOnlyList<ITypeSymbol> KnownBundleTypes
+        => _knownBundleTypes;
 
     public BoundUdonTypeSystem(
         IDictionary<string, UdonTypeLowering> lowerings,
         IDictionary<string, ITypeSymbol> resolutions = null,
-        IDictionary<string, RuntimeShape> sourceShapes = null)
+        IDictionary<string, RuntimeShape> sourceShapes = null,
+        IEnumerable<string> delegateVariantRuntimeTestTargets = null)
     {
         _lowerings =
             new ReadOnlyDictionary<string, UdonTypeLowering>(
@@ -426,7 +459,33 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
                     sourceShapes
                     ?? new Dictionary<string, RuntimeShape>(),
                     StringComparer.Ordinal));
+        _knownBundleTypes = Array.AsReadOnly(
+            _sourceShapes
+                .Where(pair => pair.Value.IsBundle)
+                .Select(pair => _resolutions.TryGetValue(
+                    pair.Key, out var type) ? type : null)
+                .Where(type => type != null)
+                .Distinct<ITypeSymbol>(
+                    SymbolEqualityComparer.Default)
+                .OrderBy(
+                    ClassTypeObjectContext.SpecKey,
+                    StringComparer.Ordinal)
+                .ToArray());
+        _delegateVariantRuntimeTestTargets =
+            Array.AsReadOnly((
+                delegateVariantRuntimeTestTargets
+                ?? Array.Empty<string>())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(key => key, StringComparer.Ordinal)
+                .ToArray());
     }
+
+    public bool DelegateRuntimeTestNeedsVariantAdapter(
+        ITypeSymbol target,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+        => _delegateVariantRuntimeTestTargets.Contains(
+            BoundTypeKey.Create(target, typeParameterMap));
 
     public RuntimeShape SourceShape(
         ITypeSymbol type,

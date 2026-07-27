@@ -26,9 +26,28 @@ internal sealed class SimpleAssignmentHandler
         // VisitVariableDeclaration already makes ref locals unreachable, but keep the assignment
         // form loud too so no future lvalue kind re-opens the alias-as-value-copy hole.
         if (assign.IsRef)
-            throw new System.NotSupportedException(
-                "ref local reassignment ('r = ref y') is not supported: the flat-heap Udon VM has "
-                + "no variable aliases. Use the referenced variable directly.");
+        {
+            if (assign.Target is not ILocalReferenceOperation refLocal
+                || !refLocal.Local.IsRef)
+                throw new System.NotSupportedException(
+                    "A ref assignment must target a ref local.");
+            if (!_lowering.RefLocalBindings.TryGetValue(
+                    refLocal.Local, out var binding))
+                throw new System.InvalidOperationException(
+                    $"Cannot resolve ref local '{refLocal.Local.Name}'.");
+            binding.Reassign(
+                _lowering.PrepareRefLocalBinding(assign.Value));
+            return binding.Read();
+        }
+
+        if (assign.Target is ILocalReferenceOperation aliasTarget
+            && _lowering.RefLocalBindings.TryGetValue(
+                aliasTarget.Local, out var alias))
+        {
+            var value = _lowering.VisitExpression(assign.Value);
+            alias.Write(value);
+            return value;
+        }
 
         // Wave-9 round-7 [Y1]: `_ = expr;` discard assignment — legal C#: evaluate the RHS for its
         // side effects and drop the value. A discard has no storage and can never be read back, so

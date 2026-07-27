@@ -51,44 +51,46 @@ public class Wj2Derived : UdonSharpBehaviour {
     // ── D10: aggregate erased to object is a loud reject at the erasure choke ──
 
     [Fact]
-    public void StructErasedToObject_IsRejected()
+    public void StructErasedToObject_StringifiesByRuntimeIdentity()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct Wj2S1 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class Wj2Box : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ Wj2S1 t; t.v = seed; object o = t; s = """" + o; }
-}", "Wj2Box"));
-        Assert.Contains("Erasing", ex.Message);
-        Assert.Contains("System.Object[]", ex.Message);
+}", "Wj2Box");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void TupleErasedToObject_IsRejected()
+    public void TupleErasedToObject_StringifiesByRuntimeIdentity()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class Wj2TupleBox : UdonSharpBehaviour {
     public int seed; public string s;
     void Start(){ (int, int) t = (seed, seed + 1); object o = t; s = """" + o; }
-}", "Wj2TupleBox"));
-        Assert.Contains("Erasing", ex.Message);
+}", "Wj2TupleBox");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void StructObjectRoundtrip_IsRejectedAtTheErasure()
+    public void StructObjectRoundtrip_UsesRuntimeTypeIdentity()
     {
         // Category flip (triage t07/t10, was Match): the pure box-and-cast-back roundtrip is contained
         // at the erasure choke like its ndim/class twins — a laundered bundle cannot be told from a
         // real object[] downstream, so the conversion itself is the only sound reject point.
-        Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct Wj2S3 { public int v; }
 public class Wj2Round : UdonSharpBehaviour {
     public int seed; public int r;
     void Start(){ Wj2S3 t; t.v = seed; object o = t; Wj2S3 u = (Wj2S3)o; r = u.v; }
-}", "Wj2Round"));
+}", "Wj2Round");
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     [Fact]

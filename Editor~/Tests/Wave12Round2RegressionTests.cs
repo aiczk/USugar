@@ -73,12 +73,12 @@ public class W12R2MinF : UdonSharpBehaviour {
         // reload push follows the SendCustomEvent — a save between copy-in and dispatch would
         // capture the already-clobbered m and the reload would restore m-1 (wrong value class).
         var uasm = TestHelper.CompileToUasm(FieldReceiverSelfRecursion, "W12R2MinF");
-        Assert.Equal(6, Count(uasm, RecurStackPush));
+        Assert.Equal(8, Count(uasm, RecurStackPush));
         int spv = uasm.IndexOf(SpvExtern, StringComparison.Ordinal);
         int sce = uasm.IndexOf(SceExtern, StringComparison.Ordinal);
         Assert.True(spv > 0 && sce > spv, "expected exactly one SPV+SCE cross pair in program order");
         Assert.Equal(3, Count(uasm.Substring(0, spv), RecurStackPush));   // full save before the copy-in
-        Assert.Equal(3, Count(uasm.Substring(sce), RecurStackPush));      // full reload after the dispatch
+        Assert.Equal(5, Count(uasm.Substring(sce), RecurStackPush));      // full reload plus grow helper
     }
 
     // ── [V1] interface-typed receiver (R225 form, capturing closure in the implementing method) ──
@@ -107,7 +107,7 @@ public class W12R2IfaceR : UdonSharpBehaviour, IW12R2Wkr {
     }
     void Start() { self = this; result = Work(n % 4 + 5); }
 }", "W12R2IfaceR");
-        Assert.Equal(10, Count(uasm, RecurStackPush));
+        Assert.Equal(12, Count(uasm, RecurStackPush));
     }
 
     // ── [V1] property accessor recursion through a variable receiver ──
@@ -135,7 +135,7 @@ public class W12R2PropR : UdonSharpBehaviour {
     }
     void Start() { self = this; depth = n % 3 + 4; result = Acc; }
 }", "W12R2PropR");
-        Assert.Equal(6, Count(uasm, RecurStackPush));
+        Assert.Equal(8, Count(uasm, RecurStackPush));
     }
 
     [Fact]
@@ -161,12 +161,12 @@ public class W12R2SetR : UdonSharpBehaviour {
     }
     void Start() { self = this; depth = n % 3 + 3; Level = 1; result = acc; }
 }", "W12R2SetR");
-        Assert.Equal(4, Count(uasm, RecurStackPush));
+        Assert.Equal(6, Count(uasm, RecurStackPush));
         int spv = uasm.IndexOf(SpvExtern, StringComparison.Ordinal);
         int sce = uasm.IndexOf(SceExtern, StringComparison.Ordinal);
         Assert.True(spv > 0 && sce > spv, "expected exactly one SPV+SCE cross pair in program order");
         Assert.Equal(2, Count(uasm.Substring(0, spv), RecurStackPush));
-        Assert.Equal(2, Count(uasm.Substring(sce), RecurStackPush));
+        Assert.Equal(4, Count(uasm.Substring(sce), RecurStackPush));
     }
 
     // ── [V1] controls: tail sites and non-cycle cross calls stay unwrapped ──

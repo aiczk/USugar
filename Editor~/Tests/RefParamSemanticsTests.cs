@@ -64,38 +64,40 @@ public class RecRef3 : UdonSharp.UdonSharpBehaviour {
     // both the readonly alias (VM 1 vs CLR 5) and the defensive copy (VM 11 vs CLR 1).
 
     [Fact]
-    public void InParam_OnClassMethod_Throws()
+    public void InParam_OnClassMethod_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public class InPar1 : UdonSharp.UdonSharpBehaviour {
     public int f; public int sum;
     void Start() { f = 1; M(in f); }
     public void M(in int x) { f = 5; sum = x; }
-}", "InPar1"));
-        Assert.Contains("'in' parameter", ex.Message);
+}", "InPar1");
+        Assert.NotNull(uasm);
     }
 
     [Fact]
-    public void InParam_OnStructMethod_Throws()
+    public void InParam_OnStructMethod_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public struct InS { public int v; public void M(in int x) { v = x; } }
 public class InPar2 : UdonSharp.UdonSharpBehaviour {
     public int sum;
     void Start() { InS s = new InS(); s.M(in sum); sum = s.v; }
-}", "InPar2"));
-        Assert.Contains("'in' parameter", ex.Message);
+}", "InPar2");
+        Assert.Contains(
+            "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
+            uasm);
     }
 
     [Fact]
-    public void InParam_OnLocalFunction_Throws()
+    public void InParam_OnLocalFunction_Compiles()
     {
-        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 public class InPar3 : UdonSharp.UdonSharpBehaviour {
     public int sum;
     void Start() { int L(in int x) { return x + 1; } sum = L(in sum); }
-}", "InPar3"));
-        Assert.Contains("'in' parameter", ex.Message);
+}", "InPar3");
+        Assert.NotNull(uasm);
     }
 
     [Fact]

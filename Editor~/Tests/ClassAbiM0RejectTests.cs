@@ -80,13 +80,13 @@ public class F2Ret : UdonSharpBehaviour { PlainFoo79 M() => null; void Start(){ 
     // ── Face 3: a record used as a member type gets the RECORD message ──
 
     [Fact]
-    public void Face3_RecordMemberType_RejectsWithRecordMessage()
+    public void Face3_RecordMemberType_UsesBundleStorage()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public record PlainRec79(int V);
-public class F3Rec : UdonSharpBehaviour { PlainRec79 r; void Start(){ } }", "F3Rec"));
-        Assert.Contains("ecord", ex.Message); // "record" / "Record"
+public class F3Rec : UdonSharpBehaviour { PlainRec79 r; void Start(){ } }", "F3Rec");
+        Assert.Contains("r: %SystemObjectArray", uasm);
     }
 
     // ── Face 4: a NATIVE base still rejects; a USER-CLASS base is now supported (CA-v2 M1). ──

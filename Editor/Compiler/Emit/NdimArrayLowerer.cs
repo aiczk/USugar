@@ -52,18 +52,45 @@ internal sealed class NdimArrayLowerer
     /// detected identically regardless of access shape.</summary>
     internal NdimArrayAbi.AccessPlan PrepareNdimAccess(IOperation arrayRefOp, IReadOnlyList<IOperation> indexOps, IArrayTypeSymbol ndimType)
     {
-        int rank = ndimType.Rank;
-        var backingType = NdimArrayAbi.BackingType(_compilation, ndimType);
+        var indexes = new CLeaf[indexOps.Count];
+        var bundle = VisitExpression(arrayRefOp);
+        for (var dimension = 0;
+             dimension < indexOps.Count;
+             dimension++)
+            indexes[dimension] =
+                VisitExpression(indexOps[dimension]);
+        return PrepareNdimAccess(
+            bundle, indexes, ndimType);
+    }
 
-        var bundleSlot = _state.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
-        EmitAssign(bundleSlot, VisitExpression(arrayRefOp));
+    internal NdimArrayAbi.AccessPlan PrepareNdimAccess(
+        CLeaf bundle,
+        IReadOnlyList<CLeaf> indexes,
+        IArrayTypeSymbol ndimType)
+    {
+        int rank = ndimType.Rank;
+        if (indexes.Count != rank)
+            throw new System.NotSupportedException(
+                $"A rank-{rank} array requires {rank} indices, "
+                + $"but {indexes.Count} were supplied.");
+        var backingType =
+            NdimArrayAbi.BackingType(_compilation, ndimType);
+
+        var bundleSlot = _state.Builder.AllocScratch(
+            new StorageType(NdimArrayAbi.BundleUdonType));
+        EmitAssign(bundleSlot, bundle);
         var bundleVal = SlotRef(bundleSlot);
 
         var idxSlots = new int[rank];
         for (int d = 0; d < rank; d++)
         {
-            idxSlots[d] = _state.Builder.AllocScratch(StorageTypes.Int32);
-            EmitAssign(idxSlots[d], VisitExpression(indexOps[d]));
+            if (indexes[d].Type != StorageTypes.Int32)
+                throw new System.NotSupportedException(
+                    "Multi-dimensional array indices must lower "
+                    + $"to SystemInt32, not '{indexes[d].Type}'.");
+            idxSlots[d] = _state.Builder.AllocScratch(
+                StorageTypes.Int32);
+            EmitAssign(idxSlots[d], indexes[d]);
         }
 
         var dimSlots = new int[rank];
@@ -174,7 +201,9 @@ internal sealed class NdimArrayLowerer
             new List<CLeaf> { SlotRef(totalSlot) }, new StorageType(backingUdonType)));
 
         var bundleSlot = _state.Builder.AllocScratch(new StorageType(NdimArrayAbi.BundleUdonType));
-        NdimArrayAbi.MintBundleToSlot(_builder, bundleSlot, backingSlot, dimSlots);
+        NdimArrayAbi.MintBundleToSlot(
+            _builder, bundleSlot, backingSlot, dimSlots,
+            BundleAbi.RuntimeTypeId(ndimType));
 
         if (op.Initializer != null)
         {
@@ -219,25 +248,519 @@ internal sealed class NdimArrayLowerer
         return ExternCall(UdonAbi.SystemArrayLength, new List<CLeaf> { backing }, StorageTypes.Int32);
     }
 
+    internal CLeaf EmitNdimLongLength(
+        CLeaf bundleVal, IArrayTypeSymbol ndimType)
+        => ExternCall(
+            UdonAbiKey.Method(
+                "SystemConvert", "ToInt64",
+                new[] { "SystemInt32" }, "SystemInt64"),
+            new List<CLeaf>
+            {
+                EmitNdimLength(bundleVal, ndimType)
+            },
+            StorageTypes.Int64);
+
     /// <summary>`ndimArr.GetLength(d)` — bundle[1+d] unboxed. <paramref name="dimArg"/> need not be a
     /// compile-time constant (design §2 allows an expression); when it is a Roslyn constant we still
     /// go through the same runtime bundle-index math (no special-cased fast path — a compile-time
     /// bounds proof / constant-fold optimization is explicitly out of scope, §1).</summary>
-    internal CLeaf EmitNdimGetLength(CLeaf bundleVal, CLeaf dimArg)
-    {
-        var plusOne = NdimArrayAbi.BuildRuntimeDimSlotIndex(_builder, dimArg);
-        return NdimArrayAbi.ReadDimLength(_builder, bundleVal, plusOne);
-    }
+    internal CLeaf EmitNdimGetLength(
+        CLeaf bundleVal, CLeaf dimArg,
+        IArrayTypeSymbol ndimType)
+        => EmitDimensionQuery(
+            bundleVal, dimArg, ndimType,
+            StorageTypes.Int32, length => length);
 
     /// <summary>`ndimArr.Rank` — the static rank is known at compile time from the declared type; no
     /// runtime code at all.</summary>
     internal CLeaf EmitNdimRank(IArrayTypeSymbol ndimType) => Const(ndimType.Rank, StorageTypes.Int32);
 
     /// <summary>`ndimArr.GetUpperBound(d)` = `GetLength(d) - 1`.</summary>
-    internal CLeaf EmitNdimGetUpperBound(CLeaf bundleVal, CLeaf dimArg)
+    internal CLeaf EmitNdimGetUpperBound(
+        CLeaf bundleVal, CLeaf dimArg,
+        IArrayTypeSymbol ndimType)
+        => EmitDimensionQuery(
+            bundleVal, dimArg, ndimType,
+            StorageTypes.Int32,
+            length => NdimArrayAbi.BuildUpperBound(
+                _builder, length));
+
+    internal CLeaf EmitNdimGetLongLength(
+        CLeaf bundleVal, CLeaf dimArg,
+        IArrayTypeSymbol ndimType)
+        => EmitDimensionQuery(
+            bundleVal, dimArg, ndimType,
+            StorageTypes.Int64,
+            length => ExternCall(
+                UdonAbiKey.Method(
+                    "SystemConvert", "ToInt64",
+                    new[] { "SystemInt32" },
+                    "SystemInt64"),
+                new List<CLeaf> { length },
+                StorageTypes.Int64));
+
+    internal CLeaf EmitNdimGetLowerBound(
+        CLeaf dimArg, IArrayTypeSymbol ndimType)
+        => EmitDimensionQuery(
+            null, dimArg, ndimType,
+            StorageTypes.Int32,
+            _ => Const(0, StorageTypes.Int32));
+
+    CLeaf EmitDimensionQuery(
+        CLeaf bundleVal, CLeaf dimArg,
+        IArrayTypeSymbol ndimType,
+        StorageType resultType,
+        System.Func<CLeaf, CLeaf> emitResult)
     {
-        var len = EmitNdimGetLength(bundleVal, dimArg);
-        return NdimArrayAbi.BuildUpperBound(_builder, len);
+        var dimension = _builder.AllocScratch(
+            StorageTypes.Int32);
+        EmitAssign(dimension, dimArg);
+        var nonNegative = ExternCall(
+            UdonAbiKey.Method(
+                "SystemInt32", "op_GreaterThanOrEqual",
+                new[] { "SystemInt32", "SystemInt32" },
+                "SystemBoolean"),
+            new List<CLeaf>
+            {
+                SlotRef(dimension),
+                Const(0, StorageTypes.Int32)
+            },
+            StorageTypes.Boolean);
+        var belowRank = ExternCall(
+            UdonAbi.Int32LessThan,
+            new List<CLeaf>
+            {
+                SlotRef(dimension),
+                Const(ndimType.Rank, StorageTypes.Int32)
+            },
+            StorageTypes.Boolean);
+        var valid = ExternCall(
+            UdonAbi.BooleanConditionalAnd,
+            new List<CLeaf>
+            {
+                nonNegative, belowRank
+            },
+            StorageTypes.Boolean);
+        var result = _builder.AllocScratch(resultType);
+        EmitAssign(
+            result,
+            InvocationHandler.DefaultConst(
+                _builder, resultType));
+        _builder.EmitIf(
+            valid,
+            _ =>
+            {
+                CLeaf length =
+                    Const(0, StorageTypes.Int32);
+                if (bundleVal != null)
+                {
+                    var slotIndex =
+                        NdimArrayAbi
+                            .BuildRuntimeDimSlotIndex(
+                                _builder,
+                                SlotRef(dimension));
+                    length = NdimArrayAbi.ReadDimLength(
+                        _builder, bundleVal, slotIndex);
+                }
+                EmitAssign(
+                    result, emitResult(length));
+            },
+            _ => EmitExternVoid(
+                UdonAbi.DebugLogError,
+                new List<CLeaf>
+                {
+                    Const(
+                        $"USugar: dimension is outside "
+                        + $"rank-{ndimType.Rank} array.",
+                        StorageTypes.String)
+                }));
+        return SlotRef(result);
+    }
+
+    internal CLeaf EmitNdimGetValue(
+        CLeaf bundle,
+        IReadOnlyList<CLeaf> indexes,
+        IArrayTypeSymbol ndimType)
+    {
+        var elementType = GetStorageTypeName(
+            ndimType.ElementType);
+        var plan = PrepareNdimAccess(
+            bundle, indexes, ndimType);
+        CLeaf value = NdimArrayAbi.ReadFromPlan(
+            _builder, plan,
+            new StorageType(elementType),
+            new StorageType(GetArrayType(plan.BackingType)),
+            new StorageType(GetArrayElemType(plan.BackingType)),
+            "Array.GetValue", type =>
+                InvocationHandler.DefaultConst(
+                    _builder, new StorageType(type)));
+        if (ndimType.ElementType is INamedTypeSymbol aggregate
+            && _lowering.IsAggregateValue(aggregate))
+            value = AggregateAbi.DeepClone(
+                _builder, value, aggregate,
+                _state.Aggregates.GetLayout);
+        var boxed = _builder.AllocScratch(
+            StorageTypes.Object);
+        EmitAssign(boxed, value);
+        return SlotRef(boxed);
+    }
+
+    internal void EmitNdimSetValue(
+        CLeaf bundle,
+        CLeaf value,
+        IReadOnlyList<CLeaf> indexes,
+        IArrayTypeSymbol ndimType)
+    {
+        var plan = PrepareNdimAccess(
+            bundle, indexes, ndimType);
+        NdimArrayAbi.WriteFromPlan(
+            _builder, plan, value,
+            new StorageType(GetArrayType(plan.BackingType)),
+            new StorageType(GetArrayElemType(plan.BackingType)),
+            "Array.SetValue");
+    }
+
+    internal void EmitLinearCopy(
+        CLeaf source,
+        IArrayTypeSymbol sourceType,
+        CLeaf sourceIndex,
+        CLeaf destination,
+        IArrayTypeSymbol destinationType,
+        CLeaf destinationIndex,
+        CLeaf length)
+    {
+        var sourceLinear = LinearArray(
+            source, sourceType);
+        var destinationLinear = LinearArray(
+            destination, destinationType);
+        if (sourceLinear.ElementType
+                != destinationLinear.ElementType
+            && destinationLinear.ElementType
+                != StorageTypes.Object)
+            throw new System.NotSupportedException(
+                $"Array.Copy from '{sourceType}' to "
+                + $"'{destinationType}' requires element "
+                + "conversion, which the Udon array ABI "
+                + "cannot perform atomically.");
+
+        var sourceLength = ExternCall(
+            UdonAbi.SystemArrayLength,
+            new List<CLeaf>
+                { sourceLinear.Array },
+            StorageTypes.Int32);
+        var destinationLength = ExternCall(
+            UdonAbi.SystemArrayLength,
+            new List<CLeaf>
+                { destinationLinear.Array },
+            StorageTypes.Int32);
+        var sourceEnd = ExternCall(
+            UdonAbi.Int32Add,
+            new List<CLeaf>
+                { sourceIndex, length },
+            StorageTypes.Int32);
+        var destinationEnd = ExternCall(
+            UdonAbi.Int32Add,
+            new List<CLeaf>
+                { destinationIndex, length },
+            StorageTypes.Int32);
+
+        CLeaf NonNegative(CLeaf value)
+            => ExternCall(
+                UdonAbiKey.Method(
+                    "SystemInt32",
+                    "op_GreaterThanOrEqual",
+                    new[]
+                    {
+                        "SystemInt32",
+                        "SystemInt32"
+                    },
+                    "SystemBoolean"),
+                new List<CLeaf>
+                {
+                    value,
+                    Const(0, StorageTypes.Int32)
+                },
+                StorageTypes.Boolean);
+
+        CLeaf AtMost(CLeaf value, CLeaf maximum)
+            => ExternCall(
+                UdonAbiKey.Method(
+                    "SystemInt32",
+                    "op_LessThanOrEqual",
+                    new[]
+                    {
+                        "SystemInt32",
+                        "SystemInt32"
+                    },
+                    "SystemBoolean"),
+                new List<CLeaf> { value, maximum },
+                StorageTypes.Boolean);
+
+        CLeaf valid = NonNegative(sourceIndex);
+        foreach (var condition in new[]
+                 {
+                     NonNegative(destinationIndex),
+                     NonNegative(length),
+                     AtMost(sourceEnd, sourceLength),
+                     AtMost(destinationEnd,
+                         destinationLength)
+                 })
+            valid = ExternCall(
+                UdonAbi.BooleanConditionalAnd,
+                new List<CLeaf>
+                    { valid, condition },
+                StorageTypes.Boolean);
+
+        _builder.EmitIf(
+            valid,
+            _ =>
+            {
+                var temporary = ExternCall(
+                    UdonAbi.ArrayConstructor(
+                        sourceLinear.ArrayType.Name),
+                    new List<CLeaf> { length },
+                    sourceLinear.ArrayType);
+                var index = _builder.AllocScratch(
+                    StorageTypes.Int32);
+                _builder.EmitFor(
+                    __ => EmitAssign(
+                        index,
+                        Const(0, StorageTypes.Int32)),
+                    () => ExternCall(
+                        UdonAbi.Int32LessThan,
+                        new List<CLeaf>
+                        {
+                            SlotRef(index), length
+                        },
+                        StorageTypes.Boolean),
+                    __ => EmitAssign(
+                        index,
+                        ExternCall(
+                            UdonAbi.Int32Add,
+                            new List<CLeaf>
+                            {
+                                SlotRef(index),
+                                Const(
+                                    1,
+                                    StorageTypes.Int32)
+                            },
+                            StorageTypes.Int32)),
+                    __ =>
+                    {
+                        var readIndex = ExternCall(
+                            UdonAbi.Int32Add,
+                            new List<CLeaf>
+                            {
+                                sourceIndex,
+                                SlotRef(index)
+                            },
+                            StorageTypes.Int32);
+                        CLeaf item = ExternCall(
+                            UdonAbi.ArrayGet(
+                                sourceLinear.ArrayType.Name,
+                                sourceLinear.ElementType.Name),
+                            new List<CLeaf>
+                            {
+                                sourceLinear.Array,
+                                readIndex
+                            },
+                            sourceLinear.ElementType);
+                        if (sourceType.ElementType
+                                is INamedTypeSymbol aggregate
+                            && _lowering
+                                .IsAggregateValue(aggregate))
+                            item = AggregateAbi.DeepClone(
+                                _builder, item, aggregate,
+                                _state.Aggregates.GetLayout);
+                        EmitExternVoid(
+                            UdonAbi.ArraySet(
+                                sourceLinear.ArrayType.Name,
+                                sourceLinear.ElementType.Name),
+                            new List<CLeaf>
+                            {
+                                temporary,
+                                SlotRef(index), item
+                            });
+                    });
+                _builder.EmitFor(
+                    __ => EmitAssign(
+                        index,
+                        Const(0, StorageTypes.Int32)),
+                    () => ExternCall(
+                        UdonAbi.Int32LessThan,
+                        new List<CLeaf>
+                        {
+                            SlotRef(index), length
+                        },
+                        StorageTypes.Boolean),
+                    __ => EmitAssign(
+                        index,
+                        ExternCall(
+                            UdonAbi.Int32Add,
+                            new List<CLeaf>
+                            {
+                                SlotRef(index),
+                                Const(
+                                    1,
+                                    StorageTypes.Int32)
+                            },
+                            StorageTypes.Int32)),
+                    __ =>
+                    {
+                        var writeIndex = ExternCall(
+                            UdonAbi.Int32Add,
+                            new List<CLeaf>
+                            {
+                                destinationIndex,
+                                SlotRef(index)
+                            },
+                            StorageTypes.Int32);
+                        var item = ExternCall(
+                            UdonAbi.ArrayGet(
+                                sourceLinear.ArrayType.Name,
+                                sourceLinear.ElementType.Name),
+                            new List<CLeaf>
+                            {
+                                temporary,
+                                SlotRef(index)
+                            },
+                            sourceLinear.ElementType);
+                        EmitExternVoid(
+                            UdonAbi.ArraySet(
+                                destinationLinear.ArrayType.Name,
+                                destinationLinear
+                                    .ElementType.Name),
+                            new List<CLeaf>
+                            {
+                                destinationLinear.Array,
+                                writeIndex, item
+                            });
+                    });
+            },
+            _ => EmitExternVoid(
+                UdonAbi.DebugLogError,
+                new List<CLeaf>
+                {
+                    Const(
+                        "USugar: Array.Copy range is "
+                        + "outside the logical array.",
+                        StorageTypes.String)
+                }));
+    }
+
+    (CLeaf Array, StorageType ArrayType,
+        StorageType ElementType) LinearArray(
+        CLeaf value, IArrayTypeSymbol type)
+    {
+        var linearType = NdimArrayAbi.IsNdimArray(type)
+            ? NdimArrayAbi.BackingType(
+                _compilation, type)
+            : type;
+        var arrayStorage = new StorageType(
+            GetArrayType(linearType));
+        var elementStorage = new StorageType(
+            GetArrayElemType(linearType));
+        return (
+            NdimArrayAbi.IsNdimArray(type)
+                ? EmitNdimGetBacking(
+                    value, linearType)
+                : value,
+            arrayStorage, elementStorage);
+    }
+
+    internal CLeaf EmitNdimClone(
+        CLeaf bundle,
+        IArrayTypeSymbol ndimType)
+    {
+        var rank = ndimType.Rank;
+        var backingType =
+            NdimArrayAbi.BackingType(_compilation, ndimType);
+        var backingStorage = new StorageType(
+            GetArrayType(backingType));
+        var elementStorage = new StorageType(
+            GetArrayElemType(backingType));
+        var source = EmitNdimGetBacking(
+            bundle, backingType);
+        var length = ExternCall(
+            UdonAbi.SystemArrayLength,
+            new List<CLeaf> { source },
+            StorageTypes.Int32);
+        var destination = ExternCall(
+            UdonAbi.ArrayConstructor(backingStorage.Name),
+            new List<CLeaf> { length }, backingStorage);
+        var index = _builder.AllocScratch(
+            StorageTypes.Int32);
+        _builder.EmitFor(
+            _ => EmitAssign(
+                index, Const(0, StorageTypes.Int32)),
+            () => ExternCall(
+                UdonAbi.Int32LessThan,
+                new List<CLeaf>
+                {
+                    SlotRef(index), length
+                },
+                StorageTypes.Boolean),
+            _ => EmitAssign(
+                index,
+                ExternCall(
+                    UdonAbi.Int32Add,
+                    new List<CLeaf>
+                    {
+                        SlotRef(index),
+                        Const(1, StorageTypes.Int32)
+                    },
+                    StorageTypes.Int32)),
+            _ =>
+            {
+                CLeaf value = ExternCall(
+                    UdonAbi.ArrayGet(
+                        backingStorage.Name,
+                        elementStorage.Name),
+                    new List<CLeaf>
+                    {
+                        source, SlotRef(index)
+                    },
+                    elementStorage);
+                if (ndimType.ElementType
+                    is INamedTypeSymbol aggregate
+                    && _lowering.IsAggregateValue(aggregate))
+                    value = AggregateAbi.DeepClone(
+                        _builder, value, aggregate,
+                        _state.Aggregates.GetLayout);
+                EmitExternVoid(
+                    UdonAbi.ArraySet(
+                        backingStorage.Name,
+                        elementStorage.Name),
+                    new List<CLeaf>
+                    {
+                        destination, SlotRef(index), value
+                    });
+            });
+
+        var dimSlots = new int[rank];
+        for (var dimension = 0;
+             dimension < rank;
+             dimension++)
+        {
+            dimSlots[dimension] = _builder.AllocScratch(
+                StorageTypes.Int32);
+            EmitAssign(
+                dimSlots[dimension],
+                NdimArrayAbi.ReadDimLength(
+                    _builder, bundle,
+                    Const(
+                        NdimArrayAbi.DimSlotIndex(dimension),
+                        StorageTypes.Int32)));
+        }
+        var backingSlot = _builder.AllocScratch(
+            backingStorage);
+        EmitAssign(backingSlot, destination);
+        var cloneSlot = _builder.AllocScratch(
+            StorageTypes.ObjectArray);
+        NdimArrayAbi.MintBundleToSlot(
+            _builder, cloneSlot, backingSlot, dimSlots,
+            BundleAbi.RuntimeTypeId(ndimType));
+        return SlotRef(cloneSlot);
     }
 
     /// <summary>N-R4: every OTHER Array instance member (Clone/CopyTo/SetValue/GetValue/Equals/…) is a

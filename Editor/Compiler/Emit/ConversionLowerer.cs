@@ -26,14 +26,12 @@ internal readonly struct ClosedConversionPlan
     public readonly ClosedConversionKind Kind;
     public readonly ITypeSymbol SourceType;
     public readonly IMethodSymbol OperatorMethod;
-    public readonly bool AllowsProgramLocalClassErasure;
     public readonly string DelegateWrapperName;
 
     public ClosedConversionPlan(
         ClosedConversionKind kind,
         ITypeSymbol sourceType,
         IMethodSymbol operatorMethod = null,
-        bool allowsProgramLocalClassErasure = false,
         string delegateWrapperName = null)
     {
         if (delegateWrapperName != null
@@ -44,8 +42,6 @@ internal readonly struct ClosedConversionPlan
         Kind = kind;
         SourceType = sourceType;
         OperatorMethod = operatorMethod;
-        AllowsProgramLocalClassErasure =
-            allowsProgramLocalClassErasure;
         DelegateWrapperName = delegateWrapperName;
     }
 }
@@ -106,9 +102,6 @@ internal sealed class ConversionSemanticPlanner
 
         var semanticSource = _lowering.ResolveType(conversion.Operand.Type);
         var closedDestination = _lowering.ResolveType(conversion.Type);
-        var allowsProgramLocalClassErasure =
-            _lowering.State.Boundary.IsProvablyLocalClassErasure(
-                conversion, semanticSource, closedDestination);
         if (DelegateDemandPolicy.TryGetVariantConversion(
                 _lowering.Compilation,
                 conversion,
@@ -119,8 +112,6 @@ internal sealed class ConversionSemanticPlanner
             return new ClosedConversionPlan(
                 ClosedConversionKind.None,
                 semanticSource,
-                allowsProgramLocalClassErasure:
-                    allowsProgramLocalClassErasure,
                 delegateWrapperName: _lowering.PlanWrapperSig(
                     outerInvoke,
                     innerInvoke,
@@ -135,9 +126,7 @@ internal sealed class ConversionSemanticPlanner
                 is INamedTypeSymbol { DelegateInvokeMethod: not null })
             return new ClosedConversionPlan(
                 ClosedConversionKind.None,
-                semanticSource,
-                allowsProgramLocalClassErasure:
-                    allowsProgramLocalClassErasure);
+                semanticSource);
 
         var carrier = FindCarrier(conversion.Operand);
         var effectiveSource = _lowering.ResolveType(
@@ -147,9 +136,7 @@ internal sealed class ConversionSemanticPlanner
         if (_lowering.GetStorageTypeName(effectiveSource)
             == destinationStorage)
             return new ClosedConversionPlan(
-                ClosedConversionKind.Identity, effectiveSource,
-                allowsProgramLocalClassErasure:
-                    allowsProgramLocalClassErasure);
+                ClosedConversionKind.Identity, effectiveSource);
 
         var classified = _compilation.ClassifyConversion(
             effectiveSource, closedDestination);
@@ -157,32 +144,23 @@ internal sealed class ConversionSemanticPlanner
             return new ClosedConversionPlan(
                 ClosedConversionKind.UserOperator,
                 effectiveSource,
-                _lowering.CloseMethodForPlanning(method),
-                allowsProgramLocalClassErasure);
+                _lowering.CloseMethodForPlanning(method));
         if (classified.IsEnumeration)
             return new ClosedConversionPlan(
-                ClosedConversionKind.Enumeration, effectiveSource,
-                allowsProgramLocalClassErasure:
-                    allowsProgramLocalClassErasure);
+                ClosedConversionKind.Enumeration, effectiveSource);
 
         if (ExternResolver.IsConvertibleNumericType(closedDestination))
         {
             if (effectiveSource.SpecialType == SpecialType.System_Object)
                 return new ClosedConversionPlan(
-                    ClosedConversionKind.ObjectNumeric, effectiveSource,
-                    allowsProgramLocalClassErasure:
-                        allowsProgramLocalClassErasure);
+                    ClosedConversionKind.ObjectNumeric, effectiveSource);
             if (ExternResolver.IsConvertibleNumericType(effectiveSource))
                 return new ClosedConversionPlan(
-                    ClosedConversionKind.Numeric, effectiveSource,
-                    allowsProgramLocalClassErasure:
-                        allowsProgramLocalClassErasure);
+                    ClosedConversionKind.Numeric, effectiveSource);
         }
 
         return new ClosedConversionPlan(
-            ClosedConversionKind.Representation, effectiveSource,
-            allowsProgramLocalClassErasure:
-                allowsProgramLocalClassErasure);
+            ClosedConversionKind.Representation, effectiveSource);
     }
 
     IOperation FindCarrier(IOperation operation)

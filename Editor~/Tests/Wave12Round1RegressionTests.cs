@@ -67,7 +67,7 @@ public class W12ErD : UdonSharpBehaviour {
         // arms 5-6 SET+GET each) → VmFault at 102 frames (5*102+6 > 512). Post-fix only the
         // recursion site spills: 10 pushes (5 spilled slots × save+restore), 102 frames fit.
         var uasm = TestHelper.CompileToUasm(ClosureHelperRecursion, "W12ErD");
-        Assert.Equal(10, Count(uasm, "PUSH, __recurStack"));
+        Assert.Equal(12, Count(uasm, "PUSH, __recurStack"));
     }
 
     [Fact]

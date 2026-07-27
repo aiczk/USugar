@@ -29,6 +29,8 @@ internal static class CoreFlatOptimizer
 
     const string RecurStackId = RecurStack.StackId;
     const string RecurSpId = RecurStack.SpId;
+    const string RecurEnsureFunction = "__recurEnsure";
+    const string RecurEnsureNeed = "__recurEnsureNeed";
 
     /// <summary>
     /// Wrap each recursive-edge internal call with a software-stack spill/reload of the frame values it would
@@ -40,8 +42,144 @@ internal static class CoreFlatOptimizer
     public static void InsertRecursionSpills(FlatModule module)
     {
         var abi = module.RequireAbi();
-        foreach (var func in module.Functions)
+        var spillFunctions = module.Functions
+            .Where(func => func.RecursiveCalleeNames.Count != 0
+                           || func.ReentrantSiteCount != 0)
+            .ToArray();
+        if (spillFunctions.Length == 0) return;
+        EmitRecursionCapacityFunction(module);
+        foreach (var func in spillFunctions)
             InsertRecursionSpillsFunc(func, abi);
+    }
+
+    static void EmitRecursionCapacityFunction(FlatModule module)
+    {
+        if (!module.Fields.Any(field =>
+                string.Equals(
+                    field.Name, RecurEnsureNeed,
+                    StringComparison.Ordinal)))
+            module.AddField(new FieldDecl(
+                RecurEnsureNeed, StorageTypes.Int32,
+                StorageDomain.Generated)
+            {
+                DefaultValue = 0
+            });
+
+        var builder = new CoreBuilder(module);
+        var function = builder.BeginFunction(RecurEnsureFunction);
+        function.ParamFieldNames.Add(RecurEnsureNeed);
+
+        var stack = builder.LoadField(
+            RecurStackId, StorageTypes.ObjectArray);
+        var length = builder.ExternCall(
+            UdonAbi.SystemArrayLength,
+            new List<CLeaf> { stack },
+            StorageTypes.Int32);
+        var sp = builder.LoadField(
+            RecurSpId, StorageTypes.Int32);
+        var need = builder.LoadField(
+            RecurEnsureNeed, StorageTypes.Int32);
+        var required = builder.ExternCall(
+            UdonAbi.Int32Add,
+            new List<CLeaf> { sp, need },
+            StorageTypes.Int32);
+        var grow = builder.ExternCall(
+            UdonAbi.Int32LessThan,
+            new List<CLeaf> { length, required },
+            StorageTypes.Boolean);
+
+        builder.EmitIf(grow, _ =>
+        {
+            var capacitySlot = builder.AllocScratch(
+                StorageTypes.Int32);
+            builder.EmitAssign(capacitySlot,
+                builder.ExternCall(
+                    UdonAbi.Int32Multiply,
+                    new List<CLeaf>
+                    {
+                        length,
+                        builder.Const(2, StorageTypes.Int32)
+                    },
+                    StorageTypes.Int32));
+            builder.EmitWhile(
+                () => builder.ExternCall(
+                    UdonAbi.Int32LessThan,
+                    new List<CLeaf>
+                    {
+                        builder.SlotRef(capacitySlot),
+                        required
+                    },
+                    StorageTypes.Boolean),
+                _ => builder.EmitAssign(
+                    capacitySlot,
+                    builder.ExternCall(
+                        UdonAbi.Int32Multiply,
+                        new List<CLeaf>
+                        {
+                            builder.SlotRef(capacitySlot),
+                            builder.Const(2, StorageTypes.Int32)
+                        },
+                        StorageTypes.Int32)));
+
+            var nextStack = builder.ExternCall(
+                UdonAbi.ArrayConstructor("SystemObjectArray"),
+                new List<CLeaf>
+                {
+                    builder.SlotRef(capacitySlot)
+                },
+                StorageTypes.ObjectArray);
+            var indexSlot = builder.AllocScratch(
+                StorageTypes.Int32);
+            builder.EmitFor(
+                _ => builder.EmitAssign(
+                    indexSlot,
+                    builder.Const(0, StorageTypes.Int32)),
+                () => builder.ExternCall(
+                    UdonAbi.Int32LessThan,
+                    new List<CLeaf>
+                    {
+                        builder.SlotRef(indexSlot),
+                        length
+                    },
+                    StorageTypes.Boolean),
+                _ => builder.EmitAssign(
+                    indexSlot,
+                    builder.ExternCall(
+                        UdonAbi.Int32Add,
+                        new List<CLeaf>
+                        {
+                            builder.SlotRef(indexSlot),
+                            builder.Const(1, StorageTypes.Int32)
+                        },
+                        StorageTypes.Int32)),
+                _ =>
+                {
+                    var value = builder.ExternCall(
+                        UdonAbi.ArrayGet(
+                            "SystemObjectArray",
+                            "SystemObject"),
+                        new List<CLeaf>
+                        {
+                            stack,
+                            builder.SlotRef(indexSlot)
+                        },
+                        StorageTypes.Object);
+                    builder.EmitExternVoid(
+                        UdonAbi.ArraySet(
+                            "SystemObjectArray",
+                            "SystemObject"),
+                        new List<CLeaf>
+                        {
+                            nextStack,
+                            builder.SlotRef(indexSlot),
+                            value
+                        });
+                });
+            builder.EmitStoreField(
+                RecurStackId, nextStack);
+        });
+        builder.EmitReturn();
+        builder.Complete();
     }
 
     // Wave-9 round-5 [X4]: spill-temp coalesce trigger. Spill/reload wraps allocate ~10 fresh
@@ -100,15 +238,25 @@ internal static class CoreFlatOptimizer
                     if (preWindow > 0)
                     {
                         var saveStmts = new List<IFlatInstruction>();
+                        EmitEnsureCapacity(
+                            saveStmts,
+                            func.RecursionSpillFields.Count
+                            + liveSlots.Count);
                         EmitSpill(
                             func, saveStmts,
                             func.RecursionSpillFields, liveSlots, abi);
                         newStmts.InsertRange(Math.Max(newStmts.Count - preWindow, 0), saveStmts);
                     }
                     else
+                    {
+                        EmitEnsureCapacity(
+                            newStmts,
+                            func.RecursionSpillFields.Count
+                            + liveSlots.Count);
                         EmitSpill(
                             func, newStmts,
                             func.RecursionSpillFields, liveSlots, abi);
+                    }
                     newStmts.Add(inst);
                     EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots, abi);
                 }
@@ -259,6 +407,19 @@ internal static class CoreFlatOptimizer
         }
         foreach (var slot in slots)
             SpillValue(func, output, new CSlotRef(slot.Id, slot.Type), abi);
+    }
+
+    static void EmitEnsureCapacity(
+        List<IFlatInstruction> output,
+        int frameSize)
+    {
+        output.Add(new CExprStmt(new CInternalCall(
+            RecurEnsureFunction,
+            new List<CLeaf>
+            {
+                new CConst(frameSize, StorageTypes.Int32)
+            },
+            StorageTypes.Void)));
     }
 
     static void EmitReload(FlatFunction func, List<IFlatInstruction> output,

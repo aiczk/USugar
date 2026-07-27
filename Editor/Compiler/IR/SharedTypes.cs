@@ -285,7 +285,7 @@ public static class RecurStack
 {
     public const string StackId = "__recurStack";
     public const string SpId = "__recurSp";
-    public const int Size = 8192;
+    public const int Size = 64;
 }
 
 /// <summary>One intentional storage-mismatched COPY retained as typed codegen provenance.</summary>

@@ -234,6 +234,7 @@ internal sealed class OperationLowerer
                 or OperationKind.InterpolatedString
                 or OperationKind.TypeParameterObjectCreation
                 or OperationKind.AnonymousObjectCreation
+                or OperationKind.With
                 => InvocationRoute,
             OperationKind.ArrayCreation
                 or OperationKind.ArrayElementReference

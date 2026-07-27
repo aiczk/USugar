@@ -222,12 +222,6 @@ public sealed class UasmEmitter
 
     public string Emit()
     {
-        // Record types cannot work in Udon: no heap allocation for user types, no inheritance from UdonSharpBehaviour
-        if (_classSymbol.IsRecord)
-            throw new NotSupportedException(
-                $"Record type '{_classSymbol.Name}' is not supported in UdonSharp. " +
-                "Udon VM cannot allocate user-defined types. Use a regular class inheriting from UdonSharpBehaviour instead.");
-
         var fields = DiscoverFields();
         var fieldInitializers =
             fields.InitializerOperations.ToArray();
@@ -1034,7 +1028,6 @@ public sealed class UasmEmitter
                 $"[NetworkCallable] delegate '{member.Name}' is not supported: NetworkCallable marks a "
                 + "method as a remotely-invokable entry point, which does not apply to a delegate value.");
         // §3.4-1: ref/out delegate signatures are rejected at the convention-var declaration side too.
-        DelegateAbi.ValidateNoRefOutParams(delegateType.DelegateInvokeMethod);
         _state.Boundary.RequireCanDeclareDelegateSurface(member, delegateType);
 
         _fieldDiscovery.DeclareField(storageName, StorageTypes.ObjectArray, FieldFlags.None);
@@ -1193,6 +1186,8 @@ public sealed class UasmEmitter
         var ownGenerics = _classSymbol.GetMembers().OfType<IMethodSymbol>().Where(IsOwnGenericSeed);
 
         var defaultInterfaceMethods = _classSymbol.AllInterfaces
+            .Where(iface =>
+                _planner.AllLayouts.ContainsKey(iface))
             .SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
             .Where(method => !method.IsAbstract
                 && SymbolEqualityComparer.Default.Equals(
@@ -1201,7 +1196,10 @@ public sealed class UasmEmitter
         _userClassDefaultMethods = new HashSet<IMethodSymbol>(
             _planner.Census.Classes
                 .Where(type => IsUserClass(type))
-                .SelectMany(type => type.AllInterfaces.SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
+                .SelectMany(type => type.AllInterfaces
+                    .Where(iface =>
+                        _planner.AllLayouts.ContainsKey(iface))
+                    .SelectMany(iface => _planner.GetLayout(iface).Methods.Keys)
                     .Where(method => !method.IsAbstract
                         && SymbolEqualityComparer.Default.Equals(
                             type.FindImplementationForInterfaceMember(method), method))),
@@ -1281,6 +1279,7 @@ public sealed class UasmEmitter
         var program = new BoundProgram(
             callables,
             callableBodies,
+            _state.Methods.IteratorPlans,
             fields,
             closureIdentities,
             captures,
@@ -1685,7 +1684,6 @@ public sealed class UasmEmitter
         _state.Methods.NextMethodIndex = 0;
         foreach (var method in methods)
         {
-            EmitPolicy.RejectInParameters(method); // round-7 follow-up [Q3], declaration-side
             EmitPolicy.RejectNetworkCallableDelegates(
                 method, _state.Types); // M4 [T1], declaration-side
             EmitPolicy.RejectPublicProgramLocalDelegateSignature(
@@ -1754,7 +1752,6 @@ public sealed class UasmEmitter
         var foreignStatics = callables.ForeignStatics;
         foreach (var fm in foreignStatics)
         {
-            EmitPolicy.RejectInParameters(fm); // round-7 follow-up [Q3]
 
             // B70 root 1 (A14/A15): a static method on a CLOSED generic struct (GS14<bool>.Run) is registered
             // here, but this loop — unlike the struct-instance and base-instance loops — never seeded
@@ -1769,7 +1766,6 @@ public sealed class UasmEmitter
         // structMethods was collected above (before the foreign-static scan, which it also seeds).
         foreach (var sm in structMethods)
         {
-            EmitPolicy.RejectInParameters(sm); // round-7 follow-up [Q3]
 
             // Feature G: a member of a CONSTRUCTED generic struct (Box<int>.Get(), Box<int>(x), a
             // generic struct's operator, etc.) gets its own per-spec body — the containing-type
@@ -1801,7 +1797,6 @@ public sealed class UasmEmitter
         // Register base class instance copies (collected above, before the [X5] collector seeds).
         foreach (var bm in baseInstanceMethods)
         {
-            EmitPolicy.RejectInParameters(bm); // round-7 follow-up [Q3]
             // Wave-9 round-8 [Y10]: an INHERITED generic method's call-site-constructed copy is the
             // de-facto specialization this path emits (EmitMethod sets the type-param map from it),
             // but it bypassed RegisterGenericSpecialization — so FirstGenericSpec never learned it
@@ -1899,6 +1894,8 @@ public sealed class UasmEmitter
             if (body.Callable.IsDeferredBody)
                 EmitMethod(body);
 
+        EmitIteratorResumes(plan);
+
         _state.VerifySyntheticEmissionComplete();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
@@ -1929,6 +1926,136 @@ public sealed class UasmEmitter
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         RecursionAnalysis.VerifyBridgeTargetsAreNodes();
+    }
+
+    void EmitIteratorResumes(BoundProgram program)
+    {
+        foreach (var iterator in program.IteratorPlans)
+        {
+            var body = program.CallableBodies.First(candidate =>
+                ReferenceEquals(
+                    candidate.Callable,
+                    iterator.Factory));
+            var method = body.Method;
+            var boundBody = program.MethodBodies.Require(
+                method.OriginalDefinition);
+            var function = _module.RequireFunction(
+                iterator.ResumeName);
+            _builder.SetFunction(function);
+
+            using var methodScope =
+                _state.Methods.EnterCallableScope(
+                    method,
+                    body.Closure,
+                    iterator.FrameReceiverId,
+                    body.OwnerSpecs);
+            using var bindingScope =
+                _state.EnterBindingScope(
+                    body.BindingScope);
+            using var typeScope =
+                body.TypeParameterMap != null
+                    ? _state.EnterTypeParamScope(
+                        body.TypeParameterMap)
+                    : null;
+
+            var states = boundBody.Root
+                .DescendantsAndSelf()
+                .OfType<IReturnOperation>()
+                .Where(operation =>
+                    operation.Kind
+                    == OperationKind.YieldReturn)
+                .Select((operation, index) =>
+                    (operation.Syntax, State: index + 1))
+                .ToDictionary(
+                    pair => pair.Syntax,
+                    pair => pair.State);
+
+            if (_state.CurrentIteratorPlan != null)
+                throw new InvalidOperationException(
+                    "Iterator resume emission was nested.");
+            _state.CurrentIteratorPlan = iterator;
+            _state.CurrentIteratorStates = states;
+            _state.CurrentIteratorBundle = _bridge.Load(
+                iterator.BundleParamId,
+                StorageTypes.ObjectArray);
+            try
+            {
+                _lowering.EmitIteratorEntryDispatch(
+                    iterator, states);
+
+                CaptureScope entryScope = null;
+                if (_state.Captures != null)
+                {
+                    if (IsHoistedClosureMethod(method))
+                        _state.Captures.ClosureScopes.TryGetValue(
+                            method.OriginalDefinition,
+                            out entryScope);
+                    else
+                        entryScope = _state.Captures.ScopeFor(
+                            boundBody.Root,
+                            CaptureScopeKind.MethodEntry);
+                }
+                EnvEmit.Alloc(
+                    _builder, _state, entryScope);
+
+                if (_state.Captures != null)
+                    foreach (var parameter in method.Parameters)
+                        if (parameter.Ordinal
+                                < iterator.FrameParamIds.Length
+                            && _state.TryGetEnvBinding(
+                                parameter, out _))
+                            EnvEmit.Write(
+                                _builder, _state, parameter,
+                                _bridge.Load(
+                                    iterator.FrameParamIds[
+                                        parameter.Ordinal],
+                                    GetStorageType(
+                                        parameter.Type)));
+
+                if (_state.Captures != null
+                    && iterator.FrameReceiverId != null
+                    && LambdaCaptureAnalyzer
+                        .ReceiverCaptureKey(method)
+                        is { } receiverKey
+                    && _state.TryGetEnvBinding(
+                        receiverKey, out _))
+                    EnvEmit.Write(
+                        _builder, _state, receiverKey,
+                        _bridge.Load(
+                            iterator.FrameReceiverId,
+                            StorageTypes.ObjectArray));
+
+                if (boundBody.Root
+                    is IMethodBodyOperation methodBody)
+                {
+                    if (methodBody.BlockBody != null)
+                        _operations.VisitOperation(
+                            methodBody.BlockBody);
+                    else if (methodBody.ExpressionBody != null)
+                        _operations.VisitOperation(
+                            methodBody.ExpressionBody);
+                }
+                else if (boundBody.Root
+                         is ILocalFunctionOperation localFunction)
+                {
+                    if (localFunction.Body != null)
+                        _operations.VisitOperation(
+                            localFunction.Body);
+                }
+                else
+                    throw new NotSupportedException(
+                        $"Iterator body '{boundBody.Root.Kind}' "
+                        + "is not a method or local function.");
+
+                _lowering.EmitIteratorComplete();
+            }
+            finally
+            {
+                _state.CurrentIteratorBundle = null;
+                _state.CurrentIteratorStates = null;
+                _state.CurrentIteratorPlan = null;
+            }
+        }
     }
 
     static string SanitizeId(string name) => NameAllocator.Sanitize(name);
@@ -1990,6 +2117,20 @@ public sealed class UasmEmitter
 
         // Registration owns the complete specialization environment. Emission only installs it.
         var typeMap = body.TypeParameterMap;
+
+        var iteratorFactory = _state.Program.IteratorPlans
+            .FirstOrDefault(plan =>
+                ReferenceEquals(plan.Factory, callable));
+        if (iteratorFactory != null)
+        {
+            using var iteratorTypeScope = typeMap != null
+                ? _state.EnterTypeParamScope(typeMap)
+                : null;
+            _builder.EmitReturn(
+                _lowering.EmitIteratorFactory(
+                    iteratorFactory));
+            return;
+        }
 
         // Get method body IOperation
         var boundBody = _state.Program.MethodBodies.Require(

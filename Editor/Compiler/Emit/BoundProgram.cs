@@ -15,6 +15,8 @@ internal sealed class BoundProgram
     public readonly CallableDefinitionPlan Callables;
     public readonly IReadOnlyList<
         MethodContext.RegisteredCallableBody> CallableBodies;
+    public readonly IReadOnlyList<
+        MethodContext.IteratorPlan> IteratorPlans;
     readonly IReadOnlyDictionary<
         IMethodSymbol,
         MethodContext.RegisteredCallable> _callableRegistry;
@@ -55,6 +57,7 @@ internal sealed class BoundProgram
         CallableDefinitionPlan callables,
         IEnumerable<
             MethodContext.RegisteredCallableBody> callableBodies,
+        IEnumerable<MethodContext.IteratorPlan> iteratorPlans,
         FieldDiscoveryPlan fields,
         ClosureIdentityPlan closureIdentities,
         CaptureScopeAnalysis captures,
@@ -89,6 +92,10 @@ internal sealed class BoundProgram
             ?? throw new ArgumentNullException(nameof(callableBodies)))
             .ToArray();
         CallableBodies = Array.AsReadOnly(bodyArray);
+        IteratorPlans = Array.AsReadOnly((
+            iteratorPlans
+            ?? throw new ArgumentNullException(nameof(iteratorPlans)))
+            .ToArray());
         var callableRegistry = new Dictionary<
             IMethodSymbol,
             MethodContext.RegisteredCallable>(

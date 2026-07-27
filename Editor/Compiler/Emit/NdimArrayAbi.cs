@@ -5,20 +5,30 @@ using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// ABI for rank-2+ CLR arrays. A logical T[d0,...,dn] is represented as a SystemObjectArray bundle:
-/// slot 0 is the rank-1 typed backing array, slots 1..rank are boxed dimension lengths.
+/// slot 0 is the common runtime type identity, slot 1 is the rank-1 typed backing array,
+/// and slots 2..rank+1 are boxed dimension lengths.
 /// </summary>
 public static class NdimArrayAbi
 {
     public enum PropertyKind
     {
         Length,
+        LongLength,
         Rank
     }
 
     public enum MethodKind
     {
+        Clone,
+        CopyTo,
+        GetValue,
+        SetValue,
         GetLength,
-        GetUpperBound
+        GetLongLength,
+        GetLowerBound,
+        GetUpperBound,
+        Copy,
+        ConstrainedCopy
     }
 
     public readonly struct AccessPlan
@@ -43,16 +53,18 @@ public static class NdimArrayAbi
 
     public const string BundleUdonType = "SystemObjectArray";
     public const string BoxedElementUdonType = "SystemObject";
-    public const int BackingSlotIndex = 0;
+    public const int BackingSlotIndex = BundleAbi.HeaderSize;
 
     public static bool IsNdimArray(ITypeSymbol type) => type is IArrayTypeSymbol { Rank: > 1 };
 
     public static IArrayTypeSymbol BackingType(Compilation compilation, IArrayTypeSymbol ndimType)
         => (IArrayTypeSymbol)compilation.CreateArrayTypeSymbol(ndimType.ElementType, 1);
 
-    public static int BundleLength(int rank) => 1 + rank;
+    public static int BundleLength(int rank)
+        => BundleAbi.HeaderSize + 1 + rank;
 
-    public static int DimSlotIndex(int dim) => 1 + dim;
+    public static int DimSlotIndex(int dim)
+        => BundleAbi.HeaderSize + 1 + dim;
 
     public static UdonAbiKey BundleConstructorKey() => UdonAbi.ArrayConstructor(BundleUdonType);
 
@@ -101,11 +113,22 @@ public static class NdimArrayAbi
             _ => EmitBoundsLogError(builder, arrayExprSyntax, "write", plan));
     }
 
-    public static void MintBundleToSlot(CoreBuilder builder, int bundleSlot, int backingSlot, int[] dimSlots)
+    public static void MintBundleToSlot(
+        CoreBuilder builder, int bundleSlot, int backingSlot,
+        int[] dimSlots, string runtimeTypeId)
     {
+        if (runtimeTypeId == null)
+            throw new ArgumentNullException(nameof(runtimeTypeId));
         builder.EmitAssign(bundleSlot, builder.ExternCall(BundleConstructorKey(),
             new List<CLeaf> { builder.Const(BundleLength(dimSlots.Length), StorageTypes.Int32) }, new StorageType(BundleUdonType)));
         var bundle = builder.SlotRef(bundleSlot);
+        builder.EmitExternVoid(BundleSetKey(),
+            new List<CLeaf>
+            {
+                bundle,
+                builder.Const(BundleAbi.Type, StorageTypes.Int32),
+                builder.Const(runtimeTypeId, StorageTypes.String)
+            });
         builder.EmitExternVoid(BundleSetKey(),
             new List<CLeaf> { bundle, builder.Const(BackingSlotIndex, StorageTypes.Int32), builder.SlotRef(backingSlot) });
         for (int d = 0; d < dimSlots.Length; d++)
@@ -207,6 +230,9 @@ public static class NdimArrayAbi
             case "Length":
                 kind = PropertyKind.Length;
                 return true;
+            case "LongLength":
+                kind = PropertyKind.LongLength;
+                return true;
             case "Rank":
                 kind = PropertyKind.Rank;
                 return true;
@@ -220,11 +246,35 @@ public static class NdimArrayAbi
     {
         switch (memberName)
         {
+            case "Clone":
+                kind = MethodKind.Clone;
+                return true;
+            case "CopyTo":
+                kind = MethodKind.CopyTo;
+                return true;
+            case "GetValue":
+                kind = MethodKind.GetValue;
+                return true;
+            case "SetValue":
+                kind = MethodKind.SetValue;
+                return true;
             case "GetLength":
                 kind = MethodKind.GetLength;
                 return true;
+            case "GetLongLength":
+                kind = MethodKind.GetLongLength;
+                return true;
+            case "GetLowerBound":
+                kind = MethodKind.GetLowerBound;
+                return true;
             case "GetUpperBound":
                 kind = MethodKind.GetUpperBound;
+                return true;
+            case "Copy":
+                kind = MethodKind.Copy;
+                return true;
+            case "ConstrainedCopy":
+                kind = MethodKind.ConstrainedCopy;
                 return true;
             default:
                 kind = default;
@@ -237,5 +287,5 @@ public static class NdimArrayAbi
             $"'{memberName}' is not supported on a multi-dimensional array (T[,], ...): its runtime value "
             + "is an object[] bundle (flat backing + dimension lengths), so a generic Array member would "
             + "operate on the bundle wrapper instead of the logical array (e.g. Clone would alias the "
-            + "backing rather than copy it). Only Length, GetLength, Rank, and GetUpperBound are supported.");
+            + "backing rather than the logical array.");
 }

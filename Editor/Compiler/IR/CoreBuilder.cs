@@ -428,10 +428,13 @@ public sealed class CoreBuilder
     }
 
     public CSlotRef InternalCall(string functionName, List<CLeaf> arguments,
-        StorageType returnType, bool tailSpared = false)
+        StorageType returnType, bool tailSpared = false,
+        bool reentrant = false)
     {
         var call = new CInternalCall(
-            functionName, arguments, returnType, tailSpared: tailSpared);
+            functionName, arguments, returnType,
+            reentrant: reentrant,
+            tailSpared: tailSpared);
         if (returnType == StorageTypes.Void)
         {
             EmitCall(call);

@@ -24,7 +24,6 @@ public sealed class ReceiverBridgeEmitter
         {
             var member = demand.Binding.TargetMethod;
             var bridgeName = demand.Binding.BridgeName;
-            DelegateAbi.ValidateNoRefOutParams(member);
             if (member.ContainingType?.TypeKind == TypeKind.Interface)
                 EmitInterfaceBody(bridgeName, member);
             else
@@ -75,6 +74,9 @@ public sealed class ReceiverBridgeEmitter
                     builder.EmitAssign(matched, builder.Const(true, StorageTypes.Boolean));
                     var result = builder.InternalCall(_context.Methods.Functions[target.Impl].Name,
                         arguments, targetReturnType);
+                    _bridge.CopyRefParameters(
+                        _context, member,
+                        _context.Methods.Functions[target.Impl]);
                     if (!_bridge.StoreReturn(plan, result)) builder.EmitExprStmt(result);
                 });
             }
@@ -128,6 +130,8 @@ public sealed class ReceiverBridgeEmitter
             _ =>
             {
                 var result = _bridge.Dispatch(plan, arguments);
+                _bridge.CopyRefParameters(
+                    _context, member, targetFunction);
                 _bridge.StoreReturn(plan, result);
             },
             _ =>

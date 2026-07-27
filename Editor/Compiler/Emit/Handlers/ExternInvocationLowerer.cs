@@ -31,7 +31,8 @@ internal sealed class ExternInvocationLowerer
         // intrinsic registry; reject every remaining alias-producing member.
         RejectUnsafeAggregateArrayExtern(op, target);
         if (!target.IsStatic && op.Instance?.Type != null)
-            _lowering.State.Boundary.RequireCanPassExternArgument(op.Instance.Type,
+            _lowering.State.Boundary.RequireCanPassExternArgument(
+                op.Instance, op.Instance.Type,
                 $"receiver of {target.Name}", deferAggregateReceiverPolicy: true);
         if (!target.ReturnsVoid)
             _lowering.State.Boundary.RequireCanReturnFromExtern(target.ReturnType, target.Name);
@@ -120,7 +121,8 @@ internal sealed class ExternInvocationLowerer
             var argumentType = LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type
                 ?? op.Arguments[i].Parameter?.Type;
             if (argumentType != null)
-                _lowering.State.Boundary.RequireCanPassExternArgument(argumentType,
+                _lowering.State.Boundary.RequireCanPassExternArgument(
+                    op.Arguments[i].Value, argumentType,
                     op.Arguments[i].Parameter?.Name ?? $"argument {i}", objectIdentityExtern,
                     deferAggregateReceiverPolicy: objectMemberExtern);
 
@@ -137,7 +139,8 @@ internal sealed class ExternInvocationLowerer
                     if (NdimArrayAbi.IsNdimArray(LoweringServices.UnwrapConversions(elem).Type))
                         throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                     if (LoweringServices.UnwrapConversions(elem).Type is { } elementType)
-                        _lowering.State.Boundary.RequireCanPassExternArgument(elementType,
+                        _lowering.State.Boundary.RequireCanPassExternArgument(
+                            elem, elementType,
                             $"element of {param.Name}");
                     argVals.Add(_lowering.VisitExpression(elem));
                 }
@@ -1172,7 +1175,7 @@ internal sealed class ExternInvocationLowerer
     /// ExpressionHandler aggregate-member read / TryPrepareFieldSet's aggregate arm), cross-behaviour
     /// fields, and captured env locals/params. A shape that still returns null here is a genuine
     /// argument-site reject at the call in EmitExternMethodCall, not a silent continuation.</summary>
-    (System.Func<CLeaf> read, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
+    internal (System.Func<CLeaf> read, System.Action<CLeaf> store)? TryPrepareRefOutArg(IArgumentOperation arg)
     {
         var param = arg.Parameter;
         if (param == null || (param.RefKind != RefKind.Ref && param.RefKind != RefKind.Out))
@@ -1344,7 +1347,7 @@ internal sealed class ExternInvocationLowerer
     /// the location at argument position; round-8 [Y12] one-evaluation contract), the value read
     /// defers past later effectful arguments ([Y16]), and the prepared copy-back store rides along.
     /// Exactly one of <c>value</c>/<c>deferredRead</c> is non-null.</summary>
-    (CLeaf value, System.Func<CLeaf> deferredRead, System.Action<CLeaf> store) EvaluateCallArgument(
+    internal (CLeaf value, System.Func<CLeaf> deferredRead, System.Action<CLeaf> store) EvaluateCallArgument(
         IReadOnlyList<IArgumentOperation> arguments, int i)
     {
         var argOp = arguments[i].Value;
@@ -1358,6 +1361,17 @@ internal sealed class ExternInvocationLowerer
         return defer
             ? ((CLeaf)null, () => _lowering.VisitExpression(argOp), (System.Action<CLeaf>)null)
             : (_lowering.VisitExpression(argOp), null, null);
+    }
+
+    internal void StoreRefOutArgument(
+        IArgumentOperation argument,
+        CLeaf value,
+        System.Action<CLeaf> preparedStore)
+    {
+        if (preparedStore != null)
+            preparedStore(value);
+        else
+            AssignToTarget(argument.Value, value);
     }
 
     /// <summary>Evaluate arguments in TEXTUAL order (C# evaluation order) but place each value at its

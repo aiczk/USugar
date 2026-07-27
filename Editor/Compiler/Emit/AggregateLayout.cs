@@ -25,13 +25,13 @@ public class AggregateLayout
     }
 
     public readonly IReadOnlyList<FieldInfo> Fields;
+    public readonly string RuntimeTypeId;
     readonly Dictionary<string, int> _nameToIndex;
     readonly Dictionary<ISymbol, int> _symbolToIndex;
 
-    // Class ABI v1: a user class reserves object[] slot 0 (null placeholder for the future type-object
-    // reference); its fields live at 1..F. A struct/tuple reserves nothing (fields at 0..F-1). SlotCount is
-    // the backing array size; Count stays the field count. Each FieldInfo.Index already carries the reserved
-    // offset, so field-slot resolution (TryGetIndex) is correct without a per-site +1.
+    // Every source-level bundle reserves slot 0 for its runtime identity. Payload starts at slot 1
+    // for classes, structs, tuples, and anonymous values alike. SlotCount is the backing-array size;
+    // Count stays the logical field count. FieldInfo.Index is always the physical slot.
     readonly int _reservedLeadingSlots;
 
     public int Count => Fields.Count;
@@ -64,8 +64,14 @@ public class AggregateLayout
     }
 
     AggregateLayout(IReadOnlyList<FieldInfo> fields, Dictionary<string, int> nameToIndex,
-        Dictionary<ISymbol, int> symbolToIndex, int reservedLeadingSlots)
-    { Fields = fields; _nameToIndex = nameToIndex; _symbolToIndex = symbolToIndex; _reservedLeadingSlots = reservedLeadingSlots; }
+        Dictionary<ISymbol, int> symbolToIndex, int reservedLeadingSlots, string runtimeTypeId)
+    {
+        Fields = fields;
+        _nameToIndex = nameToIndex;
+        _symbolToIndex = symbolToIndex;
+        _reservedLeadingSlots = reservedLeadingSlots;
+        RuntimeTypeId = runtimeTypeId;
+    }
 
     public static AggregateLayout Build(INamedTypeSymbol type)
     {
@@ -73,8 +79,7 @@ public class AggregateLayout
         var nameToIndex = new Dictionary<string, int>();
         var symbolToIndex = new Dictionary<ISymbol, int>(SymbolEqualityComparer.Default);
         var ambiguousNames = new HashSet<string>();
-        // Class ABI v1: reserve slot 0, fields start at index 1. Struct/tuple: no reservation.
-        int reserved = TypeClassifier.IsUserClass(type) ? 1 : 0;
+        int reserved = BundleAbi.HeaderSize;
 
         if (type.IsTupleType)
         {
@@ -82,20 +87,21 @@ public class AggregateLayout
             for (int i = 0; i < elements.Length; i++)
             {
                 var name = elements[i].Name;
-                fields.Add(new FieldInfo(name, elements[i], i, elements[i].Type));
-                symbolToIndex[elements[i]] = i;
-                nameToIndex[name] = i;
+                var slot = reserved + i;
+                fields.Add(new FieldInfo(name, elements[i], slot, elements[i].Type));
+                symbolToIndex[elements[i]] = slot;
+                nameToIndex[name] = slot;
                 var itemName = $"Item{i + 1}";
-                if (name != itemName) nameToIndex[itemName] = i;
+                if (name != itemName) nameToIndex[itemName] = slot;
                 if (elements[i].CorrespondingTupleField != null)
                 {
                     var corrName = elements[i].CorrespondingTupleField.Name;
-                    if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = i;
-                    symbolToIndex[elements[i].CorrespondingTupleField] = i;
+                    if (!nameToIndex.ContainsKey(corrName)) nameToIndex[corrName] = slot;
+                    symbolToIndex[elements[i].CorrespondingTupleField] = slot;
                 }
             }
         }
-        else if (type.TypeKind == TypeKind.Struct || reserved > 0)
+        else if (type.TypeKind == TypeKind.Struct || TypeClassifier.IsUserClass(type))
         {
             // User struct / v1 user class → instance fields mapped to indices in declaration order (a class
             // starts at `reserved`=1, slot 0 held for the future type-object reference). Auto-property backing
@@ -143,7 +149,7 @@ public class AggregateLayout
         {
             // Anonymous type: its read-only properties map to slots in declaration order (no reserved
             // slot). Member access (p.X) resolves through this map exactly like a tuple element.
-            int i = 0;
+            int i = reserved;
             foreach (var prop in type.GetMembers().OfType<IPropertySymbol>())
             {
                 fields.Add(new FieldInfo(prop.Name, prop, i, prop.Type));
@@ -157,8 +163,62 @@ public class AggregateLayout
                 $"AggregateLayout.Build called on non-aggregate type '{type.Name}'");
         }
 
-        return new AggregateLayout(fields.AsReadOnly(), nameToIndex, symbolToIndex, reserved);
+        return new AggregateLayout(
+            fields.AsReadOnly(), nameToIndex, symbolToIndex, reserved,
+            BundleAbi.RuntimeTypeId(type));
     }
+}
+
+/// <summary>
+/// The single physical contract for every compiler-owned object[] value. Slot zero is always an
+/// injective source-type identity; every kind-specific ABI owns only the payload that follows it.
+/// </summary>
+public static class BundleAbi
+{
+    public const string Prefix = "usugar-";
+    public const int Type = 0;
+    public const int HeaderSize = 1;
+    public const int IteratorState = 1;
+    public const int IteratorCurrent = 2;
+    public const int IteratorFrame = 3;
+    public const int IteratorInitialFrame = 4;
+    public const int IteratorSize = 5;
+
+    public static string RuntimeTypeId(ITypeSymbol type)
+    {
+        if (type == null) throw new ArgumentNullException(nameof(type));
+        var kind = TypeClassifier.ShapeOf(
+            type, new TypeClassifierContext(null)).Bundle;
+        if (kind == RuntimeBundleKind.None)
+            throw new InvalidOperationException(
+                $"'{type.ToDisplayString()}' is not a compiler-owned runtime bundle.");
+        return Prefix + KindName(kind) + ":" +
+               ClassTypeObjectContext.SpecKey(type);
+    }
+
+    public static string RuntimeTypeId(
+        Type type, RuntimeBundleKind kind)
+    {
+        if (type == null) throw new ArgumentNullException(nameof(type));
+        if (kind == RuntimeBundleKind.None)
+            throw new ArgumentOutOfRangeException(
+                nameof(kind), kind, null);
+        return Prefix + KindName(kind) + ":"
+               + ClassTypeObjectContext.SpecKey(type);
+    }
+
+    public static string KindTag(RuntimeBundleKind kind)
+        => Prefix + KindName(kind) + ":";
+
+    static string KindName(RuntimeBundleKind kind) => kind switch
+    {
+        RuntimeBundleKind.Class => "class",
+        RuntimeBundleKind.Aggregate => "aggregate",
+        RuntimeBundleKind.Delegate => "delegate",
+        RuntimeBundleKind.MultiDimensionalArray => "ndim",
+        RuntimeBundleKind.Iterator => "iterator",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
+    };
 }
 
 /// <summary>
@@ -176,6 +236,15 @@ public static class AggregateAbi
             new List<CLeaf> { builder.Const(slotCount, StorageTypes.Int32) },
             new StorageType(ArrayType));
 
+    public static CLeaf AllocateBundle(CoreBuilder builder, AggregateLayout layout)
+    {
+        if (layout == null) throw new ArgumentNullException(nameof(layout));
+        var instance = Allocate(builder, layout.SlotCount);
+        WriteSlot(builder, instance, BundleAbi.Type,
+            builder.Const(layout.RuntimeTypeId, StorageTypes.String));
+        return instance;
+    }
+
     public static CLeaf ReadSlot(CoreBuilder builder, CLeaf instance, int index, StorageType udonType)
         => builder.ExternCall(
             UdonAbi.ArrayGet(ArrayType, ElementType),
@@ -188,11 +257,13 @@ public static class AggregateAbi
             new List<CLeaf> { instance, builder.Const(index, StorageTypes.Int32), value });
 
     public static CLeaf MintTupleLiteral(CoreBuilder builder, ITupleOperation tuple,
+        AggregateLayout layout,
         Func<IOperation, CLeaf> emitValue)
     {
-        var instance = Allocate(builder, tuple.Elements.Length);
+        var instance = AllocateBundle(builder, layout);
         for (int i = 0; i < tuple.Elements.Length; i++)
-            WriteSlot(builder, instance, i, emitValue(tuple.Elements[i]));
+            WriteSlot(builder, instance, layout.Fields[i].Index,
+                emitValue(tuple.Elements[i]));
         return instance;
     }
 
@@ -212,7 +283,7 @@ public static class AggregateAbi
             {
                 var nestedLayout = getLayout(nested);
                 var subSlot = builder.AllocScratch(new StorageType(ArrayType));
-                builder.EmitAssign(subSlot, Allocate(builder, nestedLayout.SlotCount));
+                builder.EmitAssign(subSlot, AllocateBundle(builder, nestedLayout));
                 WriteSlot(builder, builder.SlotRef(slot), i, builder.SlotRef(subSlot));
                 DefaultInitialize(builder, builder.SlotRef(subSlot), nestedLayout, getLayout, getUdonType);
                 continue;
@@ -225,7 +296,7 @@ public static class AggregateAbi
     }
 
     public static void AllocateField(CoreBuilder builder, string fieldName, AggregateLayout layout)
-        => builder.EmitStoreField(fieldName, Allocate(builder, layout.Count));
+        => builder.EmitStoreField(fieldName, AllocateBundle(builder, layout));
 
     public static void DefaultInitializeField(CoreBuilder builder, string fieldName, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
@@ -237,16 +308,19 @@ public static class AggregateAbi
         Func<INamedTypeSymbol, AggregateLayout> getLayout)
     {
         var dstSlot = builder.AllocScratch(new StorageType(ArrayType));
-        builder.EmitAssign(dstSlot, Allocate(builder, layout.Count));
-        for (int i = 0; i < layout.Count; i++)
+        builder.EmitAssign(dstSlot, AllocateBundle(builder, layout));
+        foreach (var field in layout.Fields)
         {
-            var elem = ReadSlot(builder, source, i, new StorageType(ElementType));
-            CLeaf copy = layout.Fields[i].Type is INamedTypeSymbol nested
-                         && layout.Fields[i].Bundle
+            var elem = ReadSlot(
+                builder, source, field.Index,
+                new StorageType(ElementType));
+            CLeaf copy = field.Type is INamedTypeSymbol nested
+                         && field.Bundle
                          == RuntimeBundleKind.Aggregate
                 ? DeepClone(builder, elem, getLayout(nested), getLayout)
                 : elem;
-            WriteSlot(builder, builder.SlotRef(dstSlot), i, copy);
+            WriteSlot(
+                builder, builder.SlotRef(dstSlot), field.Index, copy);
         }
         return builder.SlotRef(dstSlot);
     }
@@ -255,12 +329,40 @@ public static class AggregateAbi
         Func<INamedTypeSymbol, AggregateLayout> getLayout)
         => DeepClone(builder, source, getLayout(aggregateType), getLayout);
 
+    /// <summary>Record clone semantics: allocate a fresh outer object, copy reference fields, and
+    /// value-copy object[]-backed struct fields. This is the common clone used by class-record and
+    /// record-struct with-expressions.</summary>
+    public static CLeaf CloneRecord(
+        CoreBuilder builder, CLeaf source,
+        AggregateLayout layout,
+        Func<INamedTypeSymbol, AggregateLayout> getLayout)
+    {
+        var destination = builder.AllocScratch(
+            new StorageType(ArrayType));
+        builder.EmitAssign(
+            destination, AllocateBundle(builder, layout));
+        foreach (var field in layout.Fields)
+        {
+            var value = ReadSlot(
+                builder, source, field.Index,
+                new StorageType(ElementType));
+            if (field.Type is INamedTypeSymbol aggregate
+                && field.Bundle == RuntimeBundleKind.Aggregate)
+                value = DeepClone(
+                    builder, value, aggregate, getLayout);
+            WriteSlot(
+                builder, builder.SlotRef(destination),
+                field.Index, value);
+        }
+        return builder.SlotRef(destination);
+    }
+
     /// <summary>Allocate and default-initialize a fresh aggregate bundle.</summary>
     public static CLeaf MintDefault(CoreBuilder builder, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)
     {
         var slot = builder.AllocScratch(new StorageType(ArrayType));
-        builder.EmitAssign(slot, Allocate(builder, layout.SlotCount));
+        builder.EmitAssign(slot, AllocateBundle(builder, layout));
         DefaultInitialize(builder, builder.SlotRef(slot), layout, getLayout, getUdonType);
         return builder.SlotRef(slot);
     }
@@ -475,7 +577,11 @@ public static class ClassAbi
     /// convention). This is the no-override dispatch arm's constant.</summary>
     public static string RuntimeTypeName(ITypeSymbol t)
     {
-        if (t is IArrayTypeSymbol arr) return RuntimeTypeName(arr.ElementType) + "[]";
+        if (t is IArrayTypeSymbol arr)
+            return RuntimeTypeName(arr.ElementType)
+                   + (arr.Rank == 1
+                       ? "[]"
+                       : "[" + new string(',', arr.Rank - 1) + "]");
         if (t is not INamedTypeSymbol n) return t.ToDisplayString();
         var args = new List<ITypeSymbol>();
         var skeleton = ClrTypeSkeleton(n, args);
@@ -517,28 +623,6 @@ public static class ClassAbi
                 + "a field on the UdonSharpBehaviour class.");
     }
 
-    /// <summary>Reject implicit stringification of a multi-dimensional array bundle (CW14/CW15) or an
-    /// object[]-emulated value type (user struct / tuple / anonymous type — WaveJoint R1 D02): both
-    /// stringify to "System.Object[]" instead of running ToString / printing the C# form, and the
-    /// interpolation/concat Format externs bypass the N-R1 argument choke. (The former v1-class arm was
-    /// replaced by the M4b object.ToString-slot dispatch at the implicit consumers.)</summary>
-    public static void RejectImplicitToString(
-        ITypeSymbol type, bool isAggregateValue)
-    {
-        if (type == null) return;
-        if (NdimArrayAbi.IsNdimArray(type))
-            throw new NotSupportedException(
-                $"A multi-dimensional array ('{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}') cannot be "
-                + "converted to a string (interpolation / concat): its runtime value is an object[] bundle, so it would "
-                + "stringify to \"System.Object[]\". Format the elements directly instead.");
-        if (isAggregateValue)
-            throw new NotSupportedException(
-                $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' cannot be converted to a string "
-                + "implicitly (interpolation / concat): its runtime value is an object[] bundle, so it would stringify "
-                + "to \"System.Object[]\" instead of running ToString. Call ToString() explicitly (a struct override "
-                + "is a supported direct call), or format the fields/elements directly.");
-    }
-
     public static bool IsReferenceEquality(
         BinaryOperatorKind kind,
         bool leftIsUserClass,
@@ -565,25 +649,15 @@ public static class ClassAbi
 
     public static string UnsupportedObjectMethodMessage(INamedTypeSymbol classTy, IMethodSymbol method)
         => $"'{classTy.Name}.{method.Name}()' is not supported on a v1 user class: class ABI v1 gives a "
-           + "reference bundle no stable hash and no System.Type identity. Use reference equality "
-           + "(== / Equals), or ToString/interpolation for a printable form.";
-
-    public static void RejectRuntimeTypeTest(ITypeSymbol targetType)
-    {
-        if (ExternResolver.IsUnsupportedUserClass(targetType))
-            throw new NotSupportedException(
-                $"Runtime type tests (is / as / switch) against the user-defined class "
-                + $"'{targetType.Name}' are not supported: class ABI v1 gives a user class no "
-                + "runtime type identity yet. Keep the value typed as its static type instead of recovering "
-                + "it with a type test.");
-    }
+           + "runtime string identity but no CLR System.Type token. Use is/as/pattern matching "
+           + "when only runtime discrimination is required.";
 
     public static void RejectTypeofToken(ITypeSymbol type)
     {
         if (ExternResolver.IsUnsupportedUserClass(type))
             throw new NotSupportedException(
                 $"typeof(user-defined class '{type.Name}') is not supported: class ABI v1 gives "
-                + "a user class no runtime type identity yet, so its System.Type token cannot be resolved.");
+                + "a user class no CLR System.Type token, so the token cannot be resolved.");
     }
 
     public static void RejectDelegateBindingToInstanceMethod(

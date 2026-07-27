@@ -5,14 +5,13 @@ using Microsoft.CodeAnalysis;
 
 /// <summary>
 /// First-class delegate ABI. A delegate VALUE is a single reference to a runtime object[5] bundle;
-/// assignment is reference copy; dispatch reads the bundle elements. The ABI reserves slot 0 for an
-/// explicit provenance tag so SystemObjectArray can be distinguished from class/aggregate/env bundles
-/// by convention instead of only by the static type at the producer.
+/// assignment is reference copy; dispatch reads the bundle elements. Slot zero follows BundleAbi
+/// and carries the exact declared delegate identity.
 /// </summary>
 internal static class DelegateAbi
 {
-    /// <summary>bundle[0]: SystemString ABI provenance tag.</summary>
-    public const int Kind = 0;
+    /// <summary>bundle[0]: SystemString exact runtime type identity.</summary>
+    public const int Type = BundleAbi.Type;
     /// <summary>bundle[1]: IUdonEventReceiver target. Delegate-null is the BUNDLE reference being null — not [Target].</summary>
     public const int Target = 1;
     /// <summary>bundle[2]: SystemString — the receiving program's bridge EXPORT name (__dlg_{ExportName} / __dlg_{lambdaPrefix}).</summary>
@@ -24,7 +23,8 @@ internal static class DelegateAbi
     public const int Env = 4;
 
     public const int BundleSize = 5;
-    public const string KindTag = "__usugar_delegate";
+    public static readonly string KindTag =
+        BundleAbi.KindTag(RuntimeBundleKind.Delegate);
 
     /// <summary>A delegate value's VM representation: the bundle object[] and its boxed slot element type.</summary>
     public const string BundleType = "SystemObjectArray";
@@ -44,7 +44,17 @@ internal static class DelegateAbi
             throw new ArgumentNullException(nameof(invokeOrTarget));
         if (types == null) throw new ArgumentNullException(nameof(types));
         var paramParts = invokeOrTarget.Parameters
-            .Select(p => types.GetUdonTypeName(p.Type, typeParamMap));
+            .Select(p =>
+            {
+                var type = types.GetUdonTypeName(p.Type, typeParamMap);
+                return p.RefKind switch
+                {
+                    RefKind.Ref => "Ref" + type,
+                    RefKind.Out => "Out" + type,
+                    RefKind.In => "In" + type,
+                    _ => type,
+                };
+            });
         var retPart = invokeOrTarget.ReturnsVoid
             ? "Void"
             : types.GetUdonTypeName(
@@ -84,8 +94,6 @@ internal static class DelegateAbi
         if (types == null) throw new ArgumentNullException(nameof(types));
         var invoke = delegateType?.DelegateInvokeMethod;
         if (invoke == null) return;
-
-        ValidateNoRefOutParams(invoke);
 
         var signaturesDiffer =
             BuildSigPart(invoke, types, typeParamMap)
@@ -203,19 +211,25 @@ internal static class DelegateAbi
     /// method/addr/env are cheap pure leaves (Const/FuncRef/already-materialized values) at every
     /// existing call site, so evaluating them eagerly as ordinary arguments never reorders anything.
     /// </summary>
-    public static CLeaf EmitBundleMint(CoreBuilder builder, Func<CLeaf> targetFn,
+    public static CLeaf EmitBundleMint(
+        CoreBuilder builder, CLeaf runtimeTypeId,
+        Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
         var bundle = builder.ExternCall(UdonAbi.ArrayConstructor(BundleType),
             new List<CLeaf> { builder.Const(BundleSize, StorageTypes.Int32) }, new StorageType(BundleType));
-        EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
+        EmitBundleSlotWrites(
+            builder, bundle, runtimeTypeId, targetFn,
+            methodNameLeaf, addrLeaf, envLeaf);
         return bundle;
     }
 
     /// <summary>Mint a delegate bundle into a caller-owned slot. Use this when the surrounding ABI helper
     /// already exposes a stable temporary slot and changing that materialization would perturb generated
     /// bytecode layout.</summary>
-    public static CLeaf EmitBundleMintToSlot(CoreBuilder builder, int bundleSlot, Func<CLeaf> targetFn,
+    public static CLeaf EmitBundleMintToSlot(
+        CoreBuilder builder, int bundleSlot, CLeaf runtimeTypeId,
+        Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
         builder.EmitAssign(bundleSlot, builder.ExternCall(
@@ -223,16 +237,27 @@ internal static class DelegateAbi
             new List<CLeaf> { builder.Const(BundleSize, StorageTypes.Int32) },
             new StorageType(BundleType)));
         var bundle = builder.SlotRef(bundleSlot);
-        EmitBundleSlotWrites(builder, bundle, targetFn, methodNameLeaf, addrLeaf, envLeaf);
+        EmitBundleSlotWrites(
+            builder, bundle, runtimeTypeId, targetFn,
+            methodNameLeaf, addrLeaf, envLeaf);
         return bundle;
     }
 
-    static void EmitBundleSlotWrites(CoreBuilder builder, CLeaf bundle, Func<CLeaf> targetFn,
+    static void EmitBundleSlotWrites(
+        CoreBuilder builder, CLeaf bundle, CLeaf runtimeTypeId,
+        Func<CLeaf> targetFn,
         CLeaf methodNameLeaf, CLeaf addrLeaf, CLeaf envLeaf)
     {
+        if (runtimeTypeId == null)
+            throw new ArgumentNullException(nameof(runtimeTypeId));
         var setSig = UdonAbi.ArraySet(BundleType, SlotType);
         var target = targetFn();
-        builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Kind, StorageTypes.Int32), builder.Const(KindTag, StorageTypes.String) });
+        builder.EmitExternVoid(setSig, new List<CLeaf>
+        {
+            bundle,
+            builder.Const(Type, StorageTypes.Int32),
+            runtimeTypeId
+        });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Target, StorageTypes.Int32), target });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Method, StorageTypes.Int32), methodNameLeaf });
         builder.EmitExternVoid(setSig, new List<CLeaf> { bundle, builder.Const(Addr, StorageTypes.Int32), addrLeaf });
@@ -261,9 +286,17 @@ internal static class DelegateAbi
 
     public static CLeaf IsTaggedBundle(CoreBuilder builder, CLeaf bundle)
     {
-        var kind = ReadSlot(builder, bundle, Kind, "SystemString");
-        return builder.ExternCall(UdonAbi.StringEquality,
-            new List<CLeaf> { kind, builder.Const(KindTag, StorageTypes.String) }, StorageTypes.Boolean);
+        var kind = ReadSlot(builder, bundle, Type, "SystemString");
+        return builder.ExternCall(
+            UdonAbiKey.Method(
+                "SystemString", "StartsWith",
+                new[] { "SystemString" }, "SystemBoolean"),
+            new List<CLeaf>
+            {
+                kind,
+                builder.Const(KindTag, StorageTypes.String)
+            },
+            StorageTypes.Boolean);
     }
 
     public static CLeaf HasTarget(CoreBuilder builder, CLeaf target)

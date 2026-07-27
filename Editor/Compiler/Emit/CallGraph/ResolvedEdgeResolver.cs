@@ -260,6 +260,8 @@ public sealed class ResolvedEdgeResolver
                     yield return t;
             foreach (var iface in ct.AllInterfaces)
             {
+                if (!_emitter.Planner.AllLayouts.ContainsKey(iface))
+                    continue;
                 var ifaceLayout = _emitter.Planner.GetLayout(iface);
                 foreach (var ifaceMethod in ifaceLayout.Methods.Keys)
                     if (ct.FindImplementationForInterfaceMember(ifaceMethod) is IMethodSymbol impl

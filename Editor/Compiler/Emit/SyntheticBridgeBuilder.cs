@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
 
 /// <summary>Core IR operations shared by synthetic delegate, receiver, and multicast bridges.</summary>
 internal sealed class SyntheticBridgeBuilder
@@ -60,6 +61,36 @@ internal sealed class SyntheticBridgeBuilder
         if (plan.Return.Kind == BridgeReturnKind.None || value == null) return false;
         Store(plan.Return.DestinationField, value);
         return true;
+    }
+
+    public void CopyRefParameters(
+        LoweringState context,
+        IMethodSymbol signature,
+        FlatFunction target,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (context == null) throw new ArgumentNullException(nameof(context));
+        if (signature == null) throw new ArgumentNullException(nameof(signature));
+        var callable = context.Methods.RequireCallable(target);
+        for (var i = 0; i < signature.Parameters.Length; i++)
+        {
+            if (signature.Parameters[i].RefKind
+                is not (RefKind.Ref or RefKind.Out))
+                continue;
+            if (i >= callable.ParamVarIds.Length)
+                throw new InvalidOperationException(
+                    $"Callable '{callable.Name}' does not expose ref/out parameter {i}.");
+            var type = context.ResolveStorageType(
+                signature.Parameters[i].Type,
+                typeParameterMap);
+            Store(
+                DelegateAbi.ConvArgName(
+                    DelegateAbi.BuildSigPart(
+                        signature, context.Types,
+                        typeParameterMap), i),
+                Load(callable.ParamVarIds[i], type));
+        }
     }
 
     public CLeaf Dispatch(BridgePlan plan, List<CLeaf> arguments,

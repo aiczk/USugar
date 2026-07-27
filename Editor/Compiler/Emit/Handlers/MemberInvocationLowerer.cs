@@ -19,6 +19,14 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
     {
+        if (op.Instance != null
+            && op.Property.Name == "Current"
+            && _lowering.IsIteratorProtocol(
+                _lowering.ResolveType(op.Instance.Type)))
+            return _lowering.EmitIteratorCurrent(
+                _lowering.VisitExpression(op.Instance),
+                op.Property.Type);
+
         var boundGetterSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.PropertyGet);
         var boundGetter = boundGetterSite.Callable.Site.Target;
@@ -253,6 +261,7 @@ internal sealed class MemberInvocationLowerer
             switch (propertyKind)
             {
                 case NdimArrayAbi.PropertyKind.Length: return _lowering.Ndim.EmitNdimLength(_lowering.VisitExpression(op.Instance), ndimPropType);
+                case NdimArrayAbi.PropertyKind.LongLength: return _lowering.Ndim.EmitNdimLongLength(_lowering.VisitExpression(op.Instance), ndimPropType);
                 case NdimArrayAbi.PropertyKind.Rank: return _lowering.Ndim.EmitNdimRank(ndimPropType);
                 default: throw new System.InvalidOperationException($"Unknown N-dim array property kind: {propertyKind}");
             }
@@ -442,23 +451,11 @@ internal sealed class MemberInvocationLowerer
                     // override arm = direct call, no-override arm = the runtime type-name constant,
                     // null = "" (C# Format semantics). Replaces the M3 sealed-only fast path (a
                     // sealed/singleton set devirtualizes inside the dispatch helper).
-                    if (_lowering.ResolveType(interpolation.Expression.Type) is INamedTypeSymbol interpCls
-                        && _lowering.IsUserClass(interpCls))
-                    {
-                        var recv = _lowering.VisitExpression(interpolation.Expression);
-                        argVals.Add(_lowering.EmitClassToStringDispatch(interpCls, recv,
-                            nullIsError: false, useOverrides: true));
-                        argIndex++;
-                        break;
-                    }
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
-                    ClassAbi.RejectImplicitToString(
-                        interpolation.Expression.Type,
-                        _lowering.IsAggregateValue(
-                            interpolation.Expression.Type));
                     var interpVal = _lowering.VisitExpression(interpolation.Expression);
-                    argVals.Add(_lowering.TryEmitEnumToString(interpVal, interpolation.Expression.Type) ?? interpVal);
+                    argVals.Add(_lowering.ConvertConcatOperand(
+                        interpVal, interpolation.Expression));
                     argIndex++;
                     break;
             }
@@ -631,6 +628,41 @@ internal sealed class MemberInvocationLowerer
             instance => AggregateAbi.DefaultInitialize(_lowering.Builder, instance, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName),
             instance =>
             {
+                if (classTy.IsRecord
+                    && constructor != null)
+                {
+                    var arguments =
+                        new CLeaf[constructor.Parameters.Length];
+                    foreach (var argument in op.Arguments)
+                    {
+                        var parameter = argument.Parameter
+                                        ?? throw new InvalidOperationException(
+                                            $"Record constructor argument "
+                                            + $"'{argument.Syntax}' has no "
+                                            + "bound parameter.");
+                        arguments[parameter.Ordinal] =
+                            _lowering.VisitExpression(argument.Value);
+                    }
+                    foreach (var parameter in
+                             constructor.Parameters)
+                    {
+                        if (!layout.TryGetIndex(
+                                parameter.Name, out var fieldSlot))
+                            throw new InvalidOperationException(
+                                $"Record constructor parameter "
+                                + $"'{parameter.Name}' has no backing "
+                                + $"slot on '{classTy.Name}'.");
+                        AggregateAbi.WriteSlot(
+                            _lowering.Builder, instance,
+                            fieldSlot,
+                            arguments[parameter.Ordinal]
+                            ?? InvocationHandler.DefaultConst(
+                                _lowering.Builder,
+                                _lowering.GetStorageType(
+                                    parameter.Type)));
+                    }
+                    return;
+                }
                 // CA-v2 M1: an explicit ctor runs the full chain (field inits + base call + body) inside
                 // its own function; a class with no explicit ctor runs the implicit chain (field inits
                 // derived->base) inline here.
@@ -659,6 +691,27 @@ internal sealed class MemberInvocationLowerer
             },
             instance => _lowering.EmitAggregateObjectInitializer(instance, layout, op.Initializer),
             TypeObjWrite(classTy));
+    }
+
+    internal CLeaf VisitWithExpression(IWithOperation operation)
+    {
+        var type = _lowering.ResolveType(operation.Type)
+                   as INamedTypeSymbol
+                   ?? throw new NotSupportedException(
+                       $"with-expression type '{operation.Type}' "
+                       + "is not a named record type.");
+        if (!type.IsRecord)
+            throw new NotSupportedException(
+                $"with-expression receiver '{type.Name}' is not "
+                + "a record.");
+        var layout = _lowering.State.Aggregates.GetLayout(type);
+        var source = _lowering.VisitExpression(operation.Operand);
+        var clone = AggregateAbi.CloneRecord(
+            _lowering.Builder, source, layout,
+            _lowering.State.Aggregates.GetLayout);
+        _lowering.EmitAggregateObjectInitializer(
+            clone, layout, operation.Initializer);
+        return clone;
     }
 
     /// <summary>CA-v2b-1: the bundle[0]=typeobj write action for a minted concrete class. We are AT a mint
@@ -718,7 +771,8 @@ internal sealed class MemberInvocationLowerer
     {
         var anonTy = (INamedTypeSymbol)op.Type;
         var layout = _lowering.State.Aggregates.GetLayout(anonTy);
-        var inst = AggregateAbi.Allocate(_lowering.Builder, layout.SlotCount);
+        var inst = AggregateAbi.AllocateBundle(
+            _lowering.Builder, layout);
         foreach (var init in op.Initializers)
         {
             if (init is ISimpleAssignmentOperation { Target: IPropertyReferenceOperation propRef } sa
@@ -795,7 +849,9 @@ internal sealed class MemberInvocationLowerer
         {
             var layout = _lowering.State.Aggregates.GetLayout(userStruct);
             var slot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
-            _lowering.EmitAssign(slot, AggregateAbi.Allocate(_lowering.Builder, layout.Count));
+            _lowering.EmitAssign(
+                slot,
+                AggregateAbi.AllocateBundle(_lowering.Builder, layout));
             AggregateAbi.DefaultInitialize(_lowering.Builder, _lowering.SlotRef(slot), layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName);
             // CW4: same by-ordinal + ref/out discipline as the class mint arm (EmitClassInstanceMint).
             var structCtor = constructor;
@@ -841,8 +897,16 @@ internal sealed class MemberInvocationLowerer
             var argVals = new List<CLeaf>();
             for (int i = 0; i < op.Arguments.Length; i++)
             {
-                if (NdimArrayAbi.IsNdimArray(LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type))
-                    throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
+                var argument = op.Arguments[i].Value;
+                var argumentType =
+                    LoweringServices.UnwrapConversions(argument).Type
+                    ?? op.Arguments[i].Parameter?.Type;
+                if (argumentType != null)
+                    _lowering.State.Boundary
+                        .RequireCanPassExternArgument(
+                            argument, argumentType,
+                            op.Arguments[i].Parameter?.Name
+                            ?? $"constructor argument {i}");
                 argVals.Add(_lowering.VisitExpression(op.Arguments[i].Value));
             }
             var paramTypes = op.Arguments.Select(a => _lowering.GetStorageTypeName(a.Value.Type)).ToArray();

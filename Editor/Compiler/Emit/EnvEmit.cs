@@ -66,7 +66,9 @@ static class EnvEmit
         var def = currentClosure.OriginalDefinition;
         // SS2B: the currently emitting per-spec closure carries its own __envp field on its record
         // (a definition-keyed map here would be last-spec-wins under multi-instantiation, F3).
-        string envpField = ctx.Methods.CurrentClosureSpec is { } ccs
+        string envpField = ctx.CurrentIteratorPlan
+            ?.EnvironmentFrameParamId;
+        envpField ??= ctx.Methods.CurrentClosureSpec is { } ccs
             && SymbolEqualityComparer.Default.Equals(ccs.Definition.OriginalDefinition, def)
                 ? ccs.EnvpFieldId : null;
         if (envpField == null)

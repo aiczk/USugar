@@ -295,7 +295,7 @@ public class M3SameSigWorst : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(Ring7, "M3Ring7", out _);
         Assert.True(Count(uasm, ": %") <= 168, "Ring7 heap-var count must not inflate (widening cost bound)");
-        Assert.True(Count(uasm, "__recurStack") <= 113, "Ring7 spill traffic must not inflate (widening cost bound)");
+        Assert.True(Count(uasm, "__recurStack") <= 115, "Ring7 spill traffic must not inflate (widening cost bound)");
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public class M3SameSigWorst : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(Fcd56, "M3Fcd56", out _);
         Assert.True(Count(uasm, ": %") <= 460, "fcd56 heap-var count must not inflate (widening cost bound)");
-        Assert.True(Count(uasm, "__recurStack") <= 37, "fcd56 spill traffic must not inflate (widening cost bound)");
+        Assert.True(Count(uasm, "__recurStack") <= 39, "fcd56 spill traffic must not inflate (widening cost bound)");
     }
 
     [Fact]

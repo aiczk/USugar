@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -109,7 +110,6 @@ internal sealed class DelegateInvocationLowerer
         // §3.4-1: the conv-var declaration side re-validates ref/out — a delegate VALUE received from
         // elsewhere (param/field/cast-back) never went through this class's creation-site validation,
         // and a copy-in-only conv protocol would silently drop ref/out write-backs.
-        DelegateAbi.ValidateNoRefOutParams(invoke);
         var (convArgs, convRet, convEnv) = LoweringServices.GetConventionFieldNames(
             delegateType, _lowering.State.Types, _lowering.TypeParamMap);
 
@@ -137,13 +137,47 @@ internal sealed class DelegateInvocationLowerer
         // (s(right: k, left: 9) DiffFuzz ref=902 vs VM 209). Mirrors EmitUserMethodCall's by-ordinal
         // slotting; the side-effect order itself was already correct (trace fields matched).
         var argExprs = new CLeaf[invoke.Parameters.Length];
+        var refStores = new System.Action<CLeaf>[invoke.Parameters.Length];
+        var refArguments = new IArgumentOperation[invoke.Parameters.Length];
+        var deferredReads = new List<(int ordinal, System.Func<CLeaf> read)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
             var argParam = op.Arguments[i].Parameter;
             var ordinal = argParam != null && argParam.Ordinal >= 0 ? argParam.Ordinal : i;
-            var val = _lowering.VisitExpression(op.Arguments[i].Value);
-            if (ordinal < argExprs.Length) argExprs[ordinal] = val;
+            var evaluated = _owner.Externs.EvaluateCallArgument(
+                op.Arguments, i);
+            if (ordinal >= argExprs.Length) continue;
+            if (evaluated.deferredRead != null)
+                deferredReads.Add((ordinal, evaluated.deferredRead));
+            else
+                argExprs[ordinal] = evaluated.value;
+            if (argParam?.RefKind is RefKind.Ref or RefKind.Out)
+            {
+                refStores[ordinal] = evaluated.store;
+                refArguments[ordinal] = op.Arguments[i];
+            }
         }
+        foreach (var (ordinal, read) in deferredReads)
+            argExprs[ordinal] = read();
+
+        System.Action copyBack = null;
+        if (refArguments.Any(argument => argument != null))
+            copyBack = () =>
+            {
+                for (var ordinal = 0;
+                     ordinal < refArguments.Length;
+                     ordinal++)
+                {
+                    var argument = refArguments[ordinal];
+                    if (argument == null) continue;
+                    var type = _lowering.GetStorageType(
+                        invoke.Parameters[ordinal].Type);
+                    var value = _lowering.LoadField(
+                        convArgs[ordinal], type);
+                    _owner.Externs.StoreRefOutArgument(
+                        argument, value, refStores[ordinal]);
+                }
+            };
 
         // §4.3: this dispatch can re-enter the containing function (synthetic-SCC cycle member,
         // non-tail site — pre-computed by BuildRecursionInfo). Flag BOTH dispatch arms Reentrant so
@@ -152,7 +186,8 @@ internal sealed class DelegateInvocationLowerer
         bool reentrant = _lowering.MarkReentrantDispatch(op);
 
         return new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
-            argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance));
+            argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance),
+            copyBack);
     }
 
     /// <summary>

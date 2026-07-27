@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -24,18 +25,36 @@ internal sealed class InvocationIntrinsicEmitter
                 (handler, operation, target) =>
                     handler.Intrinsics.EmitInstantiateIntrinsic(operation, target)),
             new InvocationIntrinsicRule(
-                "multidimensional-array-shape",
+                "multidimensional-array",
                 new IntrinsicKey(
                     new[] { "System.Array" },
-                    new[] { "GetLength", "GetUpperBound" },
+                    new[]
+                    {
+                        "Clone",
+                        "CopyTo",
+                        "Copy",
+                        "ConstrainedCopy",
+                        "GetValue",
+                        "SetValue",
+                        "GetLength",
+                        "GetLongLength",
+                        "GetLowerBound",
+                        "GetUpperBound",
+                    },
                     genericArity: 0,
-                    minimumParameters: 1, maximumParameters: 1,
-                    constrainedOrdinal: 0, constrainedTypeName: "System.Int32"),
+                    minimumParameters: 0,
+                    maximumParameters: 5),
                 (handler, operation, target) =>
                     handler.Intrinsics.EmitNdimArrayIntrinsic(operation, target),
                 (handler, operation, target) =>
                     operation.Instance != null
-                    && NdimArrayAbi.IsNdimArray(operation.Instance.Type)),
+                    && NdimArrayAbi.IsNdimArray(operation.Instance.Type)
+                    || operation.Instance == null
+                    && target.Name is "Copy" or "ConstrainedCopy"
+                    && operation.Arguments.Any(argument =>
+                        NdimArrayAbi.IsNdimArray(
+                            LoweringServices.UnwrapConversions(
+                                argument.Value).Type))),
             new InvocationIntrinsicRule(
                 "aggregate-array-value-copy",
                 new IntrinsicKey(
@@ -86,18 +105,240 @@ internal sealed class InvocationIntrinsicEmitter
 
     internal CLeaf EmitNdimArrayIntrinsic(IInvocationOperation operation, IMethodSymbol target)
     {
-        var bundle = _lowering.VisitExpression(operation.Instance);
         if (!NdimArrayAbi.TryGetMethod(target.Name, out var methodKind))
             throw new System.InvalidOperationException(
                 $"Intrinsic registry admitted unknown N-dim array method '{target.Name}'.");
-        var dimension = _lowering.VisitExpression(operation.Arguments[0].Value);
+        if (methodKind is NdimArrayAbi.MethodKind.Copy
+            or NdimArrayAbi.MethodKind.ConstrainedCopy)
+            return EmitNdimStaticCopy(operation);
+
+        var bundle = _lowering.VisitExpression(operation.Instance);
+        var arrayType =
+            (IArrayTypeSymbol)operation.Instance.Type;
         return methodKind switch
         {
-            NdimArrayAbi.MethodKind.GetLength => _lowering.Ndim.EmitNdimGetLength(bundle, dimension),
-            NdimArrayAbi.MethodKind.GetUpperBound => _lowering.Ndim.EmitNdimGetUpperBound(bundle, dimension),
+            NdimArrayAbi.MethodKind.Clone =>
+                _lowering.Ndim.EmitNdimClone(
+                    bundle, arrayType),
+            NdimArrayAbi.MethodKind.CopyTo =>
+                EmitNdimCopyTo(
+                    operation, bundle, arrayType),
+            NdimArrayAbi.MethodKind.GetLength =>
+                _lowering.Ndim.EmitNdimGetLength(
+                    bundle,
+                    _lowering.EmitArrayDimension(
+                        operation.Arguments[0].Value),
+                    arrayType),
+            NdimArrayAbi.MethodKind.GetLongLength =>
+                _lowering.Ndim.EmitNdimGetLongLength(
+                    bundle,
+                    _lowering.EmitArrayDimension(
+                        operation.Arguments[0].Value),
+                    arrayType),
+            NdimArrayAbi.MethodKind.GetLowerBound =>
+                _lowering.Ndim.EmitNdimGetLowerBound(
+                    _lowering.EmitArrayDimension(
+                        operation.Arguments[0].Value),
+                    arrayType),
+            NdimArrayAbi.MethodKind.GetUpperBound =>
+                _lowering.Ndim.EmitNdimGetUpperBound(
+                    bundle,
+                    _lowering.EmitArrayDimension(
+                        operation.Arguments[0].Value),
+                    arrayType),
+            NdimArrayAbi.MethodKind.GetValue =>
+                EmitNdimGetValue(
+                    operation, bundle,
+                    (IArrayTypeSymbol)operation.Instance.Type),
+            NdimArrayAbi.MethodKind.SetValue =>
+                EmitNdimSetValue(
+                    operation, bundle,
+                    (IArrayTypeSymbol)operation.Instance.Type),
             _ => throw new System.InvalidOperationException(
                 $"Unknown N-dim array method kind: {methodKind}"),
         };
+    }
+
+    CLeaf EmitNdimCopyTo(
+        IInvocationOperation operation,
+        CLeaf source,
+        IArrayTypeSymbol sourceType)
+    {
+        var destinationOperation =
+            LoweringServices.UnwrapConversions(
+                operation.Arguments[0].Value);
+        if (destinationOperation.Type
+            is not IArrayTypeSymbol destinationType)
+            throw new System.NotSupportedException(
+                "Array.CopyTo requires a statically known "
+                + "array destination.");
+        var destination =
+            _lowering.VisitExpression(
+                destinationOperation);
+        var destinationIndex =
+            _lowering.EmitArrayDimension(
+                operation.Arguments[1].Value);
+        var length = _lowering.Ndim.EmitNdimLength(
+            source, sourceType);
+        _lowering.Ndim.EmitLinearCopy(
+            source, sourceType,
+            _lowering.Const(
+                0, StorageTypes.Int32),
+            destination, destinationType,
+            destinationIndex, length);
+        return null;
+    }
+
+    CLeaf EmitNdimStaticCopy(
+        IInvocationOperation operation)
+    {
+        var sourceOperation =
+            LoweringServices.UnwrapConversions(
+                operation.Arguments[0].Value);
+        var destinationOperation =
+            LoweringServices.UnwrapConversions(
+                operation.Arguments[
+                    operation.Arguments.Length == 3
+                        ? 1 : 2].Value);
+        if (sourceOperation.Type
+                is not IArrayTypeSymbol sourceType
+            || destinationOperation.Type
+                is not IArrayTypeSymbol destinationType)
+            throw new System.NotSupportedException(
+                "Array.Copy requires statically known "
+                + "array operands.");
+
+        var source =
+            _lowering.VisitExpression(sourceOperation);
+        CLeaf sourceIndex;
+        CLeaf destinationIndex;
+        CLeaf length;
+        CLeaf destination;
+        if (operation.Arguments.Length == 3)
+        {
+            destination =
+                _lowering.VisitExpression(
+                    destinationOperation);
+            sourceIndex = _lowering.Const(
+                0, StorageTypes.Int32);
+            destinationIndex = _lowering.Const(
+                0, StorageTypes.Int32);
+            length = _lowering.EmitArrayDimension(
+                operation.Arguments[2].Value);
+        }
+        else
+        {
+            sourceIndex = _lowering.EmitArrayDimension(
+                operation.Arguments[1].Value);
+            destination =
+                _lowering.VisitExpression(
+                    destinationOperation);
+            destinationIndex =
+                _lowering.EmitArrayDimension(
+                    operation.Arguments[3].Value);
+            length = _lowering.EmitArrayDimension(
+                operation.Arguments[4].Value);
+        }
+        _lowering.Ndim.EmitLinearCopy(
+            source, sourceType, sourceIndex,
+            destination, destinationType,
+            destinationIndex, length);
+        return null;
+    }
+
+    CLeaf EmitNdimGetValue(
+        IInvocationOperation operation,
+        CLeaf bundle,
+        IArrayTypeSymbol arrayType)
+    {
+        var indexes = EmitNdimIndexes(
+            operation, 0, arrayType);
+        return _lowering.Ndim.EmitNdimGetValue(
+            bundle, indexes, arrayType);
+    }
+
+    CLeaf EmitNdimSetValue(
+        IInvocationOperation operation,
+        CLeaf bundle,
+        IArrayTypeSymbol arrayType)
+    {
+        if (operation.Arguments.Length < 2)
+            throw new System.NotSupportedException(
+                "Array.SetValue requires a value and one index "
+                + "per dimension.");
+        var rawValue = LoweringServices.UnwrapConversions(
+            operation.Arguments[0].Value);
+        var value = _lowering.VisitExpression(rawValue);
+        var destinationType = _lowering.GetStorageType(
+            arrayType.ElementType);
+        if (value.Type != destinationType)
+            value = _lowering.Builder.RepresentationCast(
+                value, destinationType,
+                RepresentationCastKind.ArraySetValueUnbox);
+        var indexes = EmitNdimIndexes(
+            operation, 1, arrayType);
+        _lowering.Ndim.EmitNdimSetValue(
+            bundle, value, indexes, arrayType);
+        return null;
+    }
+
+    List<CLeaf> EmitNdimIndexes(
+        IInvocationOperation operation,
+        int firstArgument,
+        IArrayTypeSymbol arrayType)
+    {
+        var indexes = new List<CLeaf>();
+        if (operation.Arguments.Length
+                == firstArgument + 1
+            && LoweringServices.UnwrapConversions(
+                    operation.Arguments[firstArgument]
+                        .Value)
+                is { Type: IArrayTypeSymbol
+                    {
+                        Rank: 1
+                    } indexArrayType }
+                    indexArrayOperation)
+        {
+            var indexArray =
+                _lowering.VisitExpression(
+                    indexArrayOperation);
+            var arrayStorage =
+                _lowering.GetStorageType(
+                    indexArrayType);
+            var elementStorage =
+                _lowering.GetStorageType(
+                    indexArrayType.ElementType);
+            for (var dimension = 0;
+                 dimension < arrayType.Rank;
+                 dimension++)
+            {
+                CLeaf index = _lowering.ExternCall(
+                    UdonAbi.ArrayGet(
+                        arrayStorage.Name,
+                        elementStorage.Name),
+                    new List<CLeaf>
+                    {
+                        indexArray,
+                        _lowering.Const(
+                            dimension,
+                            StorageTypes.Int32)
+                    },
+                    elementStorage);
+                if (elementStorage != StorageTypes.Int32)
+                    index = _lowering.EmitNarrowingConvert(
+                        index, elementStorage.Name,
+                        StorageTypes.Int32.Name);
+                indexes.Add(index);
+            }
+            return indexes;
+        }
+
+        for (var i = firstArgument;
+             i < operation.Arguments.Length;
+             i++)
+            indexes.Add(_lowering.EmitArrayDimension(
+                operation.Arguments[i].Value));
+        return indexes;
     }
 
     internal bool IsAggregateArrayCopyIntrinsic(

@@ -299,7 +299,7 @@ public class MinC3 : UdonSharpBehaviour {
 public struct FrameC3 { public int v; }", "MinC3");
         var code = uasm.Substring(uasm.IndexOf(".code_start", StringComparison.Ordinal));
         int ctors = Regex.Matches(code, Regex.Escape("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray")).Count;
-        Assert.Equal(2, ctors); // pre-fix: 1 (spec 2 reused spec 1's array; stash-verified)
+        Assert.Equal(3, ctors); // two spec frames plus the growable recursion stack
     }
 
     // ── [X8] delegate .Equals with a delegate-typed param argument ──

@@ -149,8 +149,7 @@ internal sealed class BoundaryChecker
     }
 
     public void RequireCanEraseProgramLocalPayload(IConversionOperation conversion,
-        ITypeSymbol sourceType, ITypeSymbol destinationType,
-        bool allowsProgramLocalClassErasure)
+        ITypeSymbol sourceType, ITypeSymbol destinationType)
     {
         var sourceShape = ShapeOf(sourceType);
         var destinationShape = ShapeOf(destinationType);
@@ -161,29 +160,19 @@ internal sealed class BoundaryChecker
             && destinationType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _ctx.Planner.InterfaceIsLocalUserClassOnly(localInterface))
             return;
-        // Phase-A armor (B82 mirror for N-R1): a Rank>1 array's runtime value is an object[] bundle, and
-        // the extern-boundary choke keys on the ARGUMENT's unwrapped static type — erasing the T[,] to
-        // object/Array first launders the bundle past externs the direct form loudly rejects. Contain at
-        // the erasure. Cross-behaviour transport is compiler-generated typed member access (never a user
-        // conversion), cast-BACK (object → T[,]) does not erase, and the equality position compares
-        // bundle references exactly like array references — all stay legal.
+        if (sourceShape.IsBundle
+            && destinationType.SpecialType
+                == SpecialType.System_Object)
+            return;
         if (sourceShape.Bundle == RuntimeBundleKind.MultiDimensionalArray
             && destinationShape.Bundle != RuntimeBundleKind.MultiDimensionalArray
             && !IsProgramLocalEqualityPosition(conversion))
             throw new NotSupportedException(
                 $"Erasing the multi-dimensional array '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
                 + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                + "its runtime value is an object[] bundle, not a real array, so once widened to object/Array it "
-                + "reaches extern calls (Debug.Log, string.Format, Array statics, …) that would silently receive "
-                + "the wrong shape. Keep the value typed as its T[,] type, or use a jagged array.");
+                + "its runtime value uses the compiler bundle ABI rather than the CLR array ABI. "
+                + "Keep the value typed as its T[,] type, or use a jagged array.");
 
-        // WaveJoint R2 [D10]: an object[]-emulated VALUE type (user struct / tuple / anonymous type)
-        // erased to object launders exactly like its ndim and v1-class twins — the box's runtime tag is
-        // a plain object[], so a later stringify silently prints "System.Object[]" and a cast back to a
-        // DIFFERENT bundle type reinterprets silently. No downstream surface can tell the laundered
-        // bundle from a real object[], so the erasure conversion is the only sound reject point. The
-        // equality/Equals positions stay legal (the class arm's carve-out), and T → T? is a WRAP whose
-        // static type still names the aggregate, not an erasure.
         if (sourceShape.Bundle == RuntimeBundleKind.Aggregate
             && !destinationShape.IsBundle
             && !(EmitPolicy.IsNullableT(destinationType, out var wrapped)
@@ -193,21 +182,18 @@ internal sealed class BoundaryChecker
             throw new NotSupportedException(
                 $"Erasing the value type '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
                 + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                + "its runtime value is an object[] bundle with no runtime type identity, so once boxed to object it "
-                + "launders past the cast / ToString / extern boundary checks and would stringify as \"System.Object[]\" "
-                + "or silently reinterpret when cast back. Keep the value typed as its struct/tuple type.");
+                + "its runtime value uses the compiler bundle ABI and cannot be transported as a native CLR object. "
+                + "Keep the value typed as its struct/tuple type.");
 
         if (!sourceShape.ContainsUserClassPayload
             || destinationShape.ContainsUserClassPayload
-            || IsProgramLocalEqualityPosition(conversion)
-            || allowsProgramLocalClassErasure)
+            || IsProgramLocalEqualityPosition(conversion))
             return;
         throw new NotSupportedException(
             $"Erasing the v1 user class '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
             + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-            + "a class value is a program-local object[] bundle with no runtime type identity, so once boxed "
-            + "to object it launders past the cross-program / cast / ToString boundary checks. Compare class "
-            + "references directly, or keep the value class-typed / use Foo[].");
+            + "a class value uses the program-local compiler bundle ABI and cannot cross a native object "
+            + "transport boundary. Compare class references directly, or keep the value class-typed / use Foo[].");
     }
 
     public void RequireInterfaceDispatchRepresentation(INamedTypeSymbol ifaceType, string memberName)
@@ -233,65 +219,6 @@ internal sealed class BoundaryChecker
             throw new NotSupportedException(
                 $"Delegate '{member.Name}' has a user-class parameter or return type and must remain "
                 + "private: its convention is valid only inside this Udon program.");
-    }
-
-    /// <summary>Allows the useful class -> object -> class pattern without reopening object laundering.
-    /// The erased value must be a single-declaration local and every reference must immediately perform
-    /// a runtime class test/cast or reference equality. This is deliberately a whole-body proof: one
-    /// opaque use makes the originating erasure loud again.</summary>
-    internal bool IsProvablyLocalClassErasure(
-        IConversionOperation conversion,
-        ITypeSymbol sourceType, ITypeSymbol destinationType)
-    {
-        if (destinationType == null
-            || ShapeOf(sourceType).Bundle != RuntimeBundleKind.Class
-            || destinationType.SpecialType != SpecialType.System_Object)
-            return false;
-
-        IOperation cursor = conversion;
-        while (cursor.Parent is IConversionOperation parentConversion) cursor = parentConversion;
-        if (cursor.Parent is not IVariableInitializerOperation { Parent: IVariableDeclaratorOperation declarator })
-            return false;
-
-        var local = declarator.Symbol;
-        IOperation root = declarator;
-        while (root.Parent != null) root = root.Parent;
-        foreach (var operation in root.DescendantsAndSelf())
-        {
-            if (operation is not ILocalReferenceOperation localRef
-                || !SymbolEqualityComparer.Default.Equals(localRef.Local, local))
-                continue;
-            if (!IsSafeErasedClassUse(localRef)) return false;
-        }
-        return true;
-    }
-
-    bool IsSafeErasedClassUse(ILocalReferenceOperation localRef)
-    {
-        switch (localRef.Parent)
-        {
-            case IConversionOperation conversion
-                when ShapeOf(conversion.Type).Bundle == RuntimeBundleKind.Class:
-                return true;
-            case IIsTypeOperation isType
-                when ShapeOf(isType.TypeOperand).Bundle == RuntimeBundleKind.Class:
-                return true;
-            case IIsPatternOperation { Pattern: IDeclarationPatternOperation declaration }
-                when ShapeOf(declaration.MatchedType).Bundle == RuntimeBundleKind.Class:
-                return true;
-            case IIsPatternOperation { Pattern: ITypePatternOperation typePattern }
-                when ShapeOf(typePattern.MatchedType).Bundle == RuntimeBundleKind.Class:
-                return true;
-            case IBinaryOperation { OperatorKind: BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals }:
-                return true;
-            case IArgumentOperation { Parent: IInvocationOperation invocation }
-                when invocation.TargetMethod.Name == "Equals"
-                     && invocation.TargetMethod.ContainingType.SpecialType
-                         is SpecialType.System_Object or SpecialType.System_ValueType:
-                return true;
-            default:
-                return false;
-        }
     }
 
     static IPropertyReferenceOperation ArrayRootPropertyReference(IArrayElementReferenceOperation elem)
@@ -386,7 +313,8 @@ internal sealed class BoundaryChecker
         => RequireTransport(BoundarySite.CrossBehaviourArgument, argType, null,
             TransportCapabilities.TypedProgramChannel);
 
-    public void RequireCanPassExternArgument(ITypeSymbol type, string name,
+    public void RequireCanPassExternArgument(
+        IOperation value, ITypeSymbol type, string name,
         bool allowClassReferenceIdentity = false, bool deferAggregateReceiverPolicy = false)
     {
         var shape = ShapeOf(type);
@@ -394,6 +322,21 @@ internal sealed class BoundaryChecker
         if (deferAggregateReceiverPolicy && shape.Bundle == RuntimeBundleKind.Aggregate) return;
         RequireTransport(BoundarySite.ExternArgument, type, name,
             TransportCapabilities.ExternCall);
+
+        var valueInfo = ClassifyValue(value);
+        if (!valueInfo.MayContainCompilerBundle)
+            return;
+        if (allowClassReferenceIdentity
+            && valueInfo.CompilerBundle is
+                RuntimeBundleKind.Class
+                or RuntimeBundleKind.MultiDimensionalArray
+                or RuntimeBundleKind.Iterator)
+            return;
+        throw new NotSupportedException(
+            $"The extern {name} cannot receive a value that may carry a compiler bundle erased "
+            + $"to '{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'. "
+            + "Keep the value inside compiler-owned operations; Udon externs "
+            + "would observe the object[] representation instead of the C# value.");
     }
 
     public void RequireCanReturnFromExtern(ITypeSymbol type, string name)

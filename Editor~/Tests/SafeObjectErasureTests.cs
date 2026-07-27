@@ -20,8 +20,9 @@ public class SafeErasureHost : UdonSharpBehaviour {
     }
 }
 ", "SafeErasureHost");
-
-        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+        Assert.Contains(
+            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            uasm);
     }
 
     [Fact]
@@ -37,14 +38,14 @@ public class SafeAsErasureHost : UdonSharpBehaviour {
     }
 }
 ", "SafeAsErasureHost");
-
         Assert.NotNull(uasm);
     }
 
     [Fact]
-    public void LocalErasure_ExternUse_RejectsWholeErasure()
+    public void LocalErasure_ExternUse_RejectsAtBoundary()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 using UnityEngine;
 public class UnsafeErasedNode { }
@@ -52,21 +53,119 @@ public class UnsafeErasureHost : UdonSharpBehaviour {
     void Start() { object erased = new UnsafeErasedNode(); Debug.Log(erased); }
 }
 ", "UnsafeErasureHost"));
-
-        Assert.Contains("Erasing the v1 user class", ex.Message);
+        Assert.Contains("extern", ex.Message);
+        Assert.Contains("compiler bundle", ex.Message);
     }
 
     [Fact]
-    public void LocalErasure_ObjectCopy_RejectsWholeErasure()
+    public void LocalErasure_ObjectCopy_Compiles()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class CopiedErasedNode { }
 public class CopiedErasureHost : UdonSharpBehaviour {
     void Start() { object erased = new CopiedErasedNode(); object copy = erased; }
 }
-", "CopiedErasureHost"));
+", "CopiedErasureHost");
+        Assert.NotNull(uasm);
+    }
 
-        Assert.Contains("Erasing the v1 user class", ex.Message);
+    [Fact]
+    public void MutableObjectCarrier_RejectsAtExternBoundary()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class MutableNode { }
+public class MutableCarrierHost : UdonSharpBehaviour {
+    void Start() {
+        object value = null;
+        value = new MutableNode();
+        Debug.Log(value);
+    }
+}", "MutableCarrierHost"));
+        Assert.Contains("may carry a compiler bundle", ex.Message);
+    }
+
+    [Fact]
+    public void ObjectParameter_RejectsAtExternBoundary()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class ParameterNode { }
+public class ParameterCarrierHost : UdonSharpBehaviour {
+    void Log(object value) { Debug.Log(value); }
+    void Start() { Log(new ParameterNode()); }
+}", "ParameterCarrierHost"));
+        Assert.Contains("may carry a compiler bundle", ex.Message);
+    }
+
+    [Fact]
+    public void ProvenNativeObjectLocal_CanCrossExternBoundary()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class NativeCarrierHost : UdonSharpBehaviour {
+    public int seed;
+    void Start() { object value = seed; Debug.Log(value); }
+}", "NativeCarrierHost");
+        Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void DynamicObjectEquals_DispatchesCompilerBundlesByTypeIdentity()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public record DynamicRecord(int Value);
+public class DynamicEqualsHost : UdonSharpBehaviour {
+    public object left;
+    public object right;
+    public bool result;
+    void Start() { result = object.Equals(left, right); }
+}", "DynamicEqualsHost");
+        Assert.Contains(
+            "SystemString.__StartsWith__SystemString__SystemBoolean",
+            uasm);
+        Assert.Contains(
+            "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+            uasm);
+    }
+
+    [Fact]
+    public void DynamicGetType_GuardsCompilerBundleBeforeExtern()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class DynamicGetTypeNode { }
+public class DynamicGetTypeHost : UdonSharpBehaviour {
+    object Read(object value) { return value.GetType(); }
+    void Start() { Read(new DynamicGetTypeNode()); }
+}", "DynamicGetTypeHost");
+        Assert.Contains(
+            "SystemString.__StartsWith__SystemString__SystemBoolean",
+            uasm);
+        Assert.Contains(
+            "UnityEngineDebug.__LogError__SystemObject__SystemVoid",
+            uasm);
+    }
+
+    [Fact]
+    public void UserClassGetHashCode_UsesBundleReferenceHash()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class HashNode { }
+public class HashHost : UdonSharpBehaviour {
+    public int result;
+    void Start() { result = new HashNode().GetHashCode(); }
+}", "HashHost");
+        Assert.Contains(
+            "SystemObject.__GetHashCode__SystemInt32",
+            uasm);
     }
 }

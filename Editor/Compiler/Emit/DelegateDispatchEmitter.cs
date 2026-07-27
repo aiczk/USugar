@@ -41,7 +41,8 @@ internal sealed class DelegateDispatchEmitter
     /// </summary>
     public CLeaf Emit(CLeaf bundle, IMethodSymbol invoke, string[] convArgs, string convRet, string convEnv,
         StorageType? retType, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParamMap,
-        CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription)
+        CLeaf[] argExprs, bool isConditional, bool reentrant, string receiverDescription,
+        System.Action copyBack = null)
     {
         var localSignature = DelegateAbi.IsProgramLocalSignature(
             invoke, _ctx.Types, typeParamMap);
@@ -103,6 +104,7 @@ internal sealed class DelegateDispatchEmitter
                             // Immediate conv-ret materialization (§3.3-4, fcd11/12 invariant).
                             if (retType != null)
                                 EmitAssign(retSlot, LoadField(convRet, retType.Value));
+                            copyBack?.Invoke();
                         },
                         _ =>
                         {
@@ -142,6 +144,27 @@ internal sealed class DelegateDispatchEmitter
                                     reentrant);
                                 if (retType != null)
                                     EmitAssign(retSlot, crossResult);
+                                for (var i = 0; i < invoke.Parameters.Length; i++)
+                                {
+                                    if (invoke.Parameters[i].RefKind
+                                        is not (RefKind.Ref or RefKind.Out))
+                                        continue;
+                                    var argumentType =
+                                        _ctx.ResolveStorageType(
+                                            invoke.Parameters[i].Type,
+                                            typeParamMap);
+                                    var updated = ExternCall(
+                                        ExternResolver.EventReceiverGetProgramVariable,
+                                        new List<CLeaf>
+                                        {
+                                            tgt,
+                                            Const(convArgs[i],
+                                                StorageTypes.String)
+                                        },
+                                        argumentType);
+                                    EmitStoreField(convArgs[i], updated);
+                                }
+                                copyBack?.Invoke();
                             }, failArm);
                         });
                 }, failArm);

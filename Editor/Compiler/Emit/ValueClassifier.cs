@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
@@ -35,6 +36,11 @@ public readonly struct ValueInfo
     // such a capture defeats type-based classification, so the value cannot be proven class-free.
     public readonly bool CapturesUnclassifiablePayload;
     public readonly bool IsDirectDelegateValue;
+    public readonly RuntimeBundleKind CompilerBundle;
+    public readonly bool MayContainCompilerBundle;
+
+    public bool ContainsCompilerBundle
+        => CompilerBundle != RuntimeBundleKind.None;
 
     public ValueInfo(
         IOperation operation,
@@ -42,7 +48,9 @@ public readonly struct ValueInfo
         ValueProvenance provenance,
         bool delegateCapturesProgramLocalPayload,
         bool capturesUnclassifiablePayload,
-        bool isDirectDelegateValue)
+        bool isDirectDelegateValue,
+        RuntimeBundleKind compilerBundle,
+        bool mayContainCompilerBundle)
     {
         Operation = operation;
         Kind = kind;
@@ -50,6 +58,8 @@ public readonly struct ValueInfo
         DelegateCapturesProgramLocalPayload = delegateCapturesProgramLocalPayload;
         CapturesUnclassifiablePayload = capturesUnclassifiablePayload;
         IsDirectDelegateValue = isDirectDelegateValue;
+        CompilerBundle = compilerBundle;
+        MayContainCompilerBundle = mayContainCompilerBundle;
     }
 }
 
@@ -93,10 +103,23 @@ public static class ValueClassifier
         var unwrapped = UnwrapConversions(value);
         var staticType = unwrapped?.Type ?? value?.Type;
         if (unwrapped == null)
-            return Create(null, ValueKind.Other, ValueProvenance.Unknown, false, false, false);
+            return Create(
+                null, ValueKind.Other, ValueProvenance.Unknown,
+                false, false, false, RuntimeBundleKind.None,
+                false);
 
         if (unwrapped.ConstantValue.HasValue && unwrapped.ConstantValue.Value == null)
-            return Create(unwrapped, ValueKind.Null, ValueProvenance.LiteralNull, false, false, false);
+            return Create(
+                unwrapped, ValueKind.Null,
+                ValueProvenance.LiteralNull, false, false, false,
+                RuntimeBundleKind.None, false);
+
+        var compilerBundle = CompilerBundleOf(
+            unwrapped, typeCtx);
+        var mayContainCompilerBundle =
+            compilerBundle != RuntimeBundleKind.None
+            || MayContainErasedCompilerBundle(
+                unwrapped, typeCtx);
 
         if (TryGetDelegateTarget(unwrapped, out var target, out var provenance))
         {
@@ -107,13 +130,23 @@ public static class ValueClassifier
                 provenance,
                 capturesPayload,
                 capturesUnclassifiable,
-                IsDirectDelegateProvenance(provenance));
+                IsDirectDelegateProvenance(provenance),
+                compilerBundle,
+                mayContainCompilerBundle);
         }
 
         if (IsDelegateType(staticType))
-            return Create(unwrapped, ValueKind.Delegate, ProvenanceOf(unwrapped), false, false, false);
+            return Create(
+                unwrapped, ValueKind.Delegate,
+                ProvenanceOf(unwrapped), false, false, false,
+                compilerBundle,
+                mayContainCompilerBundle);
 
-        return Create(unwrapped, ValueKind.Other, ProvenanceOf(unwrapped), false, false, false);
+        return Create(
+            unwrapped, ValueKind.Other,
+            ProvenanceOf(unwrapped), false, false, false,
+            compilerBundle,
+            mayContainCompilerBundle);
     }
 
     public static bool IsDirectProgramLocalSafeDelegate(ValueInfo info)
@@ -137,17 +170,123 @@ public static class ValueClassifier
         ValueProvenance provenance,
         bool delegateCapturesProgramLocalPayload,
         bool capturesUnclassifiablePayload,
-        bool isDirectDelegateValue)
+        bool isDirectDelegateValue,
+        RuntimeBundleKind compilerBundle,
+        bool mayContainCompilerBundle)
         => new ValueInfo(
             operation,
             kind,
             provenance,
             delegateCapturesProgramLocalPayload,
             capturesUnclassifiablePayload,
-            isDirectDelegateValue);
+            isDirectDelegateValue,
+            compilerBundle,
+            mayContainCompilerBundle);
 
     static bool IsDelegateType(ITypeSymbol type)
         => type is INamedTypeSymbol named && named.DelegateInvokeMethod != null;
+
+    static RuntimeBundleKind CompilerBundleOf(
+        IOperation value,
+        TypeClassifierContext typeCtx)
+    {
+        if (value == null) return RuntimeBundleKind.None;
+        var direct = value.Type == null
+            ? RuntimeBundleKind.None
+            : TypeClassifier.ShapeOf(value.Type, typeCtx).Bundle;
+        if (direct != RuntimeBundleKind.None)
+            return direct;
+
+        IEnumerable<IOperation> carriers = value switch
+        {
+            IArrayCreationOperation array
+                when array.Initializer != null
+                => array.Initializer.ElementValues,
+            IConditionalOperation conditional
+                => new[]
+                {
+                    conditional.WhenTrue,
+                    conditional.WhenFalse
+                },
+            ICoalesceOperation coalesce
+                => new[]
+                {
+                    coalesce.Value,
+                    coalesce.WhenNull
+                },
+            _ => Array.Empty<IOperation>()
+        };
+        foreach (var carrier in carriers)
+        {
+            var nested = CompilerBundleOf(
+                UnwrapConversions(carrier), typeCtx);
+            if (nested != RuntimeBundleKind.None)
+                return nested;
+        }
+        return RuntimeBundleKind.None;
+    }
+
+    static bool MayContainErasedCompilerBundle(
+        IOperation value,
+        TypeClassifierContext typeCtx)
+    {
+        if (value == null) return false;
+        var shape = value.Type == null
+            ? default
+            : TypeClassifier.ShapeOf(value.Type, typeCtx);
+        if (!shape.ContainsOpaqueObject)
+            return false;
+
+        switch (value)
+        {
+            case ILiteralOperation:
+            case IDefaultValueOperation:
+            case IObjectCreationOperation:
+                return false;
+            case IArrayCreationOperation array:
+                return array.Initializer?.ElementValues.Any(
+                    element =>
+                        CompilerBundleOf(
+                            UnwrapConversions(element),
+                            typeCtx)
+                        != RuntimeBundleKind.None
+                        || MayContainErasedCompilerBundle(
+                            UnwrapConversions(element),
+                            typeCtx)) == true;
+            case IConditionalOperation conditional:
+                return MayContainErasedCompilerBundle(
+                           UnwrapConversions(
+                               conditional.WhenTrue), typeCtx)
+                       || MayContainErasedCompilerBundle(
+                           UnwrapConversions(
+                               conditional.WhenFalse), typeCtx);
+            case ICoalesceOperation coalesce:
+                return MayContainErasedCompilerBundle(
+                           UnwrapConversions(coalesce.Value),
+                           typeCtx)
+                       || MayContainErasedCompilerBundle(
+                           UnwrapConversions(coalesce.WhenNull),
+                           typeCtx);
+            case IFieldReferenceOperation field:
+                return field.Field.DeclaringSyntaxReferences
+                    .Length != 0;
+            case IPropertyReferenceOperation property:
+                return property.Property.DeclaringSyntaxReferences
+                    .Length != 0;
+            case IInvocationOperation invocation:
+                return invocation.TargetMethod
+                           .DeclaringSyntaxReferences.Length != 0
+                       && !ExternResolver.IsSdkNamespace(
+                           invocation.TargetMethod
+                               .ContainingNamespace);
+            case ILocalReferenceOperation:
+            case IParameterReferenceOperation:
+            case IArrayElementReferenceOperation:
+                return true;
+            default:
+                return false;
+        }
+    }
 
     static bool TryGetDelegateTarget(IOperation value, out IMethodSymbol target, out ValueProvenance provenance)
     {

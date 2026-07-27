@@ -52,17 +52,14 @@ internal sealed class CompoundAssignmentHandler
             var vOp = LoweringServices.UnwrapConcatOperand(op.Value);
             // Same choke as the binary-concat and interpolation surfaces: an ndim or object[]-emulated
             // value-type operand (user struct / tuple / anonymous type) would launder to "System.Object[]".
-            ClassAbi.RejectImplicitToString(
-                vOp.Type, _lowering.IsAggregateValue(vOp.Type));
-            if (_lowering.ResolveType(vOp.Type) is INamedTypeSymbol vt
-                && (_lowering.IsUserClass(vt) || _lowering.IsFoldedEnum(vt)))
-            {
-                var converted = _lowering.ConvertConcatOperand(_lowering.VisitExpression(vOp), vOp);
-                var concat = _lowering.ExternCall(UdonAbi.StringConcatObjects,
-                    new List<CLeaf> { leftVal, converted }, StorageTypes.String);
-                lv.Write(concat);
-                return concat;
-            }
+            var converted = _lowering.ConvertConcatOperand(
+                _lowering.VisitExpression(vOp), vOp);
+            var concat = _lowering.ExternCall(
+                UdonAbi.StringConcatObjects,
+                new List<CLeaf> { leftVal, converted },
+                StorageTypes.String);
+            lv.Write(concat);
+            return concat;
         }
 
         var rightVal = _lowering.VisitExpression(op.Value);
@@ -147,7 +144,6 @@ internal sealed class CompoundAssignmentHandler
         var invoke = delegateType.DelegateInvokeMethod;
         // §3.4-1: re-validate ref/out at the lowering site, mirroring the dispatch-side re-validation —
         // a delegate value from a foreign source never passed creation-site validation.
-        DelegateAbi.ValidateNoRefOutParams(invoke);
 
         var lv = _lvalues.PrepareLValue(op.Target);
         var leftVal = lv.Value;
@@ -285,7 +281,6 @@ internal sealed class CompoundAssignmentHandler
         // Field-like cross-behaviour events share the delegate-field RMW transport.
         var delegateType = (INamedTypeSymbol)evt.Type;
         var invoke = delegateType.DelegateInvokeMethod;
-        DelegateAbi.ValidateNoRefOutParams(invoke);
         var crossBehaviour = !evt.IsStatic
             && evtRef.Instance is not IInstanceReferenceOperation;
         CLeaf eventReceiver = null;

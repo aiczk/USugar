@@ -98,7 +98,7 @@ public class NdLaunder : UdonSharpBehaviour {
     public int r;
     void Start() { int[,] a = new int[2,3]; a[0,0] = 4; object o = a; Debug.Log(o); r = 1; }
 }", "NdLaunder"));
-        Assert.Contains("multi-dimensional", ex.Message);
+        Assert.Contains("compiler bundle", ex.Message);
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public class NdSmuggle : UdonSharpBehaviour {
     public string s;
     void Start() { int[,] a = new int[2,2]; s = string.Format(""{0}{1}{2}{3}"", 1, 2, 3, a); }
 }", "NdSmuggle"));
-        Assert.Contains("multi-dimensional", ex.Message);
+        Assert.Contains("compiler bundle", ex.Message);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ using VRC.Udon.Common.Interfaces;
 public class NdSmuggle2 : UdonSharpBehaviour {
     void Start() { int[,] a = new int[2,2]; SendCustomNetworkEvent(NetworkEventTarget.All, ""Evt"", a); }
 }", "NdSmuggle2"));
-        Assert.Contains("multi-dimensional", ex.Message);
+        Assert.Contains("compiler bundle", ex.Message);
     }
 
     [Fact]
@@ -150,31 +150,31 @@ public class NdArrForm : UdonSharpBehaviour {
     public string s;
     void Start() { int[,] a = new int[2,2]; s = string.Format(""{0}{1}"", new object[] { 1, a }); }
 }", "NdArrForm"));
-        Assert.Contains("multi-dimensional", ex.Message);
+        Assert.Contains("compiler bundle", ex.Message);
     }
 
     [Fact]
-    public void NdimArray_InterpolationHole_LoudRejects()  // CW14
+    public void NdimArray_InterpolationHole_UsesRuntimeTypeName()  // CW14
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NdInterp : UdonSharpBehaviour {
     public string s;
     void Start() { int[,] a = new int[2,2]; s = $""grid={a}""; }
-}", "NdInterp"));
-        Assert.Contains("multi-dimensional", ex.Message);
+}", "NdInterp");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
-    public void NdimArray_StringConcatOperand_LoudRejects()  // CW15
+    public void NdimArray_StringConcatOperand_UsesRuntimeTypeName()  // CW15
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class NdConcat : UdonSharpBehaviour {
     public string s;
     void Start() { int[,] a = new int[2,2]; s = ""grid="" + a; }
-}", "NdConcat"));
-        Assert.Contains("multi-dimensional", ex.Message);
+}", "NdConcat");
+        Assert.DoesNotContain("\"System.Object[]\"", uasm);
     }
 
     [Fact]
@@ -688,8 +688,8 @@ public class CwMulti9 : UdonSharpBehaviour {
         var fanoutStart = uasm.IndexOf("\n    __dlg_fanout_", combineStart, StringComparison.Ordinal);
         var combineEnd = removeStart >= 0 ? removeStart : fanoutStart;
         var combine = uasm.Substring(combineStart, combineEnd - combineStart);
-        // 2 flatten tag guards + the re-minted multicast bundle's own tag write.
-        Assert.Equal(3, Regex.Matches(combine, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
+        // Both flatten operands compare the shared bundle type identity.
+        Assert.Equal(2, Regex.Matches(combine, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
         // One env-null inequality guard per flatten arm.
         Assert.Equal(2, Regex.Matches(combine,
             @"SystemObject\.__op_Inequality__SystemObject_SystemObject__SystemBoolean").Count);
@@ -713,8 +713,8 @@ public class CwDlgEq10 : UdonSharpBehaviour {
     void Start() { a = M1; b = M1; eq = (a == b); }
 }", "CwDlgEq10");
         var kindTag = consts.First(c => Equals(c.Value, DelegateAbi.KindTag)).Id;
-        // 2 mints write the tag; the equality's both-non-null leg reads it on BOTH operands.
-        Assert.Equal(4, Regex.Matches(uasm, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
+        // The equality's both-non-null leg compares both shared type headers.
+        Assert.Equal(2, Regex.Matches(uasm, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
     }
 
     [Fact]

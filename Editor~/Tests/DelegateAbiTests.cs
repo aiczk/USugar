@@ -206,16 +206,16 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
     // ── End-to-end reject pins ──
 
     [Fact]
-    public void DelegateField_RefParamSignature_ThrowsNotSupported()
+    public void DelegateField_RefParamSignature_UsesBundleAbi()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate void RefDel(ref int x);
 public class RefDlg : UdonSharpBehaviour {
     public RefDel d;
     void Start() { }
-}", "RefDlg"));
-        Assert.Contains("ref/out", ex.Message);
+}", "RefDlg");
+        Assert.Contains("d: %SystemObjectArray", uasm);
     }
 
     [Fact]
@@ -523,19 +523,19 @@ public class TernFree : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
     [Fact]
-    public void RefParamDelegate_DispatchSite_Throws()
+    public void RefParamDelegate_DispatchSite_UsesCopyBack()
     {
         // F5: a ref/out delegate VALUE received as a param never passes a creation site in this
         // class — the dispatch-site conv-var declaration must re-validate (§3.4-1).
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate void RefD2(ref int v);
 public class RefDispatch : UdonSharpBehaviour {
     public int result;
     void Use(RefD2 d) { int v = 1; if (d != null) { d(ref v); } result = v; }
     void Start() { Use(null); }
-}", "RefDispatch"));
-        Assert.Contains("ref/out", ex.Message);
+}", "RefDispatch");
+        Assert.NotNull(uasm);
     }
     [Fact]
     public void MethodGroupThroughIdentityCallee_ArrayStore_Compiles()

@@ -155,17 +155,18 @@ public class DlgEq : UdonSharpBehaviour {
     // ── Reject surface inherited from delegate creation policy (§3.4-1, §R9) ──
 
     [Fact]
-    public void PlusEquals_OnRefOutDelegate_ThrowsNotSupported()
+    public void PlusEquals_OnRefOutDelegate_EmitsFanoutAndCopyBack()
     {
-        var ex = Assert.ThrowsAny<Exception>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public delegate void RefDel(ref int x);
 public class DlgRefOut : UdonSharpBehaviour {
     RefDel d;
     void Bump(ref int x) { x++; }
     void Start() { d += Bump; }
-}", "DlgRefOut"));
-        Assert.Contains("ref/out", ex.Message, StringComparison.OrdinalIgnoreCase);
+}", "DlgRefOut");
+        Assert.Contains("__dlg_combine_", uasm);
+        Assert.Contains("__dlg_fanout_", uasm);
     }
 
     // ── tuple-return delegate `+=` (Stage 1.75 design 2026-07-04 §1.2 bullet 6): SUPPORTED ──
