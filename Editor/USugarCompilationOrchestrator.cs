@@ -12,8 +12,6 @@ using UdonSharp;
 using UdonSharp.Compiler;
 using UdonSharpEditor;
 using VRC.Udon;
-using VRC.Udon.Editor;
-using VRC.Udon.Common.Interfaces;
 using VRC.SDK3.UdonNetworkCalling;
 using UnityCompilationAssembly = UnityEditor.Compilation.Assembly;
 
@@ -116,7 +114,6 @@ static class USugarCompilationOrchestrator
     {
         public EmitResult Result;
         public UdonSharpProgramAsset Asset;
-        public IUdonProgram Program;
         public Dictionary<string, FieldDefinition> FieldDefinitions;
         public NetworkCallingEntrypointMetadata[] NetworkMetadata;
         public int SyncMode;
@@ -249,19 +246,21 @@ static class USugarCompilationOrchestrator
     {
         MarkCompileUnknown();
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var collectedDiagnostics = new List<(string file, int line, int character, string message, string severity)>();
+        var collectedDiagnostics = new List<(
+            string file, int line, int character,
+            string message, string severity)>();
         string fingerprint = null;
         var preparedApplies = new List<PreparedApply>();
 
         try
         {
-            if (USugarReflectionTargets.DoesUnityProjectHaveCompileErrors.Invoke(
-                    null, null) is true)
+            if (USugarReflectionTargets.HasUnityProjectCompileErrors())
             {
                 const string message =
                     "All Unity C# compiler errors must be resolved before running an UdonSharp compile.";
                 USugarLog.Error(message);
-                collectedDiagnostics.Add(("", 0, 0, message, "Error"));
+                collectedDiagnostics.Add(
+                    ("", 0, 0, message, "Error"));
                 LastCompileHadErrors = true;
                 return;
             }
@@ -303,8 +302,7 @@ static class USugarCompilationOrchestrator
                 return;
             }
 
-            var externRegistry = UdonAbiCatalogFactory.Create(
-                UdonEditorManager.Instance.GetNodeDefinitions());
+            var externRegistry = UdonAbiCatalogFactory.Installed;
 
             foreach (var unit in compilationUnits)
             {
@@ -334,7 +332,8 @@ static class USugarCompilationOrchestrator
                     var character = diag.Location.IsInSource ? span.StartLinePosition.Character + 1 : 0;
                     var message = diag.GetMessage();
                     USugarLog.Error($"{file}({line},{character}): {message}");
-                    collectedDiagnostics.Add((file, line, character, message, "Error"));
+                    collectedDiagnostics.Add(
+                        (file, line, character, message, "Error"));
                 }
                 LastCompileHadErrors = true;
                 return;
@@ -351,7 +350,8 @@ static class USugarCompilationOrchestrator
             void RootSelectionError(string file, string message)
             {
                 USugarLog.Error($"{file}: {message}");
-                collectedDiagnostics.Add((file, 0, 0, message, "Error"));
+                collectedDiagnostics.Add(
+                    (file, 0, 0, message, "Error"));
                 rootSelectionFailed = true;
             }
             // A partial class has one declaration node per part but ONE symbol — emit it once, not once per part.
@@ -500,7 +500,9 @@ static class USugarCompilationOrchestrator
                 bool hasEmitError = false;
                 foreach (var d in result.EmitterDiagnostics)
                 {
-                    collectedDiagnostics.Add((d.FilePath, d.Line, d.Character, d.Message, d.Severity));
+                    collectedDiagnostics.Add((
+                        d.FilePath, d.Line, d.Character,
+                        d.Message, d.Severity));
                     if (d.Severity == "Warning")
                         USugarLog.Warn($"{d.FilePath}({d.Line},{d.Character}): {d.Message}");
                     else
@@ -528,27 +530,12 @@ static class USugarCompilationOrchestrator
                     binding.Matched = true;
                     var programAsset = binding.Asset;
 
-                    var program = USugarConstantApplier.AssembleUasm(
-                        result.Uasm,
-                        result.HeapSize,
-                        out var assemblyError);
-                    if (program == null)
-                    {
-                        var failMsg =
-                            $"Failed to assemble UASM for {result.Symbol.Name}: "
-                            + assemblyError;
-                        USugarReflectionTargets.ProgramField.SetValue(
-                            programAsset, null);
-                        USugarReflectionTargets.AssemblyErrorField.SetValue(
-                            programAsset, assemblyError);
-                        programAsset.hasInteractEvent = false;
-                        USugarLog.Error(failMsg);
-                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, failMsg, "Error"));
-                        failures++;
-                        continue;
-                    }
                     try
                     {
+                        var program = USugarReflectionTargets.AssembleProgram(
+                            programAsset,
+                            result.Uasm,
+                            result.HeapSize);
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         var fieldDefinitions =
                             USugarTypeCacheManager.BuildFieldDefinitions(
@@ -568,7 +555,6 @@ static class USugarCompilationOrchestrator
                         {
                             Result = result,
                             Asset = programAsset,
-                            Program = program,
                             FieldDefinitions = fieldDefinitions,
                             NetworkMetadata = netMeta,
                             SyncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol)
@@ -579,7 +565,9 @@ static class USugarCompilationOrchestrator
                         var failMsg =
                             $"Failed to prepare program asset for {result.Symbol.Name}: {ex.Message}";
                         USugarLog.Error(failMsg);
-                        collectedDiagnostics.Add((result.Tree.FilePath, 0, 0, failMsg, "Error"));
+                        collectedDiagnostics.Add((
+                            result.Tree.FilePath, 0, 0,
+                            failMsg, "Error"));
                         failures++;
                     }
                 }
@@ -593,7 +581,9 @@ static class USugarCompilationOrchestrator
                                   + "emitted UdonSharpBehaviour. Its stale compiled program will not be "
                                   + "accepted; delete or relink the asset.";
                     USugarLog.Error(message);
-                    collectedDiagnostics.Add((orphan.ScriptPath, 0, 0, message, "Error"));
+                    collectedDiagnostics.Add((
+                        orphan.ScriptPath, 0, 0,
+                        message, "Error"));
                     failures++;
                 }
             }
@@ -603,14 +593,6 @@ static class USugarCompilationOrchestrator
                 foreach (var prepared in preparedApplies)
                 {
                     var programAsset = prepared.Asset;
-                    USugarReflectionTargets.ProgramField.SetValue(
-                        programAsset, prepared.Program);
-                    USugarReflectionTargets.AssemblyErrorField.SetValue(
-                        programAsset, null);
-                    programAsset.hasInteractEvent =
-                        prepared.Program.EntryPoints
-                            .GetExportedSymbols()
-                            .Contains("_interact");
                     programAsset.scriptID =
                         UdonBehaviourTypeMetadata.TypeId(
                             prepared.Result.Symbol);
@@ -621,13 +603,15 @@ static class USugarCompilationOrchestrator
                         : BehaviourSyncMode.Any;
                     programAsset.SetUdonAssembly("");
                     programAsset.ApplyProgram();
+                    USugarReflectionTargets.StoreUasm(
+                        programAsset, prepared.Result.Uasm);
                     programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
                     EditorUtility.SetDirty(programAsset);
-                    PushUasmToEditorCache(programAsset, prepared.Result.Uasm);
                 }
 
                 LastCompileHadErrors = false;
-                CompleteSuccessfulEditorIntegration(editorBuild);
+                USugarReflectionTargets.CompleteCompileLifecycle(
+                    editorBuild);
             }
             sw.Stop();
             LastCompileHadErrors = failures > 0;
@@ -649,66 +633,14 @@ static class USugarCompilationOrchestrator
         catch (Exception ex)
         {
             USugarLog.Error(ex);
-            collectedDiagnostics.Add(("", 0, 0, ex.Message, "Error"));
+            collectedDiagnostics.Add(
+                ("", 0, 0, ex.Message, "Error"));
             LastCompileHadErrors = true;
         }
         finally
         {
-            PushDiagnosticsToEditorCache(collectedDiagnostics);
-        }
-    }
-
-    // ── Editor cache integration ──
-
-    static void PushDiagnosticsToEditorCache(List<(string file, int line, int character, string message, string severity)> diagnostics)
-    {
-        try
-        {
-            var instance = USugarReflectionTargets.GetEditorCacheInstance();
-            if (instance == null) return;
-
-            var diagType = USugarReflectionTargets.CompileDiagnosticType;
-            if (diagType == null) return;
-
-            // Fail loud if the per-field bindings broke (e.g. an SDK rename of a CompileDiagnostic field, where
-            // the type still resolves but a FieldInfo becomes null). Otherwise the null FieldInfo would NRE
-            // inside the loop, get swallowed by the catch below as a mere Warn, and silently drop ALL inline
-            // diagnostics while the compile still appears to succeed — the documented fail-silent failure mode.
-            if (USugarReflectionTargets.DiagSeverity == null || USugarReflectionTargets.DiagFile == null
-                || USugarReflectionTargets.DiagLine == null || USugarReflectionTargets.DiagCharacter == null
-                || USugarReflectionTargets.DiagMessage == null)
-            {
-                USugarLog.Error("CompileDiagnostic field bindings did not resolve — inline editor diagnostics disabled. The UdonSharp SDK may have changed; check USugarReflectionTargets. (Console errors still report normally.)");
-                return;
-            }
-
-            var arr = Array.CreateInstance(diagType, diagnostics.Count);
-            for (int i = 0; i < diagnostics.Count; i++)
-            {
-                var diag = Activator.CreateInstance(diagType);
-                var sevName = diagnostics[i].severity ?? "Error";
-                try { USugarReflectionTargets.DiagSeverity.SetValue(diag, Enum.Parse(USugarReflectionTargets.DiagSeverity.FieldType, sevName)); }
-                catch { USugarReflectionTargets.DiagSeverity.SetValue(diag, Enum.Parse(USugarReflectionTargets.DiagSeverity.FieldType, "Error")); }
-                USugarReflectionTargets.DiagFile.SetValue(diag, diagnostics[i].file ?? "");
-                USugarReflectionTargets.DiagLine.SetValue(
-                    diag,
-                    diagnostics[i].line > 0
-                        ? diagnostics[i].line - 1
-                        : 0);
-                USugarReflectionTargets.DiagCharacter.SetValue(
-                    diag,
-                    diagnostics[i].character > 0
-                        ? diagnostics[i].character - 1
-                        : 0);
-                USugarReflectionTargets.DiagMessage.SetValue(diag, diagnostics[i].message ?? "");
-                arr.SetValue(diag, i);
-            }
-
-            USugarReflectionTargets.LastCompileDiagnosticsProp?.SetValue(instance, arr);
-        }
-        catch (Exception ex)
-        {
-            USugarLog.Warn($"Failed to push diagnostics to editor cache: {ex.Message}");
+            USugarReflectionTargets.PublishDiagnostics(
+                collectedDiagnostics);
         }
     }
 
@@ -763,36 +695,7 @@ static class USugarCompilationOrchestrator
         return list.ToArray();
     }
 
-    static void PushUasmToEditorCache(UdonSharpProgramAsset programAsset, string uasm)
-    {
-        try
-        {
-            var instance = USugarReflectionTargets.GetEditorCacheInstance();
-            if (instance == null) return;
-
-            USugarReflectionTargets.SetUasmStr?.Invoke(instance, new object[] { programAsset, uasm });
-        }
-        catch (Exception ex)
-        {
-            USugarLog.Warn($"Failed to push UASM to editor cache: {ex.Message}");
-        }
-    }
-
     // ── Helpers ──
-
-    static void CompleteSuccessfulEditorIntegration(bool editorBuild)
-    {
-        var cache = USugarReflectionTargets.GetEditorCacheInstance()
-                    ?? throw new InvalidOperationException(
-                        "UdonSharpEditorCache.Instance is unavailable.");
-        USugarReflectionTargets.RehashAllScripts.Invoke(cache, null);
-        USugarReflectionTargets.RunPostBuildSceneFixup.Invoke(null, null);
-        USugarReflectionTargets.LastBuildType.SetValue(
-            cache,
-            Enum.Parse(
-                USugarReflectionTargets.DebugInfoType,
-                editorBuild ? "Editor" : "Client"));
-    }
 
     static USugarExactSourcePathIndex<ProgramAssetBinding> CollectProgramAssetBindings(
         out List<ProgramAssetBinding> bindings)
@@ -1157,15 +1060,7 @@ static class USugarCompilationOrchestrator
 
     static IEnumerable<string> FilterBlacklistedSourcePaths(
         IEnumerable<string> sourcePaths)
-    {
-        var filtered =
-            USugarReflectionTargets.FilterBlacklistedPaths.Invoke(
-                null, new object[] { sourcePaths })
-            as IEnumerable<string>;
-        return filtered
-               ?? throw new InvalidOperationException(
-                   "UdonSharpSettings.FilterBlacklistedPaths returned no source set.");
-    }
+        => USugarReflectionTargets.FilterSourcePaths(sourcePaths);
 
     static readonly Dictionary<string, (string sourceText, string defineKey, SyntaxTree tree)> _treeCache = new();
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using VRC.Udon.Editor;
 using VRC.Udon.Graph;
 
 /// <summary>
@@ -10,6 +11,32 @@ using VRC.Udon.Graph;
 /// </summary>
 static class UdonAbiCatalogFactory
 {
+    static UdonAbiCatalog _installed;
+
+    /// <summary>
+    /// One immutable view of the installed SDK ABI for the current editor
+    /// domain. Every editor integration query must use this same authority.
+    /// </summary>
+    public static UdonAbiCatalog Installed
+        => _installed ??= Create(
+            UdonEditorManager.Instance.GetNodeDefinitions());
+
+    public static bool IsRegisteredStorageType(Type type)
+        => type != null
+           && Installed.IsRegisteredType(
+               UdonTypeIdentity.FromStorage(type));
+
+    public static bool IsNativeAbiType(Type type)
+    {
+        if (type == null
+            || !Installed.TryGetType(
+                UdonTypeIdentity.FromStorage(type),
+                out var descriptor))
+            return false;
+        return descriptor.HasTypeNode
+               || descriptor.AppearsAsExternOperand;
+    }
+
     public static UdonAbiCatalog Create(IEnumerable<UdonNodeDefinition> definitions)
     {
         if (definitions == null) throw new ArgumentNullException(nameof(definitions));

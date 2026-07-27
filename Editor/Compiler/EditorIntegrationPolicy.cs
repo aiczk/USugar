@@ -98,11 +98,12 @@ static class USugarEditorIntegrationPolicy
     public static bool RequiresOpaqueObjectArrayStorage(
         Type proxyType,
         Type systemType,
-        Func<Type, bool> isExternType,
+        Func<Type, bool> isNativeAbiType,
         Func<Type, bool> isBehaviourType)
     {
         if (proxyType == null) throw new ArgumentNullException(nameof(proxyType));
-        if (isExternType == null) throw new ArgumentNullException(nameof(isExternType));
+        if (isNativeAbiType == null)
+            throw new ArgumentNullException(nameof(isNativeAbiType));
         if (isBehaviourType == null) throw new ArgumentNullException(nameof(isBehaviourType));
         if (systemType != typeof(object[]) || proxyType == typeof(object[]))
             return false;
@@ -119,7 +120,7 @@ static class USugarEditorIntegrationPolicy
             return true;
         if (leaf.IsEnum || isBehaviourType(leaf))
             return false;
-        return !isExternType(leaf);
+        return !isNativeAbiType(leaf);
     }
 
     /// <summary>

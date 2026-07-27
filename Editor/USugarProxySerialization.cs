@@ -107,7 +107,7 @@ static class USugarProxySerialization
         return USugarEditorIntegrationPolicy.RequiresOpaqueObjectArrayStorage(
             proxyType,
             systemType,
-            IsExternType,
+            UdonAbiCatalogFactory.IsNativeAbiType,
             type => typeof(UdonSharpBehaviour).IsAssignableFrom(type));
     }
 
@@ -120,22 +120,7 @@ static class USugarProxySerialization
         => type.IsEnum
            || typeof(UdonSharpBehaviour)
                .IsAssignableFrom(type)
-           || IsExternType(type);
-
-    static bool IsExternType(Type type)
-    {
-        try
-        {
-            return RequireBinding(
-                    USugarReflectionTargets.IsExternTypeMethod,
-                    nameof(USugarReflectionTargets.IsExternTypeMethod))
-                .Invoke(null, new object[] { type }) as bool? == true;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+           || UdonAbiCatalogFactory.IsNativeAbiType(type);
 
     static bool TryGetProxyFieldType(
         UdonBehaviour behaviour,

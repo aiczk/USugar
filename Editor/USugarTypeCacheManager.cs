@@ -429,7 +429,6 @@ static class USugarTypeCacheManager
     }
 
     static bool IsRegisteredUdonType(Type type)
-        => USugarReflectionTargets.IsExternTypeMethod.Invoke(
-            null, new object[] { type }) as bool? == true;
+        => UdonAbiCatalogFactory.IsRegisteredStorageType(type);
 
 }

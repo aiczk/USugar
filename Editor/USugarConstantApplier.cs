@@ -2,48 +2,10 @@ using System;
 using VRC.Udon.Common.Interfaces;
 
 /// <summary>
-/// Assembles UASM text into IUdonProgram and applies constant values to the program heap.
+/// Applies compiler-owned constant values to an assembled Udon program heap.
 /// </summary>
 static class USugarConstantApplier
 {
-    internal static IUdonProgram AssembleUasm(
-        string uasm,
-        uint heapSize,
-        out string error)
-    {
-        error = null;
-        var method = USugarReflectionTargets.AssembleMethod;
-        if (method == null)
-        {
-            error = "CompilerUdonInterface.Assemble not found";
-            USugarLog.Error(error);
-            return null;
-        }
-        try
-        {
-            var program =
-                method.Invoke(null, new object[] { uasm, heapSize })
-                as IUdonProgram;
-            if (program == null)
-                error = "CompilerUdonInterface.Assemble returned no program.";
-            return program;
-        }
-        catch (System.Reflection.TargetInvocationException ex)
-        {
-            error = ex.InnerException?.Message ?? ex.Message;
-            USugarLog.Error(
-                $"UASM assembly failed: {error}\n"
-                + $"{ex.InnerException?.StackTrace ?? ex.StackTrace}");
-            return null;
-        }
-        catch (Exception ex)
-        {
-            error = ex.Message;
-            USugarLog.Error($"UASM assembly failed: {ex}");
-            return null;
-        }
-    }
-
     internal static void ApplyConstantValues(IUdonProgram program,
         System.Collections.Generic.List<(string Id, string UdonType, object Value)> constants)
     {

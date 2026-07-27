@@ -17,8 +17,6 @@ static class USugarHarmonyPatcher
     {
         if (USugarCompiler.OverrideEnabled)
             ApplyPatches();
-        else
-            USugarReflectionTargets.Validate();
     }
 
     internal static void ApplyPatches()
@@ -30,13 +28,6 @@ static class USugarHarmonyPatcher
             USugarCompilationOrchestrator.LastCompileHadErrors = true;
             USugarLog.Error(
                 "Compiler override disabled because required UdonSharp reflection targets are unavailable.");
-            return;
-        }
-
-        var compilerType = USugarReflectionTargets.CompilerType;
-        if (compilerType == null)
-        {
-            USugarLog.Warn("UdonSharpCompilerV1 not found — patches skipped");
             return;
         }
 
@@ -54,11 +45,11 @@ static class USugarHarmonyPatcher
         try
         {
             PatchRequired(harmony, USugarReflectionTargets.CompileMethod, redirectCompile,
-                $"{compilerType.Name}.Compile");
+                "UdonSharpCompilerV1.Compile");
             PatchRequired(harmony, USugarReflectionTargets.CompileSyncMethod, redirectSync,
-                $"{compilerType.Name}.CompileSync");
+                "UdonSharpCompilerV1.CompileSync");
             PatchRequired(harmony, USugarReflectionTargets.WaitForCompileMethod, waitForCompile,
-                $"{compilerType.Name}.WaitForCompile");
+                "UdonSharpCompilerV1.WaitForCompile");
             PatchRequired(harmony, USugarReflectionTargets.AnyScriptHasErrorMethod,
                 new HarmonyMethod(
                     typeof(USugarHarmonyPatcher),
@@ -141,9 +132,8 @@ static class USugarHarmonyPatcher
     static bool Prefix_AnyScriptHasError(ref bool __result)
     {
         if (!USugarCompiler.OverrideEnabled) return true;
-        if (USugarCompilationOrchestrator.Health == USugarCompileHealth.Clean)
-            return true;
-        __result = true;
+        __result =
+            USugarCompilationOrchestrator.Health != USugarCompileHealth.Clean;
         return false;
     }
 

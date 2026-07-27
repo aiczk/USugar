@@ -69,6 +69,65 @@ public class EditorSyntaxGuardTests
     }
 
     [Fact]
+    public void UnityCompileErrorGuardTargetsTheUdonSharpRootNamespace()
+    {
+        var packageRoot = FindPackageRoot();
+        var source = File.ReadAllText(Path.Combine(
+            packageRoot, "Editor", "USugarReflectionTargets.cs"));
+
+        Assert.Contains(
+            "UdonSharpAsm.GetType(\"UdonSharp.UdonSharpUtils\")",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "UdonSharpEditor.UdonSharpUtils",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void UdonSharpReflectionBridgeContainsOnlyRequiredIntegration()
+    {
+        var packageRoot = FindPackageRoot();
+        var reflectionSource = File.ReadAllText(Path.Combine(
+            packageRoot, "Editor", "USugarReflectionTargets.cs"));
+        var orchestratorSource = File.ReadAllText(Path.Combine(
+            packageRoot, "Editor",
+            "USugarCompilationOrchestrator.cs"));
+        var combined = reflectionSource + "\n" + orchestratorSource;
+        var removedDuplicateBindings = new[]
+        {
+            "GetUASMStr",
+            "CompilerUdonInterface",
+            "ProgramField",
+            "AssemblyErrorField",
+            "IsExternTypeMethod",
+        };
+
+        foreach (var token in removedDuplicateBindings)
+            Assert.DoesNotContain(
+                token,
+                combined,
+                StringComparison.Ordinal);
+        Assert.Contains(
+            "AssembleCsProgram",
+            reflectionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PublishDiagnostics",
+            reflectionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"SetUASMStr\"",
+            reflectionSource,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "UdonAbiCatalogFactory.Installed",
+            orchestratorSource,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DemandedDelegateBridgesCannotBeSilentlySkipped()
     {
         var packageRoot = FindPackageRoot();
