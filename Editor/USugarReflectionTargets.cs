@@ -58,18 +58,6 @@ static class USugarReflectionTargets
     internal static readonly MethodInfo IsExternTypeMethod =
         UdonInterfaceType?.GetMethod("IsExternType", BindingFlags.Public | BindingFlags.Static);
 
-    // Serialization cache types (for InvalidateSerializationCaches)
-    internal static readonly Type VarStorageType =
-        UdonSharpAsm.GetType("UdonSharp.Serialization.UdonVariableStorageInterface");
-    internal static readonly FieldInfo VariableTypeLookupField =
-        VarStorageType?.GetField("_variableTypeLookup", BindingFlags.NonPublic | BindingFlags.Static);
-    internal static readonly Type FormatterEmitterType =
-        UdonSharpAsm.GetType("UdonSharp.Serialization.UdonSharpBehaviourFormatterEmitter");
-    internal static readonly FieldInfo FormattersField =
-        FormatterEmitterType?.GetField("_formatters", BindingFlags.NonPublic | BindingFlags.Static);
-    internal static readonly Type EmittedFormatterOpenType =
-        FormatterEmitterType?.GetNestedType("EmittedFormatter`1", BindingFlags.NonPublic);
-
     // Proxy storage internals. Missing either behaviour field makes the storage prefix unable to
     // distinguish a USugar object[] ABI field from stock UdonSharp storage.
     internal static readonly FieldInfo HeapStorageBehaviour =
@@ -87,8 +75,8 @@ static class USugarReflectionTargets
             nameof(UdonVariableStorageInterface.GetElementStorage),
             BindingFlags.Public | BindingFlags.Instance);
 
-    // Bindings whose ABSENCE breaks correctness — either no codegen applies, the OdinSerializer formatter
-    // cache cannot be cleared, or USugar object[] ABI fields cannot be isolated from proxy serialization.
+    // Bindings whose ABSENCE breaks correctness — either no codegen applies or USugar object[] ABI fields
+    // cannot be isolated from proxy serialization.
     // A null critical binding fails LOUD at domain load so an SDK rename is visible immediately, instead of silently
     // no-op'ing the override or stranding stale serialization. The rest (diagnostics / UASM display) merely degrade
     // the inspector and stay at Warn.
@@ -97,8 +85,6 @@ static class USugarReflectionTargets
         nameof(CompilerType), nameof(CompileAllProgramsMethod), nameof(CompileMethod),
         nameof(CompileSyncMethod), nameof(AnyScriptHasErrorMethod),
         nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
-        nameof(VarStorageType), nameof(VariableTypeLookupField), nameof(FormatterEmitterType),
-        nameof(FormattersField), nameof(EmittedFormatterOpenType),
         nameof(IsExternTypeMethod), nameof(HeapStorageBehaviour), nameof(VariableStorageBehaviour),
         nameof(HeapGetElementStorageMethod), nameof(VariableGetElementStorageMethod),
     };

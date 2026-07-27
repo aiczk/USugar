@@ -581,8 +581,6 @@ static class USugarCompilationOrchestrator
                     EditorUtility.SetDirty(prepared.SerializedAsset);
                     PushUasmToEditorCache(programAsset, prepared.Result.Uasm);
                 }
-                if (preparedApplies.Count > 0)
-                    InvalidateSerializationCaches();
             }
             sw.Stop();
             LastCompileHadErrors = failures > 0;
@@ -723,50 +721,6 @@ static class USugarCompilationOrchestrator
         {
             USugarLog.Warn($"Failed to push UASM to editor cache: {ex.Message}");
         }
-    }
-
-    // ── Serialization cache invalidation ──
-
-    static void InvalidateSerializationCaches()
-    {
-        ClearStaticDictionary(
-            USugarReflectionTargets.VariableTypeLookupField, "_variableTypeLookup");
-
-        var formatterValue = USugarReflectionTargets.FormattersField.GetValue(null);
-        if (formatterValue == null) return;
-        if (formatterValue is not System.Collections.IDictionary formatters)
-            throw new InvalidOperationException(
-                "UdonSharp formatter cache '_formatters' is not an IDictionary.");
-
-        foreach (var rawKey in formatters.Keys.Cast<object>().ToArray())
-        {
-            if (rawKey is not Type key)
-                throw new InvalidOperationException(
-                    "UdonSharp formatter cache contains a non-Type key.");
-            var closed = USugarReflectionTargets.EmittedFormatterOpenType.MakeGenericType(key);
-            var manager = closed.GetNestedType(
-                "UdonSharpBehaviourFormatterManager", BindingFlags.NonPublic)
-                ?? throw new MissingMemberException(
-                    closed.FullName, "UdonSharpBehaviourFormatterManager");
-            var heapDataLookup = manager.GetField(
-                "_heapDataLookup", BindingFlags.NonPublic | BindingFlags.Static)
-                ?? throw new MissingFieldException(manager.FullName, "_heapDataLookup");
-            ClearStaticDictionary(heapDataLookup, "_heapDataLookup");
-        }
-        formatters.Clear();
-    }
-
-    static void ClearStaticDictionary(FieldInfo field, string displayName)
-    {
-        if (field == null)
-            throw new MissingFieldException(
-                $"Required serialization cache field '{displayName}' is unavailable.");
-        var value = field.GetValue(null);
-        if (value == null) return;
-        if (value is not System.Collections.IDictionary dictionary)
-            throw new InvalidOperationException(
-                $"Serialization cache '{displayName}' is not an IDictionary.");
-        dictionary.Clear();
     }
 
     // ── Helpers ──

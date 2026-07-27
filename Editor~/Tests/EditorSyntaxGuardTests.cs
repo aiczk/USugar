@@ -39,6 +39,36 @@ public class EditorSyntaxGuardTests
     }
 
     [Fact]
+    public void EditorIntegrationDoesNotMutateUdonSharpSerializationCaches()
+    {
+        var packageRoot = FindPackageRoot();
+        var sources = new[]
+        {
+            Path.Combine(
+                packageRoot, "Editor",
+                "USugarCompilationOrchestrator.cs"),
+            Path.Combine(
+                packageRoot, "Editor",
+                "USugarReflectionTargets.cs"),
+        }.Select(File.ReadAllText).ToArray();
+        var forbidden = new[]
+        {
+            "InvalidateSerializationCaches",
+            "_variableTypeLookup",
+            "_formatters",
+            "_heapDataLookup",
+            "EmittedFormatter",
+        };
+
+        foreach (var source in sources)
+            foreach (var token in forbidden)
+                Assert.DoesNotContain(
+                    token,
+                    source,
+                    StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DemandedDelegateBridgesCannotBeSilentlySkipped()
     {
         var packageRoot = FindPackageRoot();
