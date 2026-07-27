@@ -20,7 +20,6 @@ public enum RuntimeBundleKind
     Class,
     Aggregate,
     Delegate,
-    MultiDimensionalArray,
 }
 
 [System.Flags]
@@ -72,13 +71,12 @@ public static class TypeClassifier
     public static RuntimeShape ShapeOf(ITypeSymbol type, TypeClassifierContext ctx)
     {
         type = Resolve(type, ctx);
+        RequireSupportedArrayRank(type);
         var contents = ContentsOf(type, ctx.TypeParamMap,
             new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
         var bundle = IsUserClassLeaf(type)
             ? RuntimeBundleKind.Class
-            : NdimArrayAbi.IsNdimArray(type)
-                ? RuntimeBundleKind.MultiDimensionalArray
-                : type is INamedTypeSymbol { DelegateInvokeMethod: not null }
+            : type is INamedTypeSymbol { DelegateInvokeMethod: not null }
                     ? RuntimeBundleKind.Delegate
                     : IsAggregateValueLeaf(type)
                         ? RuntimeBundleKind.Aggregate
@@ -88,7 +86,6 @@ public static class TypeClassifier
         {
             RuntimeBundleKind.Class
                 or RuntimeBundleKind.Aggregate
-                or RuntimeBundleKind.MultiDimensionalArray
                 => TransportCapabilities.TypedProgramChannel,
             RuntimeBundleKind.Delegate
                 => containsUserClass
@@ -103,6 +100,16 @@ public static class TypeClassifier
 
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
         => ShapeOf(type, ctx).ContainsUserClassPayload;
+
+    public static void RequireSupportedArrayRank(ITypeSymbol type)
+    {
+        if (type is not IArrayTypeSymbol { Rank: > 1 } array)
+            return;
+        throw new System.NotSupportedException(
+            $"Multidimensional array '{array.ToDisplayString()}' is not supported: "
+            + "Udon has no native rank-greater-than-one array representation. "
+            + "Use a one-dimensional or jagged array.");
+    }
 
     public static bool IsUserClass(ITypeSymbol type)
         => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;

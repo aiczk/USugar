@@ -136,27 +136,9 @@ internal static class BundleDataCodec
             return encoded;
         }
 
-        if (seen.TryGetValue(source, out var existing))
-            return existing;
-        var rank = source.Rank;
-        var bundle = new object[
-            BundleAbi.HeaderSize + 1 + rank];
-        seen.Add(source, bundle);
-        bundle[BundleAbi.Type] = BundleAbi.RuntimeTypeId(
-            arrayType, RuntimeBundleKind.MultiDimensionalArray);
-        var backing = IsNative(elementType, isNativeLeaf)
-            ? Array.CreateInstance(elementType, source.Length)
-            : (Array)new object[source.Length];
-        bundle[BundleAbi.HeaderSize] = backing;
-        for (var dimension = 0; dimension < rank; dimension++)
-            bundle[BundleAbi.HeaderSize + 1 + dimension] =
-                source.GetLength(dimension);
-        var flat = 0;
-        foreach (var element in source)
-            backing.SetValue(
-                Encode(element, elementType, isNativeLeaf, seen),
-                flat++);
-        return bundle;
+        throw Unsupported(
+            arrayType,
+            "multidimensional arrays have no Udon representation");
     }
 
     static object Decode(
@@ -263,6 +245,11 @@ internal static class BundleDataCodec
         object[] bundle, Type declaredType,
         Func<Type, bool> isNativeLeaf)
     {
+        if (declaredType.IsArray
+            && declaredType.GetArrayRank() > 1)
+            throw Unsupported(
+                declaredType,
+                "multidimensional arrays have no Udon representation");
         if (bundle.Length <= BundleAbi.Type
             || bundle[BundleAbi.Type] is not string runtimeTypeId)
             throw Unsupported(
@@ -271,12 +258,9 @@ internal static class BundleDataCodec
             && !declaredType.IsInterface
             && declaredType != typeof(object))
         {
-            var declaredKind = declaredType.IsArray
-                && declaredType.GetArrayRank() > 1
-                    ? RuntimeBundleKind.MultiDimensionalArray
-                    : declaredType.IsValueType
-                        ? RuntimeBundleKind.Aggregate
-                        : RuntimeBundleKind.Class;
+            var declaredKind = declaredType.IsValueType
+                ? RuntimeBundleKind.Aggregate
+                : RuntimeBundleKind.Class;
             if (BundleAbi.RuntimeTypeId(
                     declaredType, declaredKind)
                 == runtimeTypeId)
@@ -289,14 +273,13 @@ internal static class BundleDataCodec
                 if (candidate == null
                     || IsNative(candidate, isNativeLeaf)
                     || typeof(Delegate).IsAssignableFrom(candidate)
+                    || candidate.IsArray
+                        && candidate.GetArrayRank() > 1
                     || !declaredType.IsAssignableFrom(candidate))
                     continue;
-                var kind = candidate.IsArray
-                    && candidate.GetArrayRank() > 1
-                        ? RuntimeBundleKind.MultiDimensionalArray
-                        : candidate.IsValueType
-                            ? RuntimeBundleKind.Aggregate
-                            : RuntimeBundleKind.Class;
+                var kind = candidate.IsValueType
+                    ? RuntimeBundleKind.Aggregate
+                    : RuntimeBundleKind.Class;
                 if (BundleAbi.RuntimeTypeId(candidate, kind)
                     == runtimeTypeId)
                     return candidate;

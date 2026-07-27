@@ -296,19 +296,6 @@ public class GenStructTwoInstantiations : UdonSharpBehaviour {
     outStrLen = b.Get(0).Length;
   }
 }"),
-        // N-dim array design (2026-07-04) canonical baseline: rank-2 creation + initializer + element
-        // read/write + GetLength — the ONE new golden snapshot the design's §5 gate calls for.
-        ("ndim_rank2_creation_initializer_readwrite_getlength", "NdimRank2Canonical",
-@"using UdonSharp; public class NdimRank2Canonical : UdonSharpBehaviour {
-  public int result;
-  void Start(){
-    int[,] a = new int[2,3] { {1,2,3}, {4,5,6} };
-    a[0,0] = a[1,2];
-    int len0 = a.GetLength(0);
-    int len1 = a.GetLength(1);
-    result = a[0,0] + len0 + len1;
-  }
-}"),
         // ── Modernization phase-1 lattice (design §2-3): each of the four pending-bridge queues
         // exercised under a NON-null type-param map — the coverage hole the M1-3 snapshot→reference
         // change must not silently break. The resolved generic type is byte-load-bearing in each

@@ -46,7 +46,7 @@ public class LanguageSurfaceTests
         OperationKind.VariableDeclaration, OperationKind.VariableDeclarator, // declaration-group walk
         OperationKind.ParameterInitializer,     // default args (call sites receive the constant)
         OperationKind.PropertyInitializer,      // auto-prop initializers (EmitFieldInitializers family)
-        OperationKind.Range,                    // range-slice loops (EmitPolicy/NdimArrayAbi)
+        OperationKind.Range,                    // range-slice loops
     };
 
     // VM-fundamental: the Udon VM lacks the executing capability; loud documented rejects.

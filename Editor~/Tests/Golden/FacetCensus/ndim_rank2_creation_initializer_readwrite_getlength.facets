@@ -1,8 +1,0 @@
-[nodes]
-NdimRank2Canonical.Start() @97..288
-[recursive-edges]
-[cycle-edges]
-[this-field-touches]
-NdimRank2Canonical.Start() @97..288 -> NdimRank2Canonical.result
-[reentrant-dispatch-sites]
-[tail-spared-direct-call-sites]

@@ -157,20 +157,6 @@ public class WjrTuple : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void NdimCompoundConcat_UsesRuntimeTypeName()
-    {
-        // The compound `s += x` surface now runs the same compiler-bundle stringification dispatch as
-        // the binary surface.
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class WjrNdim : UdonSharpBehaviour {
-    public string s;
-    void Start(){ int[,] m = new int[2,2]; s = ""x""; s += m; }
-}", "WjrNdim");
-        Assert.DoesNotContain("\"System.Object[]\"", uasm);
-    }
-
-    [Fact]
     public void StructDirectToStringCall_StillCompiles()
     {
         // The explicit call is statically bound to the struct's override and stays legal — the reject is

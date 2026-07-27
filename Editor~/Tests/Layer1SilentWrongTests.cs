@@ -5,82 +5,17 @@ namespace USugar.Tests;
 /// <summary>
 /// Layer-1 silent-wrong sweep: compile-clean code that produced a wrong value / wrong cross-client
 /// behavior, made LOUD (doctrine: "LOUD or CORRECT — a silent wrong value is never acceptable; loud
-/// over-rejection is acceptable"). Four holes, each pinned reject + a compiling control.
-///  1. Multi-dimensional arrays (int[,]) FLIPPED to acceptance (N-dim array design, 2026-07-04): the
-///     object[1+r] bundle (flat backing + boxed dimension lengths) now gives creation / element
-///     read / element write / field/param/local a sound, non-silent lowering — see NdimArrayTests
-///     for the full acceptance lattice and D-N1 bounds-violation deviation pins.
-///  2. [NetworkCallable] delegate smuggled inside a struct/tuple param passed the delegate guard →
+/// over-rejection is acceptable"). Three holes, each pinned reject + a compiling control.
+///  1. [NetworkCallable] delegate smuggled inside a struct/tuple param passed the delegate guard →
 ///     ContainsDelegateType now recurses aggregate fields.
-///  3. `checked` was a silent no-op (overflow wraps where C# throws OverflowException) → loud reject
+///  2. `checked` was a silent no-op (overflow wraps where C# throws OverflowException) → loud reject
 ///     on IsChecked==true; `unchecked`/default wrapping (the C#-correct default) still compiles.
-///  4. Non-exhaustive switch EXPRESSION silently returned default(T) → runtime LogError (matches the
+///  3. Non-exhaustive switch EXPRESSION silently returned default(T) → runtime LogError (matches the
 ///     §8-8 null-invoke deviation) then default(T).
 /// </summary>
 public class Layer1SilentWrongTests
 {
-    // ── 1. Multi-dimensional arrays (flipped to acceptance, N-dim array design 2026-07-04) ──
-
-    [Fact]
-    public void Multidim_Creation_Compiles()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class L1M1 : UdonSharpBehaviour {
-    public void M() { var a = new int[2,3]; }
-}", "L1M1");
-        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
-        Assert.Contains("SystemInt32Array.__ctor__SystemInt32__SystemInt32Array", uasm);
-    }
-
-    [Fact]
-    public void Multidim_ElementRead_Compiles()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class L1M2 : UdonSharpBehaviour {
-    public int[,] a;
-    public int M() { return a[1,2]; }
-}", "L1M2");
-        Assert.Contains("SystemInt32Array.__Get__SystemInt32__SystemInt32", uasm);
-    }
-
-    [Fact]
-    public void Multidim_ElementWrite_Compiles()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class L1M3 : UdonSharpBehaviour {
-    public int[,] a;
-    public void M() { a[1,2] = 5; }
-}", "L1M3");
-        Assert.Contains("SystemInt32Array.__Set__SystemInt32_SystemInt32", uasm);
-    }
-
-    [Fact]
-    public void Multidim_Field_Compiles()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class L1M4 : UdonSharpBehaviour {
-    public int[,] grid;
-}", "L1M4");
-        Assert.Contains("grid: %SystemObjectArray", uasm);
-    }
-
-    [Fact]
-    public void Jagged_StillCompiles()
-    {
-        // Control: int[][] is the supported alternative — must keep compiling unchanged.
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class L1M5 : UdonSharpBehaviour {
-    public int M() { int[][] a = new int[2][]; a[0] = new int[3]; a[0][2] = 5; return a[0][2]; }
-}", "L1M5");
-        Assert.NotNull(uasm);
-    }
-
-    // ── 2. [NetworkCallable] delegate-in-struct/tuple smuggle ──
+    // ── 1. [NetworkCallable] delegate-in-struct/tuple smuggle ──
 
     [Fact]
     public void NetworkCallable_StructWithDelegateField_Rejects()
@@ -140,7 +75,7 @@ public class L1N4 : UdonSharpBehaviour {
         Assert.Contains(".export Handle", uasm);
     }
 
-    // ── 3. checked context ──
+    // ── 2. checked context ──
 
     [Fact]
     public void CheckedExpr_Rejects()
@@ -204,7 +139,7 @@ public class L1C5 : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
-    // ── 4. Non-exhaustive switch expression ──
+    // ── 3. Non-exhaustive switch expression ──
 
     [Fact]
     public void NonExhaustiveSwitchExpr_EmitsRuntimeLogError()

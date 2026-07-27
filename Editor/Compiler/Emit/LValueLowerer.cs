@@ -178,14 +178,6 @@ internal sealed class LValueLowerer
                 }
                 goto default;
             }
-            case IArrayElementReferenceOperation ndimCapElem when ndimCapElem.Indices.Length > 1:
-            {
-                var ndimType = (IArrayTypeSymbol)ndimCapElem.ArrayReference.Type;
-                var elemUdonType = _lowering.GetStorageTypeName(ndimType.ElementType);
-                var plan = _lowering.Ndim.PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
-                var ndimCurrentVal = _lowering.Ndim.EmitNdimReadFromPlan(ndimCapElem, plan, elemUdonType);
-                return new LoweringServices.LValuePlan { Value = ndimCurrentVal, NdimPlan = plan };
-            }
             case IArrayElementReferenceOperation arrayElem:
             {
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
@@ -284,15 +276,6 @@ internal sealed class LValueLowerer
                 throw new System.InvalidOperationException(
                     $"Object[] field write-back lost layout slot for "
                     + $"'{aggFieldRef.Field.ToDisplayString()}' in '{aggWbType.ToDisplayString()}'.");
-            }
-            case IArrayElementReferenceOperation ndimWbElem when ndimWbElem.Indices.Length > 1:
-            {
-                // Reuse CaptureLValue's plan when available (avoid re-evaluating indices/bundle);
-                // the uncached path is defensive (mirrors the rank-1 arm's ?? default).
-                var plan = lv.NdimPlan
-                    ?? _lowering.Ndim.PrepareNdimAccess(ndimWbElem.ArrayReference, ndimWbElem.Indices, (IArrayTypeSymbol)ndimWbElem.ArrayReference.Type);
-                _lowering.Ndim.EmitNdimWriteFromPlan(ndimWbElem, plan, valueVal);
-                break;
             }
             case IArrayElementReferenceOperation arrayElem:
             {

@@ -16,7 +16,6 @@ internal sealed class ArrayHandler
 
     CLeaf VisitArrayCreation(IArrayCreationOperation op)
     {
-        if (NdimArrayAbi.IsNdimArray(op.Type)) return _lowering.Ndim.EmitNdimArrayCreation(op);
 
         var arrayType = _lowering.GetStorageTypeName(op.Type);
         var elementType = _lowering.GetArrayElemType((IArrayTypeSymbol)op.Type);
@@ -61,7 +60,6 @@ internal sealed class ArrayHandler
 
     CLeaf VisitArrayElementReference(IArrayElementReferenceOperation op)
     {
-        if (op.Indices.Length > 1) return _lowering.Ndim.EmitNdimElementRead(op);
 
         var index = op.Indices[0];
 

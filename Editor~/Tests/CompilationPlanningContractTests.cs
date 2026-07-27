@@ -123,10 +123,6 @@ public class CompilationPlanningContractTests
         Assert.Contains(fields, field => field.FieldType == typeof(MemberInvocationLowerer));
         Assert.DoesNotContain(fields, field => typeof(Delegate).IsAssignableFrom(field.FieldType));
 
-        Assert.Equal(
-            typeof(NdimArrayLowerer),
-            typeof(LoweringServices).GetProperty(
-                "Ndim", BindingFlags.Instance | BindingFlags.NonPublic)?.PropertyType);
     }
 
     [Fact]

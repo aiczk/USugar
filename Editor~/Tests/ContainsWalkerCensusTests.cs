@@ -33,7 +33,6 @@ public class WalkerCensusCarrier
     public int cInt;
     public string cStr;
     public int[] cIntArr;
-    public int[,] cNdim;
     public (int, string) cTup;
     public Wrap<int> cWrapInt;
     public Wrap<int>? cWrapIntN;
@@ -80,7 +79,6 @@ public class WalkerCensusCarrier
         ("cInt",     false, false, false, "int"),
         ("cStr",     false, false, false, "string"),
         ("cIntArr",  false, false, false, "int[]"),
-        ("cNdim",    false, false, false, "int[,]"),
         ("cTup",     false, false, false, "(int, string)"),
         ("cWrapInt", false, false, false, "Wrap<int>"),
         ("cWrapIntN",false, false, false, "Wrap<int>?"),
@@ -192,11 +190,6 @@ public class WalkerCensusCarrier
         var dlg = TypeClassifier.ShapeOf(types["dDel"], ctx);
         Assert.Equal(RuntimeBundleKind.Delegate, dlg.Bundle);
         Assert.True(dlg.Supports(TransportCapabilities.TypedProgramChannel));
-
-        var ndim = TypeClassifier.ShapeOf(types["cNdim"], ctx);
-        Assert.Equal(RuntimeBundleKind.MultiDimensionalArray, ndim.Bundle);
-        Assert.True(ndim.IsBundle);
-        Assert.False(ndim.Supports(TransportCapabilities.ExternCall));
 
         var native = TypeClassifier.ShapeOf(types["cIntArr"], ctx);
         Assert.Equal(RuntimeBundleKind.None, native.Bundle);

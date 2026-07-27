@@ -38,18 +38,6 @@ public static class ExternResolver
             + "type), or reference a UdonSharpBehaviour through a scene object.");
     }
 
-    // Rank>1 array type (int[,], …) has no native Udon representation — it is emulated as an
-    // object[1+r] bundle: [0] = typed flat backing (T[], row-major), [1..r] = boxed dimension
-    // lengths (N-dim array design, 2026-07-04 §0). GetUdonTypeName folds it to the SAME
-    // SystemObjectArray tag as delegates/structs/tuples — every runtime-type-test /sync-type check
-    // that already rejects those (IsRuntimeDistinguishable, IsSyncableType) rejects a Rank>1 array
-    // for free, with no new code (N-R2/N-R3).
-    internal const string MultidimExternArgMessage =
-        "A multi-dimensional array (T[,], …) cannot be passed at an extern call boundary: its runtime "
-        + "value is an object[] bundle (flat backing + dimension lengths), not a real multi-rank array, "
-        + "so an extern parameter would silently receive the wrong shape. Pass the flat backing "
-        + "explicitly, or restructure the call.";
-
     /// <summary>A user-authored reference type (class Foo {...}, record Foo): TypeKind.Class, source-defined
     /// in this compilation, not an SDK/Unity/System stand-in, and not a UdonSharpBehaviour. Distinct from a
     /// genuine foreign/SDK class (VRCUrl, DataList, …), which routes through the SAME extern-name-based
@@ -128,14 +116,10 @@ public static class ExternResolver
             return LowerUdonStorageName(
                 resolved, typeParamMap, isRegisteredUdonType);
         }
+        TypeClassifier.RequireSupportedArrayRank(type);
 
         if (type is IArrayTypeSymbol arrayType)
         {
-            // N-dim bundle (design §0/§2): the array VALUE itself is an object[1+r] bundle, same
-            // runtime tag as struct/tuple/delegate arrays — never the per-element "...Array" name
-            // computed below (that name is for the FLAT BACKING array, a distinct rank-1 symbol
-            // callers synthesize via _compilation.CreateArrayTypeSymbol(elementType, 1)).
-            if (arrayType.Rank > 1) return "SystemObjectArray";
             // Substitute a type-parameter element through the map BEFORE classifying. A generic method's
             // T[] param with T=<user struct> must be seen as struct[] (→ SystemObjectArray), like the
             // non-generic path. Without this, the aggregate check below runs on the raw type parameter
@@ -212,6 +196,7 @@ public static class ExternResolver
     static string LowerUdonStorageName(ITypeSymbol type,
         Func<UdonTypeId, bool> isRegisteredUdonType)
     {
+        TypeClassifier.RequireSupportedArrayRank(type);
         var name = ComputeUdonTypeName(
             type, isRegisteredUdonType);
         RejectIfUnsupportedUserClass(type, name);
@@ -224,7 +209,6 @@ public static class ExternResolver
         // Array types
         if (type is IArrayTypeSymbol arrayType)
         {
-            if (arrayType.Rank > 1) return "SystemObjectArray"; // N-dim bundle, see the with-map overload above
             if (arrayType.ElementType is IArrayTypeSymbol)
                 return "SystemObjectArray";
             // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as

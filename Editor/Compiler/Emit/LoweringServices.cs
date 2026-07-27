@@ -12,7 +12,6 @@ internal sealed class LoweringServices
     public LoweringServices(LoweringState state)
     {
         _state = state ?? throw new ArgumentNullException(nameof(state));
-        Ndim = new NdimArrayLowerer(this);
     }
 
     // Explicit handler-facing dependencies. The underscored shims below remain private to the
@@ -38,7 +37,6 @@ internal sealed class LoweringServices
     internal Stack<CLeaf> ConditionalAccessStack => _conditionalAccessStack;
     internal Stack<List<(CLeaf val, ITypeSymbol type)>> UsingDisposableStack => _usingDisposableStack;
     internal List<EmitDiagnostic> Diagnostics => _diagnostics;
-    internal NdimArrayLowerer Ndim { get; }
 
     // Internal projections used across the lowering concern files.
     internal Compilation _compilation => _state.Compilation;
@@ -972,23 +970,6 @@ internal sealed class LoweringServices
     /// <summary>Read an aggregate array element as the raw stored object[] (no clone), for receiver access.</summary>
     internal CLeaf ReadArrayElementRaw(IArrayElementReferenceOperation ae)
     {
-        // Wave-14 ndimaccess lens: an N-dim aggregate-array element used as a RECEIVER (`arr[i,j].X += 1`,
-        // `arr[i,j].Item1`) reaches this method (the bound aggregate shape at the
-        // LoadInstanceRaw dispatch site), but this method was written before feature N and always used
-        // Indices[0] alone against the BUNDLE array directly — every OTHER array-index site
-        // (ArrayHandler.VisitArrayElementReference, LoweringServices.PrepareArrayElementSet,
-        // LValueLowerer's capture/write-back arms, InvocationHandler.Extern's ref/out prepare)
-        // already special-cases Indices.Length>1 via PrepareNdimAccess; this receiver-access path was the
-        // one gap. Pre-fix, a single stray index read bundle[idx] directly (the bundle's OWN 1+r slots —
-        // flat backing at [0], boxed dim lengths at [1..r] — not the logical element), corrupting the
-        // struct-field mutation (VM-proven: `arr[idx,1].X += 10; sum += arr[i,j].X + arr[i,j].Y;` faulted
-        // with a heap type mismatch reading a dimension-length int as if it were the struct's object[]).
-        if (ae.Indices.Length > 1)
-        {
-            var ndimType = (IArrayTypeSymbol)ae.ArrayReference.Type;
-            var plan = Ndim.PrepareNdimAccess(ae.ArrayReference, ae.Indices, ndimType);
-            return Ndim.EmitNdimReadFromPlan(ae, plan, GetStorageTypeName(ndimType.ElementType));
-        }
         var arrayVal = VisitExpression(ae.ArrayReference);
         var arrSym = ae.ArrayReference.Type as IArrayTypeSymbol;
         var arrType = GetArrayType(arrSym);
@@ -1227,7 +1208,6 @@ internal sealed class LoweringServices
         public CLeaf IndexVal;
         public CLeaf InstanceVal;
         public List<CLeaf> IndexArgs;
-        public NdimArrayAbi.AccessPlan? NdimPlan;
         public LValuePlan(System.Action<CLeaf> write)
         {
             this = default;
@@ -1342,13 +1322,6 @@ internal sealed class LoweringServices
                     value => StoreProgramVariable(
                         instance, field.Field.Name,
                         storage, value));
-            }
-            case IArrayElementReferenceOperation element
-                when element.Indices.Length > 1:
-            {
-                var prepared = Ndim.PrepareNdimRefOutArg(element);
-                return Bind(
-                    prepared.read, prepared.store);
             }
             case IArrayElementReferenceOperation element
                 when element.Indices.Length == 1
@@ -1468,7 +1441,6 @@ internal sealed class LoweringServices
     /// element store (wave-9 round-6 [X6]; the legs/value split twin of PreparePropertySet).</summary>
     internal System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
-        if (arrayElem.Indices.Length > 1) return Ndim.PrepareNdimElementSet(arrayElem);
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
         var indexVal = ResolveArrayIndex(arrayVal, GetArrayType(arrSym), arrayElem.Indices[0]);

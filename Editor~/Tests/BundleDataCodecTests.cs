@@ -61,21 +61,16 @@ public class BundleDataCodecTests
     }
 
     [Fact]
-    public void RoundTripPreservesMultiDimensionalShape()
+    public void MultiDimensionalArray_IsRejected()
     {
         var source = new[,] { { 1, 2, 3 }, { 4, 5, 6 } };
 
-        Assert.True(BundleDataCodec.TryEncode(
+        Assert.False(BundleDataCodec.TryEncode(
             source, typeof(int[,]), IsNativeLeaf,
-            out var encoded, out var encodeError), encodeError);
-        Assert.True(BundleDataCodec.TryDecode(
-            encoded, typeof(int[,]), IsNativeLeaf,
-            out var decoded, out var decodeError), decodeError);
-
-        var array = Assert.IsType<int[,]>(decoded);
-        Assert.Equal(2, array.GetLength(0));
-        Assert.Equal(3, array.GetLength(1));
-        Assert.Equal(6, array[1, 2]);
+            out _, out var error));
+        Assert.Contains(
+            "multidimensional arrays have no Udon representation",
+            error);
     }
 
     [Fact]

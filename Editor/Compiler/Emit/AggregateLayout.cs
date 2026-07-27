@@ -210,7 +210,6 @@ public static class BundleAbi
         RuntimeBundleKind.Class => "class",
         RuntimeBundleKind.Aggregate => "aggregate",
         RuntimeBundleKind.Delegate => "delegate",
-        RuntimeBundleKind.MultiDimensionalArray => "ndim",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 }

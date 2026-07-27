@@ -381,11 +381,6 @@ internal sealed class TypeDemandPlanner
             {
                 case IArrayTypeSymbol array:
                     Record(array.ElementType, typeParameterMap);
-                    if (array.Rank > 1)
-                        Record(
-                            NdimArrayAbi.BackingType(
-                                _compilation, array),
-                            typeParameterMap);
                     break;
                 case INamedTypeSymbol named:
                     if (named.EnumUnderlyingType != null)

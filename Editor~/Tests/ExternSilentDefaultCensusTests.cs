@@ -220,7 +220,6 @@ public class ExternSilentDefaultCensusTests
         ("tuple-array",       "fTupleArr",  ObjArrayTag, false),
         ("object-array",      "fObjArr",    ObjArrayTag, false),
         ("jagged-array",      "fJagged",    ObjArrayTag, false),
-        ("ndim-array",        "fNdim",      ObjArrayTag, false),
         ("behaviour-base",    "fUsb",       EventReceiverTag, false),
         ("behaviour-derived", "fDerived",   EventReceiverTag, false),
         ("udon-behaviour",    "fUdon",      EventReceiverTag, false),
@@ -264,7 +263,6 @@ public class CensusCarrier
     public (int, int)[] fTupleArr;
     public object[] fObjArr;
     public int[][] fJagged;
-    public int[,] fNdim;
     public UdonSharp.UdonSharpBehaviour fUsb;
     public CensusDerived fDerived;
     public VRC.Udon.UdonBehaviour fUdon;

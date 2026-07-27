@@ -164,15 +164,6 @@ internal sealed class BoundaryChecker
             && destinationType.SpecialType
                 == SpecialType.System_Object)
             return;
-        if (sourceShape.Bundle == RuntimeBundleKind.MultiDimensionalArray
-            && destinationShape.Bundle != RuntimeBundleKind.MultiDimensionalArray
-            && !IsProgramLocalEqualityPosition(conversion))
-            throw new NotSupportedException(
-                $"Erasing the multi-dimensional array '{sourceType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
-                + $"to '{destinationType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                + "its runtime value uses the compiler bundle ABI rather than the CLR array ABI. "
-                + "Keep the value typed as its T[,] type, or use a jagged array.");
-
         if (sourceShape.Bundle == RuntimeBundleKind.Aggregate
             && !destinationShape.IsBundle
             && !(EmitPolicy.IsNullableT(destinationType, out var wrapped)
@@ -327,10 +318,9 @@ internal sealed class BoundaryChecker
         var valueInfo = ClassifyValue(value);
         if (!valueInfo.MayContainCompilerBundle)
             return;
-            if (allowClassReferenceIdentity
-                && valueInfo.CompilerBundle is
-                    RuntimeBundleKind.Class
-                or RuntimeBundleKind.MultiDimensionalArray)
+        if (allowClassReferenceIdentity
+            && valueInfo.CompilerBundle
+                == RuntimeBundleKind.Class)
             return;
         throw new NotSupportedException(
             $"The extern {name} cannot receive a value that may carry a compiler bundle erased "

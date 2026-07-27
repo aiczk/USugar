@@ -233,28 +233,6 @@ internal sealed class MemberInvocationLowerer
                 _lowering.TryMarkReentrantCrossDispatch(op, ifaceGetter)); // wave-12 r2 [V1]
         }
 
-        // N-dim array (design 2026-07-04 §2/N-R4): Rank>1 array VALUE is an object[] bundle whose Udon
-        // type tag (SystemObjectArray) happens to have REAL, valid Rank/Length externs registered — MUST
-        // intercept before the generic extern-getter path below, or ".Rank"/".Length" would silently
-        // read the bundle wrapper's own shape (rank always 1, length always 1+r) instead of the logical
-        // array's. Length reads the FLAT BACKING's length (§2); Rank is a compile-time constant.
-        if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
-        {
-            var ndimPropType = (IArrayTypeSymbol)op.Instance.Type;
-            if (!NdimArrayAbi.TryGetProperty(op.Property.Name, out var propertyKind))
-            {
-                NdimArrayAbi.RejectMember(op.Property.Name);
-                return null; // unreachable
-            }
-            switch (propertyKind)
-            {
-                case NdimArrayAbi.PropertyKind.Length: return _lowering.Ndim.EmitNdimLength(_lowering.VisitExpression(op.Instance), ndimPropType);
-                case NdimArrayAbi.PropertyKind.LongLength: return _lowering.Ndim.EmitNdimLongLength(_lowering.VisitExpression(op.Instance), ndimPropType);
-                case NdimArrayAbi.PropertyKind.Rank: return _lowering.Ndim.EmitNdimRank(ndimPropType);
-                default: throw new System.InvalidOperationException($"Unknown N-dim array property kind: {propertyKind}");
-            }
-        }
-
         // Other instance.property → extern getter
         var instVal = _lowering.VisitExpression(op.Instance);
         // Array .Length → use SystemArray (not the concrete array type) to match UdonSharp

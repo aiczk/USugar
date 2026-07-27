@@ -135,6 +135,7 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
     {
         if (type == null) throw new ArgumentNullException(nameof(type));
         var resolved = Resolve(type, typeParameterMap);
+        TypeClassifier.RequireSupportedArrayRank(resolved);
         var sourceType = UdonTypeIdentity.FromStorage(resolved);
 
         // Anonymous types are compiler-owned aggregate bundles. They have no
@@ -213,8 +214,7 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
             var elementType = Resolve(array.ElementType, typeParameterMap);
             if (storage == StorageTypes.ComponentArray)
                 return UdonRepresentationKind.ComponentArray;
-            if (array.Rank > 1
-                || elementType is IArrayTypeSymbol
+            if (elementType is IArrayTypeSymbol
                 || elementType is INamedTypeSymbol
                     { DelegateInvokeMethod: not null }
                 || TypeClassifier.IsObjectArrayEmulated(elementType))

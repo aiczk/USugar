@@ -19,14 +19,6 @@ internal sealed class ExternInvocationLowerer
         if (_owner.Intrinsics.TryEmitInvocationIntrinsic(op, target, out var intrinsicResult))
             return intrinsicResult;
 
-        // Supported N-dim members were consumed by the intrinsic registry.
-        // Anything left here would operate on the emulation bundle itself.
-        if (op.Instance != null && NdimArrayAbi.IsNdimArray(op.Instance.Type))
-        {
-            NdimArrayAbi.RejectMember(target.Name);
-            return null; // unreachable
-        }
-
         // Supported aggregate-array copy operations were consumed by the
         // intrinsic registry; reject every remaining alias-producing member.
         RejectUnsafeAggregateArrayExtern(op, target);
@@ -111,16 +103,6 @@ internal sealed class ExternInvocationLowerer
         var outCopyBacks = new List<(int argIdx, string tempField, System.Action<CLeaf> store)>();
         for (int i = 0; i < op.Arguments.Length; i++)
         {
-            // N-R1 (design 2026-07-04 §2/§4): a Rank>1 array's runtime value is an object[] bundle,
-            // not a real System*Array — an extern parameter (however it's typed: object, Array, a
-            // concrete SDK array, …) would silently receive the wrong shape. Checked on the ARGUMENT's
-            // static type before any of the branches below (params expansion / ref-out / plain) so no
-            // path can smuggle a bundle past this choke point. Unwrap conversions FIRST — passing a
-            // T[,] to an `object`/`Array`-typed parameter wraps it in an implicit IConversionOperation
-            // whose OWN Type is the widened target, hiding the T[,] source type from a direct check.
-            if (NdimArrayAbi.IsNdimArray(LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type))
-                throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
-
             var argumentType = LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type
                 ?? op.Arguments[i].Parameter?.Type;
             if (argumentType != null)
@@ -140,15 +122,8 @@ internal sealed class ExternInvocationLowerer
             var param = target.Parameters[i];
             if (param.IsParams && paramsElems != null)
             {
-                // Box each variadic element as a discrete SystemObject argument. Phase-A armor: the
-                // N-R1 check above sees only the params ARRAY argument (static type object[]), so a
-                // T[,] element smuggled through the expansion bypassed the choke — re-check per element
-                // (the erasure choke in BoundaryChecker also contains the implicit element→object
-                // conversion; this keeps the extern boundary sound on its own).
                 foreach (var elem in paramsElems)
                 {
-                    if (NdimArrayAbi.IsNdimArray(LoweringServices.UnwrapConversions(elem).Type))
-                        throw new System.NotSupportedException(ExternResolver.MultidimExternArgMessage);
                     if (LoweringServices.UnwrapConversions(elem).Type is { } elementType)
                         _lowering.State.Boundary.RequireCanPassExternArgument(
                             elem, elementType,
@@ -227,8 +202,8 @@ internal sealed class ExternInvocationLowerer
     // ── CW26: rank-1 aggregate-element array Clone/CopyTo/Array.Copy (value-semantics lowering) ──
 
     /// <summary>Rank-1 array whose element is a value-semantic aggregate (user struct / tuple), else null.
-    /// N-dim arrays never get here (the Rank>1 intercept runs first); class/scalar elements return null so
-    /// their shallow externs stay untouched (shallow IS C# semantics for them).</summary>
+    /// Class/scalar elements return null so their shallow externs stay untouched
+    /// (shallow IS C# semantics for them).</summary>
     internal INamedTypeSymbol AggregateArrayElement(ITypeSymbol type)
         => type is IArrayTypeSymbol { Rank: 1 } arr
            && _lowering.ResolveType(arr.ElementType) is INamedTypeSymbol elem && _lowering.IsAggregateValue(elem)
@@ -1198,11 +1173,6 @@ internal sealed class ExternInvocationLowerer
             // the callee overwrites an out param before any read, so a fresh scratch is sound.
             case IDiscardOperation discard:
                 return (() => _lowering.SlotRef(_lowering.State.Builder.AllocScratch(_lowering.GetStorageType(discard.Type))), _ => { });
-            // N-dim array element (design 2026-07-04 §2): lift the single-index exclusion below —
-            // PrepareNdimRefOutArg evaluates every index once and caches the bounds/backing/flat-index
-            // plan, mirroring the single-index arm's (arrayVal, indexVal) caching.
-            case IArrayElementReferenceOperation ndimArrayElem when ndimArrayElem.Indices.Length > 1:
-                return _lowering.Ndim.PrepareNdimRefOutArg(ndimArrayElem);
             case IArrayElementReferenceOperation arrayElem
                 when arrayElem.Indices.Length == 1
                      && arrayElem.Indices[0] is not IRangeOperation:
