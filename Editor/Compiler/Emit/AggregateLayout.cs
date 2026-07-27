@@ -282,9 +282,9 @@ public static class AggregateAbi
                 continue;
             }
 
-            var defVal = DefaultScalarValue(fieldType);
-            if (defVal != null)
-                WriteSlot(builder, builder.SlotRef(slot), i, builder.Const(defVal, new StorageType(getUdonType(fieldType))));
+            if (fieldType.IsValueType)
+                WriteSlot(builder, builder.SlotRef(slot), i,
+                    builder.Const(DefaultScalarValue(fieldType), new StorageType(getUdonType(fieldType))));
         }
     }
 
@@ -470,8 +470,15 @@ public static class AggregateAbi
         }
     }
 
-    static object DefaultScalarValue(ITypeSymbol type)
+    /// <summary>The heap literal for <c>default(T)</c> of a VALUE type, or null when the type has no
+    /// scalar literal (enum, decimal, SDK struct) and the assembler materializes default(T) from the
+    /// declared type instead. Reference types have no business here: their default is the absent slot.</summary>
+    public static object DefaultScalarValue(ITypeSymbol type)
     {
+        if (!type.IsValueType)
+            throw new InvalidOperationException(
+                $"'{type.ToDisplayString()}' is not a value type; its default is the null slot, "
+                + "not a scalar literal.");
         switch (type.SpecialType)
         {
             case SpecialType.System_Boolean: return false;

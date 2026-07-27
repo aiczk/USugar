@@ -952,23 +952,8 @@ internal sealed class ExpressionHandler
         if (!defaultVal.Type.IsValueType)
             return _lowering.Const(null, new StorageType(dvType));
 
-        var defVal = defaultVal.Type.SpecialType switch
-        {
-            SpecialType.System_Boolean => (object)false,
-            SpecialType.System_Int32 => (object)0,
-            SpecialType.System_Byte => (object)(byte)0,
-            SpecialType.System_SByte => (object)(sbyte)0,
-            SpecialType.System_Int16 => (object)(short)0,
-            SpecialType.System_UInt16 => (object)(ushort)0,
-            SpecialType.System_UInt32 => (object)0u,
-            SpecialType.System_Int64 => (object)0L,
-            SpecialType.System_UInt64 => (object)0UL,
-            SpecialType.System_Single => (object)0f,
-            SpecialType.System_Double => (object)0d,
-            SpecialType.System_Char => (object)'\0',
-            _ => null, // struct types (Vector3, etc.) — assembler uses default
-        };
-        return _lowering.Const(defVal, new StorageType(dvType));
+        return _lowering.Const(
+            AggregateAbi.DefaultScalarValue(defaultVal.Type), new StorageType(dvType));
     }
 
     // ── Declaration Expression ──

@@ -3724,6 +3724,23 @@ public class IfacePropOnceHost : UdonSharpBehaviour {
         Assert.Equal(1, CountToken(code, "__callret_"));
     }
 
+    [Fact]
+    public void StructDefaultInit_WritesEveryValueTypeField()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public enum DefInitEnum { A, B }
+public struct DefInitHolder { public DefInitEnum E; public Vector3 V; public int N; }
+public class DefInitHost : UdonSharpBehaviour {
+    void Start() { var holder = new DefInitHolder(); }
+}
+", "DefInitHost");
+        var code = uasm.Substring(uasm.IndexOf(".code_start", System.StringComparison.Ordinal));
+        Assert.Contains("%UnityEngineVector3, null", uasm);
+        Assert.Equal(4, CountToken(code, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"));
+    }
+
     static int CountToken(string text, string token)
     {
         int count = 0, index = 0;
