@@ -74,7 +74,6 @@ public sealed class UdonTypeFactRegistry
     {
         RequireMutable();
         if (symbol == null) return;
-        RecordHierarchy(storageType, symbol);
         Record(storageType,
             new TypeFact(symbol.TypeKind == TypeKind.Enum, symbol.IsValueType),
             symbol.ToDisplayString());
@@ -110,15 +109,6 @@ public sealed class UdonTypeFactRegistry
         }
     }
 
-    internal void ImportAssignability(
-        IEnumerable<AssignabilityFact> facts)
-    {
-        RequireMutable();
-        if (facts == null) return;
-        foreach (var fact in facts)
-            _assignability.TryAdd(fact, 0);
-    }
-
     internal KeyValuePair<string, TypeFact>[] Snapshot()
         => _facts
             .Select(pair => new KeyValuePair<string, TypeFact>(
@@ -132,33 +122,8 @@ public sealed class UdonTypeFactRegistry
     {
         var copy = new UdonTypeFactRegistry();
         copy.Import(Snapshot(), "bound program snapshot");
-        copy.ImportAssignability(AssignabilitySnapshot());
         copy._frozen = true;
         return copy;
-    }
-
-    public bool IsAssignableTo(string actual, string expected)
-    {
-        if (string.IsNullOrWhiteSpace(actual)
-            || string.IsNullOrWhiteSpace(expected))
-            return false;
-        return IsAssignableTo(
-            UdonTypeIdentity.FromCanonicalStorageName(actual),
-            UdonTypeIdentity.FromCanonicalStorageName(expected));
-    }
-
-    public bool IsAssignableTo(UdonTypeId actual, UdonTypeId expected)
-        => actual == expected
-           || _assignability.ContainsKey(
-               new AssignabilityFact(actual, expected));
-
-    internal void RecordAssignableForTest(
-        string actual, string expected)
-    {
-        RequireMutable();
-        RecordAssignable(
-            UdonTypeIdentity.FromCanonicalStorageName(actual),
-            UdonTypeIdentity.FromCanonicalStorageName(expected));
     }
 
     void Record(UdonTypeId type, TypeFact requested, string source)
@@ -200,31 +165,6 @@ public sealed class UdonTypeFactRegistry
             RecordAssignable(actual,
                 UdonTypeIdentity.FromStorage(current));
         foreach (var implemented in type.GetInterfaces())
-            RecordAssignable(actual,
-                UdonTypeIdentity.FromStorage(implemented));
-    }
-
-    void RecordHierarchy(UdonTypeId actual, ITypeSymbol symbol)
-    {
-        RecordAssignable(actual, actual);
-        if (symbol is IArrayTypeSymbol)
-        {
-            RecordAssignable(actual,
-                UdonTypeIdentity.FromCanonicalStorageName(
-                    "SystemArray"));
-            RecordAssignable(actual,
-                UdonTypeIdentity.FromCanonicalStorageName(
-                    "SystemObject"));
-            return;
-        }
-
-        if (symbol is not INamedTypeSymbol named) return;
-        for (var current = named.BaseType;
-             current != null;
-             current = current.BaseType)
-            RecordAssignable(actual,
-                UdonTypeIdentity.FromStorage(current));
-        foreach (var implemented in named.AllInterfaces)
             RecordAssignable(actual,
                 UdonTypeIdentity.FromStorage(implemented));
     }

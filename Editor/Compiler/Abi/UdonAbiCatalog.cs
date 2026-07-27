@@ -344,7 +344,6 @@ public sealed class UdonAbiCatalog
     {
         if (target == null) throw new ArgumentNullException(nameof(target));
         target.Import(TypeFacts, "installed SDK ABI catalog");
-        target.ImportAssignability(AssignabilityFacts);
     }
 }
 
