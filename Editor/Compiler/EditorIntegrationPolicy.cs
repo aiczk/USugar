@@ -28,6 +28,43 @@ static class USugarEditorIntegrationPolicy
             .Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar);
     }
 
+    public static IReadOnlyList<string> SelectSourceAssemblyClosure(
+        string rootAssemblyName,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> assemblyReferences,
+        ISet<string> sourceDomain)
+    {
+        if (string.IsNullOrWhiteSpace(rootAssemblyName))
+            throw new ArgumentException(
+                "Root assembly name is required.", nameof(rootAssemblyName));
+        if (assemblyReferences == null)
+            throw new ArgumentNullException(nameof(assemblyReferences));
+        if (sourceDomain == null)
+            throw new ArgumentNullException(nameof(sourceDomain));
+        if (!sourceDomain.Contains(rootAssemblyName))
+            throw new InvalidOperationException(
+                $"Unity assembly '{rootAssemblyName}' is outside the USugar source domain.");
+
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        void Visit(string assemblyName)
+        {
+            if (!sourceDomain.Contains(assemblyName)
+                || !selected.Add(assemblyName))
+                return;
+            if (!assemblyReferences.TryGetValue(
+                    assemblyName, out var references))
+                return;
+            foreach (var reference in references
+                         .Where(sourceDomain.Contains)
+                         .OrderBy(name => name, StringComparer.Ordinal))
+                Visit(reference);
+        }
+
+        Visit(rootAssemblyName);
+        return selected
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public static bool RequiresOpaqueObjectArrayStorage(
         Type proxyType,
         Type systemType,

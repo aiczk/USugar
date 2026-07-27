@@ -3,8 +3,8 @@ using Xunit;
 
 namespace USugar.Tests;
 
-// The production source-linker is exercised by the Unity compilation because asmdef traversal is
-// an editor concern. These tests pin the data boundary used by Inspector serialization.
+// The production source-domain linker is exercised by the Unity compilation because U# assembly
+// discovery is an editor concern. These tests pin the data boundary used by Inspector serialization.
 public class BundleDataCodecTests
 {
     sealed class Node

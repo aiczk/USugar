@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Xunit;
@@ -28,6 +29,59 @@ public class EditorIntegrationPolicyTests
             USugarEditorIntegrationPolicy.NormalizeSourcePath(root, absolute),
             USugarEditorIntegrationPolicy.NormalizeSourcePath(root, relative),
             ignoreCase: true);
+    }
+
+    [Fact]
+    public void SourceAssemblyClosureCrossesOnlyExplicitDomainEdges()
+    {
+        var references =
+            new Dictionary<string, IReadOnlyList<string>>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                ["Assembly-CSharp"] = new[]
+                {
+                    "Udon.Library",
+                    "Unity.InputSystem",
+                },
+                ["Udon.Library"] = new[] { "Udon.Data" },
+                ["Unity.InputSystem"] = new[] { "Udon.HiddenBehindMetadata" },
+                ["Udon.Data"] = Array.Empty<string>(),
+                ["Udon.HiddenBehindMetadata"] = Array.Empty<string>(),
+            };
+        var domain = new HashSet<string>(
+            new[]
+            {
+                "Assembly-CSharp",
+                "Udon.Library",
+                "Udon.Data",
+                "Udon.HiddenBehindMetadata",
+            },
+            StringComparer.OrdinalIgnoreCase);
+
+        Assert.Equal(
+            new[] { "Assembly-CSharp", "Udon.Data", "Udon.Library" },
+            USugarEditorIntegrationPolicy.SelectSourceAssemblyClosure(
+                "Assembly-CSharp", references, domain));
+    }
+
+    [Fact]
+    public void SourceAssemblyClosureRejectsAnUnownedRoot()
+    {
+        var references =
+            new Dictionary<string, IReadOnlyList<string>>(
+                StringComparer.OrdinalIgnoreCase)
+            {
+                ["Foreign"] = Array.Empty<string>(),
+            };
+        var domain = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+        {
+            USugarEditorIntegrationPolicy.SelectSourceAssemblyClosure(
+                "Foreign", references, domain);
+        });
+        Assert.Contains("outside the USugar source domain", error.Message);
     }
 
     [Fact]

@@ -10,6 +10,7 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UdonSharp;
 using UdonSharp.Compiler;
+using UdonSharpEditor;
 using VRC.Udon;
 using VRC.Udon.Editor;
 using VRC.Udon.Common.Interfaces;
@@ -37,12 +38,12 @@ static class USugarCompilationOrchestrator
 
     const string FingerprintKey = "USugar_LastFingerprint";
     const string AppliedKey = "USugar_LastApplied";
-    const string FingerprintSchema = "editor-integration-v2";
+    const string FingerprintSchema = "editor-integration-v3";
     internal sealed class CompilationUnit
     {
         public UnityCompilationAssembly UnityAssembly { get; }
         public IReadOnlyList<UnityCompilationAssembly>
-            LinkedAssemblies { get; }
+            SourceAssemblies { get; }
         public IReadOnlyList<string> RootSourcePaths { get; }
         public IReadOnlyList<string> SourcePaths { get; }
         public IReadOnlyDictionary<string, UnityCompilationAssembly>
@@ -54,12 +55,12 @@ static class USugarCompilationOrchestrator
 
         public CompilationUnit(
             UnityCompilationAssembly unityAssembly,
-            IReadOnlyList<UnityCompilationAssembly> linkedAssemblies,
+            IReadOnlyList<UnityCompilationAssembly> sourceAssemblies,
             IReadOnlyDictionary<string, UnityCompilationAssembly>
                 sourceOwners)
         {
             UnityAssembly = unityAssembly;
-            LinkedAssemblies = linkedAssemblies;
+            SourceAssemblies = sourceAssemblies;
             SourceOwners = sourceOwners;
             RootSourcePaths = unityAssembly.sourceFiles
                 .Where(USugarEditorIntegrationPolicy.IsCSharpSource)
@@ -948,32 +949,40 @@ static class USugarCompilationOrchestrator
                 writer.Write(p);
                 writer.Write(ComputeFileContentHash(p));
             }
-            foreach (var d in BuildPreprocessorDefines(unit.UnityAssembly)
-                .OrderBy(s => s, StringComparer.Ordinal))
-                writer.Write(d);
-            writer.Write(unit.UnityAssembly.compilerOptions.AllowUnsafeCode);
-            writer.Write(unit.UnityAssembly.compilerOptions.ApiCompatibilityLevel.ToString());
-            writer.Write(unit.UnityAssembly.compilerOptions.LanguageVersion ?? "");
-            foreach (var responseFile in (unit.UnityAssembly.compilerOptions.ResponseFiles
-                    ?? Array.Empty<string>())
-                .Where(path => !string.IsNullOrEmpty(path))
-                .Select(NormalizeUnitySourcePath)
-                .OrderBy(path => path, StringComparer.Ordinal))
+            foreach (var sourceAssembly in unit.SourceAssemblies.OrderBy(
+                         assembly => assembly.name, StringComparer.Ordinal))
             {
-                writer.Write(responseFile);
-                writer.Write(File.Exists(responseFile)
-                    ? ComputeFileContentHash(responseFile)
-                    : "<missing>");
-            }
-            foreach (var referencePath in GetMetadataReferencePaths(unit.UnityAssembly))
-            {
-                writer.Write(referencePath);
-                if (!referenceIdentities.TryGetValue(referencePath, out var identity))
+                writer.Write(sourceAssembly.name);
+                foreach (var d in BuildPreprocessorDefines(sourceAssembly)
+                             .OrderBy(s => s, StringComparer.Ordinal))
+                    writer.Write(d);
+                writer.Write(sourceAssembly.compilerOptions.AllowUnsafeCode);
+                writer.Write(sourceAssembly.compilerOptions.ApiCompatibilityLevel.ToString());
+                writer.Write(sourceAssembly.compilerOptions.LanguageVersion ?? "");
+                foreach (var responseFile in (
+                             sourceAssembly.compilerOptions.ResponseFiles
+                             ?? Array.Empty<string>())
+                         .Where(path => !string.IsNullOrEmpty(path))
+                         .Select(NormalizeUnitySourcePath)
+                         .OrderBy(path => path, StringComparer.Ordinal))
                 {
-                    identity = ManagedModuleIdentity.GetIdentity(referencePath);
-                    referenceIdentities.Add(referencePath, identity);
+                    writer.Write(responseFile);
+                    writer.Write(File.Exists(responseFile)
+                        ? ComputeFileContentHash(responseFile)
+                        : "<missing>");
                 }
-                writer.Write(identity);
+                foreach (var referencePath in GetMetadataReferencePaths(
+                             sourceAssembly))
+                {
+                    writer.Write(referencePath);
+                    if (!referenceIdentities.TryGetValue(
+                            referencePath, out var identity))
+                    {
+                        identity = ManagedModuleIdentity.GetIdentity(referencePath);
+                        referenceIdentities.Add(referencePath, identity);
+                    }
+                    writer.Write(identity);
+                }
             }
         }
         foreach (var binding in (programAssetBindings ?? Array.Empty<ProgramAssetBinding>())
@@ -1046,6 +1055,18 @@ static class USugarCompilationOrchestrator
         IEnumerable<string> rootAssemblyNames = null)
     {
         var playerAssemblies = CompilationPipeline.GetAssemblies(AssembliesType.Player);
+        var assemblyByName = playerAssemblies.ToDictionary(
+            assembly => assembly.name,
+            StringComparer.OrdinalIgnoreCase);
+        var assemblyReferences = playerAssemblies.ToDictionary(
+            assembly => assembly.name,
+            assembly => (IReadOnlyList<string>)assembly.assemblyReferences
+                .Select(reference => reference.name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray(),
+            StringComparer.OrdinalIgnoreCase);
+        var sourceDomain = CollectSourceDomainAssemblyNames();
         var behaviourAssemblyNames = rootAssemblyNames != null
             ? new HashSet<string>(
                 rootAssemblyNames.Where(name => !string.IsNullOrWhiteSpace(name)),
@@ -1071,40 +1092,67 @@ static class USugarCompilationOrchestrator
             }
         }
 
-        return playerAssemblies
-            .Where(assembly => behaviourAssemblyNames.Contains(assembly.name))
-            .Select(CreateCompilationUnit)
+        var outsideDomain = behaviourAssemblyNames
+            .Where(assemblyByName.ContainsKey)
+            .Where(name => !sourceDomain.Contains(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToArray();
+        if (outsideDomain.Length > 0)
+            throw new InvalidOperationException(
+                "UdonSharpBehaviour source assemblies must belong to the explicit "
+                + "USugar source domain. Create a U# Assembly Definition for: "
+                + string.Join(", ", outsideDomain));
+
+        return behaviourAssemblyNames
+            .Where(assemblyByName.ContainsKey)
+            .Select(name => CreateCompilationUnit(
+                assemblyByName[name],
+                assemblyByName,
+                assemblyReferences,
+                sourceDomain))
             .Where(unit => unit.SourcePaths.Count > 0)
             .OrderBy(unit => unit.UnityAssembly.name, StringComparer.Ordinal)
             .ToList();
     }
 
-    static CompilationUnit CreateCompilationUnit(
-        UnityCompilationAssembly root)
+    static HashSet<string> CollectSourceDomainAssemblyNames()
     {
-        var linked = new List<UnityCompilationAssembly>();
-        var seen = new HashSet<string>(
-            StringComparer.OrdinalIgnoreCase);
-
-        void Visit(UnityCompilationAssembly assembly)
+        var names = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase)
         {
-            if (assembly == null || !seen.Add(assembly.name))
-                return;
-            linked.Add(assembly);
-            foreach (var reference in assembly.assemblyReferences
-                         .OrderBy(
-                             item => item.name,
-                             StringComparer.Ordinal))
-                if (reference.sourceFiles.Any(
-                        USugarEditorIntegrationPolicy.IsCSharpSource))
-                    Visit(reference);
+            "Assembly-CSharp",
+        };
+        foreach (var guid in AssetDatabase.FindAssets(
+                     $"t:{nameof(UdonSharpAssemblyDefinition)}"))
+        {
+            var path = AssetDatabase.GUIDToAssetPath(guid);
+            var definition =
+                AssetDatabase.LoadAssetAtPath<UdonSharpAssemblyDefinition>(
+                    path);
+            if (definition?.sourceAssembly != null)
+                names.Add(definition.sourceAssembly.name);
         }
+        return names;
+    }
 
-        Visit(root);
+    static CompilationUnit CreateCompilationUnit(
+        UnityCompilationAssembly root,
+        IReadOnlyDictionary<string, UnityCompilationAssembly>
+            assemblyByName,
+        IReadOnlyDictionary<string, IReadOnlyList<string>>
+            assemblyReferences,
+        ISet<string> sourceDomain)
+    {
+        var sourceAssemblies =
+            USugarEditorIntegrationPolicy.SelectSourceAssemblyClosure(
+                    root.name, assemblyReferences, sourceDomain)
+                .Where(assemblyByName.ContainsKey)
+                .Select(name => assemblyByName[name])
+                .ToArray();
         var sourceOwners =
             new Dictionary<string, UnityCompilationAssembly>(
                 StringComparer.OrdinalIgnoreCase);
-        foreach (var assembly in linked)
+        foreach (var assembly in sourceAssemblies)
             foreach (var path in assembly.sourceFiles
                          .Where(
                              USugarEditorIntegrationPolicy
@@ -1126,10 +1174,7 @@ static class USugarCompilationOrchestrator
             }
         return new CompilationUnit(
             root,
-            linked.OrderBy(
-                    assembly => assembly.name,
-                    StringComparer.Ordinal)
-                .ToArray(),
+            sourceAssemblies,
             sourceOwners);
     }
 
@@ -1179,15 +1224,15 @@ static class USugarCompilationOrchestrator
             }
         }
 
-        var linkedOutputs = new HashSet<string>(
-            unit.LinkedAssemblies
+        var sourceOutputs = new HashSet<string>(
+            unit.SourceAssemblies
                 .Select(assembly => assembly.outputPath)
                 .Where(path => !string.IsNullOrEmpty(path))
                 .Select(Path.GetFullPath),
             StringComparer.OrdinalIgnoreCase);
-        var referencePaths = unit.LinkedAssemblies
+        var referencePaths = unit.SourceAssemblies
             .SelectMany(GetMetadataReferencePaths)
-            .Where(path => !linkedOutputs.Contains(
+            .Where(path => !sourceOutputs.Contains(
                 Path.GetFullPath(path)))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .OrderBy(path => path, StringComparer.Ordinal)
