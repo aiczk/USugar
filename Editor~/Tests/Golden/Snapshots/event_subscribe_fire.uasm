@@ -1408,3 +1408,42 @@
         COPY
         JUMP, 0x00002134
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 4923171858909183765
+#   __refl_typename: %SystemString = "EventSubscribeFire"
+#   __recurStack: %SystemObjectArray = [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+#   __recurSp: %SystemInt32 = 0
+#   __recurEnsureNeed: %SystemInt32 = 0
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 5
+#   __const_SystemInt32_1: %SystemInt32 = 0
+#   __const_SystemString_2: %SystemString = "usugar-delegate:N17_543a53797374656d2e416374696f6e6031_1_N14_543a53797374656d2e496e743332_0_"
+#   __const_SystemInt32_3: %SystemInt32 = 1
+#   __const_SystemInt32_4: %SystemInt32 = 2
+#   __const_SystemString_5: %SystemString = "__dlg___1_lambda"
+#   __const_SystemInt32_6: %SystemInt32 = 3
+#   __const_SystemInt32_7: %SystemInt32 = 4
+#   __const_SystemString_9: %SystemString = "__dlg___2_lambda"
+#   __const_SystemString_10: %SystemString = "USugar: NullReferenceException — invoked a null delegate (EventSubscribeFire.delegate)"
+#   __const_SystemString_11: %SystemString = "usugar-delegate:"
+#   __const_SystemString_12: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (EventSubscribeFire.delegate)"
+#   __const_SystemUInt32_13: %SystemUInt32 = 0
+#   __const_SystemString_14: %SystemString = "__dlgc_SystemInt32__Void__a0"
+#   __const_SystemString_15: %SystemString = "__dlgc_SystemInt32__Void__env"
+#   __const_SystemInt32_16: %SystemInt32 = 10
+#   __const_SystemString_17: %SystemString = "__dlg_fanout_SystemInt32__Void"
+#   __const_SystemString_18: %SystemString = "USugar: missing invocation list — multicast fan-out invoked with a null list (__dlg_fanout_SystemInt32__Void)"
+#   __const_SystemString_19: %SystemString = "USugar: NullReferenceException — invoked a null delegate (EventSubscribeFire.multicast fan-out)"
+#   __const_SystemString_20: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (EventSubscribeFire.multicast fan-out)"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 288
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 608
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1500
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1944
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 2028
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 5576
+#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 6940
+#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 7552
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1888
+#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 1972
+#   __const_funcaddr_SystemUInt32_2: %SystemUInt32 = 4488

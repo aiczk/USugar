@@ -121,3 +121,13 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -6574662260159967236
+#   __refl_typename: %SystemString = "CoalesceAutoProp"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemString_1: %SystemString = "x"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 160
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 320
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 364
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 488

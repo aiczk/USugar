@@ -1462,3 +1462,40 @@
         COPY
         JUMP, 0x000020e8
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 1492165970495837841
+#   __refl_typename: %SystemString = "MulticastLoopCombineFanout"
+#   __recurStack: %SystemObjectArray = [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+#   __recurSp: %SystemInt32 = 0
+#   __recurEnsureNeed: %SystemInt32 = 0
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = 3
+#   __const_SystemString_2: %SystemString = "__usugar_env"
+#   __const_SystemInt32_3: %SystemInt32 = 1
+#   __const_SystemString_5: %SystemString = "USugar: NullReferenceException — invoked a null delegate (MulticastLoopCombineFanout.d)"
+#   __const_SystemString_6: %SystemString = "usugar-delegate:"
+#   __const_SystemString_7: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (MulticastLoopCombineFanout.d)"
+#   __const_SystemInt32_8: %SystemInt32 = 4
+#   __const_SystemInt32_9: %SystemInt32 = 2
+#   __const_SystemUInt32_10: %SystemUInt32 = 0
+#   __const_SystemString_11: %SystemString = "__dlgc_Void__SystemInt32__env"
+#   __const_SystemString_12: %SystemString = "__dlgc_Void__SystemInt32__ret"
+#   __const_SystemInt32_13: %SystemInt32 = 5
+#   __const_SystemString_14: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N14_543a53797374656d2e496e743332_0_"
+#   __const_SystemString_15: %SystemString = "__dlg___1_lambda"
+#   __const_SystemString_16: %SystemString = "USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ()"
+#   __const_SystemString_17: %SystemString = "USugar: invalid closure environment — invoked a captured delegate with a non-env payload ()"
+#   __const_SystemString_18: %SystemString = "__dlg_fanout_Void__SystemInt32"
+#   __const_SystemString_19: %SystemString = "USugar: missing invocation list — multicast fan-out invoked with a null list (__dlg_fanout_Void__SystemInt32)"
+#   __const_SystemString_20: %SystemString = "USugar: NullReferenceException — invoked a null delegate (MulticastLoopCombineFanout.multicast fan-out)"
+#   __const_SystemString_21: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (MulticastLoopCombineFanout.multicast fan-out)"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 1044
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1476
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 2160
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 5728
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 7112
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 7580
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1872
+#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 4660

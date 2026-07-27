@@ -68,3 +68,11 @@
         COPY
         JUMP, 0x0000001c
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -2994344516963839723
+#   __refl_typename: %SystemString = "ForSum"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = 10
+#   __const_SystemInt32_2: %SystemInt32 = 1

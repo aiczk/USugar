@@ -49,3 +49,11 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 1069703403834497024
+#   __refl_typename: %SystemString = "Ternary"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = -1
+#   __const_SystemInt32_2: %SystemInt32 = 1

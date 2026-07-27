@@ -664,3 +664,40 @@
         COPY
         JUMP, 0x00000d3c
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 8878602742245448602
+#   __refl_typename: %SystemString = "LatticeGenWrapper"
+#   __recurStack: %SystemObjectArray = [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+#   __recurSp: %SystemInt32 = 0
+#   __recurEnsureNeed: %SystemInt32 = 0
+#   __const_SystemString_0: %SystemString = "wxyz"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_1: %SystemInt32 = 5
+#   __const_SystemInt32_2: %SystemInt32 = 0
+#   __const_SystemString_3: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N15_543a53797374656d2e537472696e67_0_"
+#   __const_SystemInt32_4: %SystemInt32 = 1
+#   __const_SystemInt32_5: %SystemInt32 = 2
+#   __const_SystemString_6: %SystemString = "__dlg_Make"
+#   __const_SystemInt32_7: %SystemInt32 = 3
+#   __const_SystemInt32_8: %SystemInt32 = 4
+#   __const_SystemString_11: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N15_543a53797374656d2e4f626a656374_0_"
+#   __const_SystemString_12: %SystemString = "__dlg_wrap_Void__SystemObject_Void__SystemString"
+#   __const_SystemString_13: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenWrapper.o)"
+#   __const_SystemString_14: %SystemString = "usugar-delegate:"
+#   __const_SystemString_15: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenWrapper.o)"
+#   __const_SystemUInt32_16: %SystemUInt32 = 0
+#   __const_SystemString_17: %SystemString = "__dlgc_Void__SystemObject__env"
+#   __const_SystemString_18: %SystemString = "__dlgc_Void__SystemObject__ret"
+#   __const_SystemString_20: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenWrapper.multicast fan-out)"
+#   __const_SystemString_21: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenWrapper.multicast fan-out)"
+#   __const_SystemString_22: %SystemString = "__dlgc_Void__SystemString__env"
+#   __const_SystemString_23: %SystemString = "__dlgc_Void__SystemString__ret"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 328
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1608
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1756
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 2580
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 3040
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 3076
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1740
+#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 1824

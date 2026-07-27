@@ -340,3 +340,19 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -2264701487990723583
+#   __refl_typename: %SystemString = "GenStructTwoInstantiations"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 2
+#   __const_SystemInt32_1: %SystemInt32 = 0
+#   __const_SystemString_2: %SystemString = "usugar-aggregate:N7_543a426f786031_1_N14_543a53797374656d2e496e743332_0_"
+#   __const_SystemInt32_3: %SystemInt32 = 1
+#   __const_SystemInt32_4: %SystemInt32 = 5
+#   __const_SystemString_5: %SystemString = "usugar-aggregate:N7_543a426f786031_1_N15_543a53797374656d2e537472696e67_0_"
+#   __const_SystemString_6: %SystemString = "hi"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 316
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 392
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 760
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 836

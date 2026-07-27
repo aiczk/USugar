@@ -509,3 +509,21 @@
         COPY
         JUMP, 0x000009b8
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -6806631641614441332
+#   __refl_typename: %SystemString = "ClassLinkedList"
+#   __typeobj_LlNode: %SystemString = "usugar-class:N8_543a4c6c4e6f6465_0_"
+#   __recurStack: %SystemObjectArray = [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+#   __recurSp: %SystemInt32 = 0
+#   __recurEnsureNeed: %SystemInt32 = 0
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 3
+#   __const_SystemInt32_1: %SystemInt32 = 1
+#   __const_SystemInt32_2: %SystemInt32 = 0
+#   __const_SystemInt32_3: %SystemInt32 = 2
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 232
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 508
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 656
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1124
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 1632

@@ -55,3 +55,10 @@
         COPY
         JUMP, 0x0000001c
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 2639928391392072420
+#   __refl_typename: %SystemString = "WhileCount"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = 1

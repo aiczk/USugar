@@ -235,3 +235,28 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 5877866560981575562
+#   __refl_typename: %SystemString = "CrossBehaviourDelegatePropertyCaller"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 5
+#   __const_SystemInt32_1: %SystemInt32 = 0
+#   __const_SystemString_2: %SystemString = "usugar-delegate:N15_543a53797374656d2e416374696f6e_0_"
+#   __const_SystemInt32_3: %SystemInt32 = 1
+#   __const_SystemInt32_4: %SystemInt32 = 2
+#   __const_SystemString_5: %SystemString = "__dlg___1_lambda"
+#   __const_SystemInt32_6: %SystemInt32 = 3
+#   __const_SystemInt32_7: %SystemInt32 = 4
+#   __const_SystemString_9: %SystemString = "__0_value__param"
+#   __const_SystemString_10: %SystemString = "__0_set_Callback"
+#   __const_SystemString_11: %SystemString = "get_Callback"
+#   __const_SystemString_12: %SystemString = "__0_get_Callback__ret"
+#   __const_SystemString_13: %SystemString = "USugar: NullReferenceException — invoked a null delegate (CrossBehaviourDelegatePropertyCaller.a)"
+#   __const_SystemString_14: %SystemString = "usugar-delegate:"
+#   __const_SystemString_15: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (CrossBehaviourDelegatePropertyCaller.a)"
+#   __const_SystemUInt32_16: %SystemUInt32 = 0
+#   __const_SystemString_17: %SystemString = "__dlgc_Void__Void__env"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 1164
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1268
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1252

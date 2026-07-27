@@ -83,3 +83,12 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 710178563504275984
+#   __refl_typename: %SystemString = "GotoOutOfLoop"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = 10
+#   __const_SystemInt32_2: %SystemInt32 = 5
+#   __const_SystemInt32_3: %SystemInt32 = 1

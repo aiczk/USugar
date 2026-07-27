@@ -57,3 +57,8 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -3068374710740073733
+#   __refl_typename: %SystemString = "NullableCoalesce"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295

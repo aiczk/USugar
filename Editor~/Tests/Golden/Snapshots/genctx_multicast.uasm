@@ -1579,3 +1579,45 @@
         COPY
         JUMP, 0x0000238c
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -4453252434435376696
+#   __refl_typename: %SystemString = "LatticeGenMulticast"
+#   __recurStack: %SystemObjectArray = [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+#   __recurSp: %SystemInt32 = 0
+#   __recurEnsureNeed: %SystemInt32 = 0
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 5
+#   __const_SystemInt32_1: %SystemInt32 = 4
+#   __const_SystemInt32_2: %SystemInt32 = 0
+#   __const_SystemString_3: %SystemString = "__usugar_env"
+#   __const_SystemInt32_4: %SystemInt32 = 1
+#   __const_SystemInt32_6: %SystemInt32 = 2
+#   __const_SystemInt32_7: %SystemInt32 = 3
+#   __const_SystemString_8: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N14_543a53797374656d2e496e743332_0_"
+#   __const_SystemString_9: %SystemString = "__dlg___2_lambda"
+#   __const_SystemString_10: %SystemString = "__dlg___3_lambda"
+#   __const_SystemString_11: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenMulticast.d)"
+#   __const_SystemString_12: %SystemString = "usugar-delegate:"
+#   __const_SystemString_13: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.d)"
+#   __const_SystemUInt32_14: %SystemUInt32 = 0
+#   __const_SystemString_15: %SystemString = "__dlgc_Void__SystemInt32__env"
+#   __const_SystemString_16: %SystemString = "__dlgc_Void__SystemInt32__ret"
+#   __const_SystemString_17: %SystemString = "USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ()"
+#   __const_SystemString_18: %SystemString = "USugar: invalid closure environment — invoked a captured delegate with a non-env payload ()"
+#   __const_SystemString_19: %SystemString = "__dlg_fanout_Void__SystemInt32"
+#   __const_SystemString_20: %SystemString = "USugar: missing invocation list — multicast fan-out invoked with a null list (__dlg_fanout_Void__SystemInt32)"
+#   __const_SystemString_21: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenMulticast.multicast fan-out)"
+#   __const_SystemString_22: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.multicast fan-out)"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 136
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 708
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1028
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1920
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 2480
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 2836
+#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 6404
+#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 7788
+#   __const_retaddr_SystemUInt32_8: %SystemUInt32 = 8256
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 2192
+#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 2548
+#   __const_funcaddr_SystemUInt32_2: %SystemUInt32 = 5336

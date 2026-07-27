@@ -82,3 +82,10 @@
         COPY
         JUMP, 0x0000005c
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -4901042400102404986
+#   __refl_typename: %SystemString = "ForeachArray"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_0: %SystemInt32 = 0
+#   __const_SystemInt32_1: %SystemInt32 = 1

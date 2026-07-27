@@ -307,3 +307,28 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -4371439390725620538
+#   __refl_typename: %SystemString = "LatticeGenAdapter"
+#   __const_SystemString_0: %SystemString = "abc"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_1: %SystemInt32 = 5
+#   __const_SystemInt32_2: %SystemInt32 = 0
+#   __const_SystemString_3: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N15_543a53797374656d2e4f626a656374_0_"
+#   __const_SystemInt32_4: %SystemInt32 = 1
+#   __const_SystemInt32_5: %SystemInt32 = 2
+#   __const_SystemString_6: %SystemString = "__dlg_adapt_MakeTag_Void__SystemObject"
+#   __const_SystemInt32_7: %SystemInt32 = 3
+#   __const_SystemInt32_8: %SystemInt32 = 4
+#   __const_SystemString_10: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenAdapter.d)"
+#   __const_SystemString_11: %SystemString = "usugar-delegate:"
+#   __const_SystemString_12: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenAdapter.d)"
+#   __const_SystemUInt32_13: %SystemUInt32 = 0
+#   __const_SystemString_14: %SystemString = "__dlgc_Void__SystemObject__env"
+#   __const_SystemString_15: %SystemString = "__dlgc_Void__SystemObject__ret"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 64
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1284
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1508
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1592
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1576

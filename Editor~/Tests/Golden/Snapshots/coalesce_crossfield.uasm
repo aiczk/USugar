@@ -51,3 +51,10 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = 1761438714219450843
+#   __refl_typename: %SystemString = "CoalesceCrossField"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemString_0: %SystemString = "F"
+#   __const_SystemString_2: %SystemString = "x"

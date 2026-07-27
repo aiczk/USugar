@@ -340,3 +340,29 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -8545659243461045205
+#   __refl_typename: %SystemString = "LatticeGenLfBridge"
+#   __const_SystemInt32_0: %SystemInt32 = 7
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemInt32_1: %SystemInt32 = 3
+#   __const_SystemInt32_2: %SystemInt32 = 0
+#   __const_SystemString_3: %SystemString = "__usugar_env"
+#   __const_SystemInt32_4: %SystemInt32 = 1
+#   __const_SystemInt32_6: %SystemInt32 = 2
+#   __const_SystemInt32_7: %SystemInt32 = 5
+#   __const_SystemString_8: %SystemString = "usugar-delegate:N15_543a53797374656d2e46756e636031_1_N14_543a53797374656d2e496e743332_0_"
+#   __const_SystemString_9: %SystemString = "__dlg_Helper"
+#   __const_SystemInt32_10: %SystemInt32 = 4
+#   __const_SystemString_11: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenLfBridge.d)"
+#   __const_SystemString_12: %SystemString = "usugar-delegate:"
+#   __const_SystemString_13: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenLfBridge.d)"
+#   __const_SystemUInt32_14: %SystemUInt32 = 0
+#   __const_SystemString_15: %SystemString = "__dlgc_Void__SystemInt32__env"
+#   __const_SystemString_16: %SystemString = "__dlgc_Void__SystemInt32__ret"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 104
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 360
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1612
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1824
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1808

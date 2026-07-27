@@ -51,3 +51,13 @@
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
+
+# constants
+#   __refl_typeid: %SystemInt64 = -7936152417633241611
+#   __refl_typename: %SystemString = "CrossBehaviour"
+#   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
+#   __const_SystemString_0: %SystemString = "__0_amount__param"
+#   __const_SystemInt32_1: %SystemInt32 = 5
+#   __const_SystemString_2: %SystemString = "__0_TakeDamage"
+#   __const_SystemString_3: %SystemString = "GetHp"
+#   __const_SystemString_4: %SystemString = "__0_GetHp__ret"
