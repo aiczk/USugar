@@ -221,24 +221,14 @@ internal sealed class BoundProgram
             return true;
         foreach (var pair in _closureRegistry)
         {
-            if (!ClosureIdentityPlan.SameSourceDefinition(
-                    pair.Key.Definition, definition)
-                || pair.Key.Arguments.Length
-                != keyArgs.Length)
-                continue;
-            var sameArguments = true;
-            for (var i = 0; i < keyArgs.Length; i++)
-                if (!SymbolEqualityComparer.Default.Equals(
-                        pair.Key.Arguments[i], keyArgs[i]))
-                {
-                    sameArguments = false;
-                    break;
-                }
-            if (!sameArguments) continue;
+            if (!ClosureIdentityPlan.SameSpec(pair.Key, definition, keyArgs)) continue;
+            if (closure != null)
+                throw new InvalidOperationException(
+                    $"Hoisted closure '{definition.Name}' matches more than one registered "
+                    + "specialization; the fallback would silently pick one.");
             closure = pair.Value;
-            return true;
         }
-        return false;
+        return closure != null;
     }
 
     public MethodContext.ClosureSpec RequireClosure(

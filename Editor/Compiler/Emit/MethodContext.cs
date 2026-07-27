@@ -369,20 +369,14 @@ public sealed class MethodContext
         // secondary definition comparison. The specialization arguments remain exact.
         foreach (var pair in _closureSpecs)
         {
-            if (!ClosureIdentityPlan.SameSourceDefinition(pair.Key.Definition, def)
-                || pair.Key.Arguments.Length != keyArgs.Length) continue;
-            var sameArgs = true;
-            for (var i = 0; i < keyArgs.Length; i++)
-                if (!SymbolEqualityComparer.Default.Equals(pair.Key.Arguments[i], keyArgs[i]))
-                {
-                    sameArgs = false;
-                    break;
-                }
-            if (!sameArgs) continue;
+            if (!ClosureIdentityPlan.SameSpec(pair.Key, def, keyArgs)) continue;
+            if (spec != null)
+                throw new InvalidOperationException(
+                    $"Hoisted closure '{def?.Name}' matches more than one registered "
+                    + "specialization; the fallback would silently pick one.");
             spec = pair.Value;
-            return true;
         }
-        return false;
+        return spec != null;
     }
 
     /// <summary>Throw-on-miss twin (design v3 §2B: a multi-spec context must never silently fall

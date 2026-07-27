@@ -62,6 +62,17 @@ public sealed class ClosureIdentityPlan
             && l.Span.Equals(r.Span);
     }
 
+    public static bool SameSpec(SpecializationKey key, IMethodSymbol definition,
+        ImmutableArray<ITypeSymbol> keyArgs)
+    {
+        if (!SameSourceDefinition(key.Definition, definition)) return false;
+        if (key.Arguments.Length != keyArgs.Length) return false;
+        for (var i = 0; i < keyArgs.Length; i++)
+            if (!SymbolEqualityComparer.Default.Equals(key.Arguments[i], keyArgs[i]))
+                return false;
+        return true;
+    }
+
     static bool IsClosure(IMethodSymbol method)
         => method.MethodKind is MethodKind.LocalFunction
             or MethodKind.LambdaMethod or MethodKind.AnonymousFunction;

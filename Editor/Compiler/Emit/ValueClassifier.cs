@@ -313,8 +313,7 @@ public static class ValueClassifier
                 return property.Property.DeclaringSyntaxReferences
                     .Length != 0;
             case IInvocationOperation invocation:
-                return invocation.TargetMethod.MethodKind
-                           == MethodKind.DelegateInvoke
+                return EmitPolicy.IsDelegateDispatch(invocation)
                        || (invocation.TargetMethod
                                .DeclaringSyntaxReferences.Length != 0
                            && !ExternResolver.IsSdkNamespace(

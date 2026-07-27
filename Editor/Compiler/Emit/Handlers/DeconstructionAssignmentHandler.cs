@@ -92,7 +92,7 @@ internal sealed class DeconstructionAssignmentHandler
             // ContainingType is a BCL Func/Action, never planned by LayoutPlanBuilder, so this must be
             // checked BEFORE the same-class/cross-behaviour method-call arms below.
             if (callValue is IInvocationOperation dlgInvocation
-                && dlgInvocation.TargetMethod.MethodKind == MethodKind.DelegateInvoke)
+                && EmitPolicy.IsDelegateDispatch(dlgInvocation))
             {
                 var dlgResult = _lowering.VisitExpression(op.Value);
                 var resultType =
