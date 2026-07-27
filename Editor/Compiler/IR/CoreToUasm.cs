@@ -196,6 +196,15 @@ internal static class CoreToUasm
             };
         }
 
+        (string RetaddrVar, string RetLabel) AllocateReturnAddress(FlatFunction func)
+        {
+            var retLabel = LabelNames.CallReturn(func.Name, _retaddrIdx);
+            var retaddrVar = $"__const_retaddr_SystemUInt32_{_retaddrIdx}";
+            _retaddrIdx++;
+            _retaddrConsts.Add((retaddrVar, retLabel));
+            return (retaddrVar, retLabel);
+        }
+
         // ── Variable declarations ──
 
         void DeclareField(FieldDecl field)
@@ -347,11 +356,11 @@ internal static class CoreToUasm
             {
                 string labelName;
                 if (block == func.Entry)
-                    labelName = func.ExportName ?? $"__{func.Name}";
+                    labelName = func.ExportName ?? LabelNames.FunctionEntry(func.Name);
                 else if (block.Hint != null)
                     labelName = block.Hint;
                 else
-                    labelName = $"__{func.Name}_bb{block.Id}";
+                    labelName = LabelNames.Block(func.Name, block.Id);
                 _blockLabels[(funcIdx, block.Id)] = labelName;
             }
 
@@ -538,10 +547,7 @@ internal static class CoreToUasm
                     target.ParamFieldNames[i]);
 
             // Push return address and jump
-            var retLabel = $"__{func.Name}__callret_{_retaddrIdx}";
-            var retaddrVar = $"__const_retaddr_SystemUInt32_{_retaddrIdx}";
-            _retaddrIdx++;
-            _retaddrConsts.Add((retaddrVar, retLabel));
+            var (retaddrVar, retLabel) = AllocateReturnAddress(func);
 
             // Push return address onto stack (callee's RET will POP it)
             AddPush(retaddrVar);
@@ -573,10 +579,7 @@ internal static class CoreToUasm
             AddCopyPair(ptrVar, tempVar);
 
             // Push return address and jump indirect
-            var retLabel = $"__{func.Name}__callret_{_retaddrIdx}";
-            var retaddrVar = $"__const_retaddr_SystemUInt32_{_retaddrIdx}";
-            _retaddrIdx++;
-            _retaddrConsts.Add((retaddrVar, retLabel));
+            var (retaddrVar, retLabel) = AllocateReturnAddress(func);
 
             AddPush(retaddrVar);
             AddJumpIndirect(tempVar);

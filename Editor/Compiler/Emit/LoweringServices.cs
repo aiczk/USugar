@@ -1654,14 +1654,14 @@ internal sealed class LoweringServices
         var capturing = _state.Captures != null
             && _state.Captures.IsCapturingClosure(localFunc);
         new CallableRegistrar(_state).Register(
-            new CallableLayoutPlan(localFunc, index => $"__{index}_{funcName}",
-                slotPrefix: index => $"__{index}_{funcName}",
+            new CallableLayoutPlan(localFunc, index => NameAllocator.FormatId(funcName, index),
+                slotPrefix: index => NameAllocator.FormatId(funcName, index),
                 parameters: parameters, returns: returns,
                 closureKeyArgs: keyArgs, closureOwnerSpecs: identity.OwnerSpecs,
                 closureContainingTypeSpec:
                     identity.ContainingTypeSpec,
                 environmentId: capturing
-                    ? index => $"__{index}_{funcName}__envp"
+                    ? index => NameAllocator.FormatId(funcName + "__envp", index)
                     : null),
             deferredBody: true);
     }
@@ -2031,12 +2031,14 @@ internal sealed class LoweringServices
             && _state.Captures.IsCapturingClosure(constructed);
         new CallableRegistrar(_state).Register(
             new CallableLayoutPlan(constructed,
-                index => $"__{index}_{SanitizeId(constructed.Name)}_{typeArgPart}",
+                index => NameAllocator.FormatId(
+                    SanitizeId(constructed.Name) + "_" + typeArgPart, index),
                 parameters: parameters, returns: returns,
                 closureKeyArgs: closureKeyArgs,
                 closureOwnerSpecs: closureIdentity.OwnerSpecs.Add(constructed),
                 environmentId: capturing
-                    ? index => $"__{index}_{SanitizeId(constructed.Name)}__envp"
+                    ? index => NameAllocator.FormatId(
+                        SanitizeId(constructed.Name) + "__envp", index)
                     : null),
             deferredBody: true);
     }
@@ -2057,7 +2059,8 @@ internal sealed class LoweringServices
                 new StorageType(GetStorageTypeName(method.ReturnType)))
         };
         new CallableRegistrar(_state).Register(new CallableLayoutPlan(method,
-            index => $"__{index}_{SanitizeId(method.Name)}_{typeArgPart}",
+            index => NameAllocator.FormatId(
+                SanitizeId(method.Name) + "_" + typeArgPart, index),
             receiver: receiver,
             receiverId: receiver == MethodContext.ReceiverAbi.ObjectArray
                 ? index => NameAllocator.ParamId("this", index) : null,

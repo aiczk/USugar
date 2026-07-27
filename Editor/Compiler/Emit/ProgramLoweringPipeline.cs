@@ -1616,7 +1616,7 @@ public sealed class UasmEmitter
             // closureBindings walk at EmitMethod misses the owner), so `new T[]` emitted a bogus TArray. Seed
             // it the same way the struct-methods loop does (including the two-instantiation aliasing guard,
             // which GS15<int>/GS15<string> exercises).
-            RegisterInternalCallable(fm, idx => $"__{idx}_{SanitizeId(fm.Name)}");
+            RegisterInternalCallable(fm, idx => NameAllocator.FormatId(SanitizeId(fm.Name), idx));
         }
 
         // Register user-struct constructors + instance methods (object[]-emulated; synthetic receiver = param0).
@@ -1645,9 +1645,9 @@ public sealed class UasmEmitter
             }
 
             var isCtor = sm.MethodKind == MethodKind.Constructor;
-            RegisterInternalCallable(sm, idx => isCtor
-                    ? $"__{idx}_{SanitizeId(sm.ContainingType.Name)}__ctor{typeArgSuffix}"
-                    : $"__{idx}_{SanitizeId(sm.Name)}{typeArgSuffix}",
+            RegisterInternalCallable(sm, idx => NameAllocator.FormatId(isCtor
+                    ? SanitizeId(sm.ContainingType.Name) + "__ctor" + typeArgSuffix
+                    : SanitizeId(sm.Name) + typeArgSuffix, idx),
                 sm.IsStatic ? MethodContext.ReceiverAbi.None : MethodContext.ReceiverAbi.ObjectArray);
         }
 
@@ -1660,7 +1660,7 @@ public sealed class UasmEmitter
             // and a hoisted closure inside the base generic body could not resolve the enclosing
             // method's params (loud "Cannot resolve parameter") or its type-param map. Seed it here,
             // with the same second-distinct-instantiation guard ([X6] r5, widened in round 8).
-            RegisterInternalCallable(bm, idx => $"__{idx}_{SanitizeId(bm.Name)}");
+            RegisterInternalCallable(bm, idx => NameAllocator.FormatId(SanitizeId(bm.Name), idx));
         }
 
     }

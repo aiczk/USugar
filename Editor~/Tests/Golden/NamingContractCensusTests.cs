@@ -17,7 +17,9 @@ public class NamingContractCensusTests
 {
     // A string literal ENDING with a contract suffix (covers $"...__param", + "__ret", etc.) or
     // STARTING with the delegate bridge prefix. Comment mentions never carry the adjacent quote.
-    static readonly Regex Forbidden = new Regex("__(param|ret|body)\"|\"__dlg_");
+    // Third shape (2026-07-28): an interpolated identifier starting with "__{" is a hand-rolled
+    // NameAllocator.FormatId / LabelNames spelling — 10 of them had drifted outside the owner.
+    static readonly Regex Forbidden = new Regex("__(param|ret|body)\"|\"__dlg_|\\$\"__\\{");
 
     static readonly string[] OwnerFiles = { "NameAllocator.cs", "DelegateProtocol.cs" };
 
