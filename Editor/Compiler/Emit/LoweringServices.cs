@@ -1428,46 +1428,6 @@ internal sealed class LoweringServices
         }
     }
 
-    /// <summary>Design §3.3, Q-S2 (feature B): walks a WRITE target's receiver chain (array-element /
-    /// struct-member links, mirroring TryGetRefStorageRoot's walk) down to its storage root, returning
-    /// the static readonly FIELD when that root is a per-program-materialized static readonly field —
-    /// each behaviour instance holds its own copy of that field, so a write through an array element
-    /// or aggregate member (`A[i] = v`, `A[i].x = v`) would silently diverge per instance instead of
-    /// being shared as C# expects (the readonly-ness only forbids reassigning the FIELD itself; its
-    /// referenced contents are still mutable in real C#). Any other root (local/param/this-field/
-    /// cross-behaviour/fresh value) returns null — no hazard.</summary>
-    internal static IFieldSymbol TryGetStaticReadonlyWriteThroughRoot(IOperation target)
-    {
-        var op = target;
-        while (true)
-        {
-            switch (op)
-            {
-                case IConversionOperation c:
-                    op = c.Operand; continue;
-                case IArrayElementReferenceOperation ae:
-                    op = ae.ArrayReference; continue; // element storage roots at the array reference
-                case IFieldReferenceOperation { Instance: null } fr when fr.Field.IsStatic && fr.Field.IsReadOnly:
-                    return fr.Field.OriginalDefinition;
-                case IFieldReferenceOperation fr2 when fr2.Instance != null
-                    && fr2.Field.ContainingType?.IsValueType == true:
-                    op = fr2.Instance; continue; // struct member chain → resolve its root
-                default:
-                    return null;
-            }
-        }
-    }
-
-    /// <summary>Loud reject for a write-through mutation rooted at a static readonly field (§3.3, R5).
-    /// A no-op when <paramref name="target"/> isn't rooted there.</summary>
-    internal static void RejectStaticReadonlyWriteThrough(IOperation target)
-    {
-        if (TryGetStaticReadonlyWriteThroughRoot(target) is not { } root) return;
-        throw new NotSupportedException(
-            $"cannot mutate the contents of a static readonly field '{root.Name}'; each behaviour instance "
-            + "holds its own copy, so the write would not be shared as in C#. Use an instance field.");
-    }
-
     /// <summary>Round-8 [R1]/[R7]: true when a non-readonly struct member invocation's receiver
     /// chain is READONLY in C# and so runs on a defensive copy the emulation must reproduce.
     /// Two flavors (both DiffFuzz-proven):
@@ -1965,7 +1925,6 @@ internal sealed class LoweringServices
         // Aggregate (struct/tuple) OR v1-class member → layout slot write on the backing object[].
         if (plan.Value.Kind == FieldSetKind.AggregateSlot)
         {
-            RejectStaticReadonlyWriteThrough(plan.Value.Instance); // §3.3, R5
             var arrExpr = LoadInstanceRaw(plan.Value.Instance);
             return value => AggregateAbi.WriteSlot(_builder, arrExpr, plan.Value.AggregateIndex, value);
         }
@@ -2006,7 +1965,6 @@ internal sealed class LoweringServices
     /// element store (wave-9 round-6 [X6]; the legs/value split twin of PreparePropertySet).</summary>
     internal System.Action<CLeaf> PrepareArrayElementSet(IArrayElementReferenceOperation arrayElem)
     {
-        RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5
         if (arrayElem.Indices.Length > 1) return Ndim.PrepareNdimElementSet(arrayElem);
         var arrayVal = VisitExpression(arrayElem.ArrayReference);
         var arrSym = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
@@ -2174,12 +2132,8 @@ internal sealed class LoweringServices
             if (propRef.Property.SetMethod?.DeclaringSyntaxReferences.Length > 0
                 && !USugarCompilerHelper.IsFrameworkNamespace(propRef.Property.ContainingNamespace)
                 && !UasmEmitter.IsComputedProperty(propRef.Property))
-            {
-                var owner = ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
-                            ?? propRef.Property.ContainingType;
-                var id = StaticOwnerAbi.PropertyName(propRef.Property, owner);
-                return staticVal => EmitStoreField(id, staticVal);
-            }
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    propRef.Property);
             if (propRef.Property.SetMethod is { } sourceSetter
                 && sourceSetter.DeclaringSyntaxReferences.Length > 0
                 && !USugarCompilerHelper.IsFrameworkNamespace(sourceSetter.ContainingNamespace)

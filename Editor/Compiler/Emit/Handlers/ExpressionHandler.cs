@@ -123,71 +123,21 @@ internal sealed class ExpressionHandler
         }
         if (fieldRef.Field.IsStatic)
         {
-            if (StaticOwnerAbi.IsSourceStatic(fieldRef.Field))
-            {
-                var id = fieldRef.Field.IsReadOnly
-                    && ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType)
-                    && IsDeclaredInOwnHierarchy(_lowering.ClassSymbol, fieldRef.Field.ContainingType)
-                    ? fieldRef.Field.Name
-                    : StaticOwnerAbi.FieldName(fieldRef.Field,
-                        _lowering.ResolveType(fieldRef.Field.ContainingType) as INamedTypeSymbol ?? fieldRef.Field.ContainingType);
-                var value = _lowering.LoadField(id, _lowering.GetStorageType(fieldRef.Field.Type));
-                return fieldRef.Field.Type is INamedTypeSymbol aggregate && _lowering.IsAggregateValue(aggregate)
-                    ? AggregateAbi.DeepClone(_lowering.Builder, value, aggregate, _lowering.State.Aggregates.GetLayout)
-                    : value;
-            }
-            // Wave-14 crossfeature lens: a static field on a USER STRUCT (readonly or not; generic or
-            // not) is NOT materialized anywhere — feature S's per-program static-readonly storage
-            // (design S-M1) only walks the compiled UdonSharpBehaviour class's own hierarchy. Left
-            // unguarded this fell through to the "Unity/System static field → extern getter" arm below
-            // (meant for SDK statics like Vector3.zero), building a bogus property-get extern on the
-            // struct's own SystemObjectArray Udon type (VM-proven: "Unknown extern:
-            // SystemObjectArray.__get_Table__SystemObjectArray" for `StgSampler<T>.Table`). A struct's
-            // static field is per-TYPE storage — for a GENERIC struct, per-CLOSED-instantiation
-            // (StgSampler<int>.Table and StgSampler<string>.Table are C#-distinct) — which needs its own
-            // materialization design (mirroring feature S but keyed by constructed struct type), not a
-            // one-line patch. Reject loudly instead of emitting an assembler-crashing extern.
+            if (fieldRef.Field.DeclaringSyntaxReferences.Length > 0
+                && !USugarCompilerHelper.IsFrameworkNamespace(
+                    fieldRef.Field.ContainingNamespace))
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    fieldRef.Field);
             if (fieldRef.Field.ContainingType is INamedTypeSymbol structFieldCt && _lowering.IsUserStruct(structFieldCt))
-                throw new NotSupportedException(
-                    $"Static field '{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' on a "
-                    + "user-defined struct is not supported: static storage for a struct type (per closed "
-                    + "instantiation, if generic) has no materialization mechanism yet. Move the data to "
-                    + "a field on the UdonSharpBehaviour class instead.");
-            ClassAbi.RejectStaticField(
-                fieldRef.Field,
-                _lowering.IsUserClass(
-                    fieldRef.Field.ContainingType));
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    fieldRef.Field);
+            if (_lowering.IsUserClass(
+                    fieldRef.Field.ContainingType))
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    fieldRef.Field);
             if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
-            {
-                // Non-const, non-foldable `static readonly` (const/foldable already returned above) —
-                // per-program instance materialization (design §3.1, Q-S1). Declared within this
-                // program's own class-or-base hierarchy → UasmEmitter's static field walk gave it a
-                // heap var (LoadField, same shape as a this-field read; aggregates clone-on-read).
-                // Otherwise no storage for it exists in THIS program at all (§3.5, Q-S5) — loud.
-                if (fieldRef.Field.IsReadOnly)
-                {
-                    if (IsDeclaredInOwnHierarchy(_lowering.ClassSymbol, fieldRef.Field.ContainingType))
-                        return fieldRef.Field.Type is INamedTypeSymbol staticFieldAgg && _lowering.IsAggregateValue(staticFieldAgg)
-                            ? AggregateAbi.DeepClone(_lowering.Builder, _lowering.LoadField(fieldRef.Field.Name, new StorageType(AggregateAbi.ArrayType)),
-                                staticFieldAgg, _lowering.State.Aggregates.GetLayout)
-                            : _lowering.LoadField(fieldRef.Field.Name, _lowering.GetStorageType(fieldRef.Field.Type));
-
-                    var crossMsg = $"cannot read a non-constant static readonly field "
-                        + $"'{fieldRef.Field.ContainingType.Name}.{fieldRef.Field.Name}' from another behaviour; "
-                        + "Udon programs have no shared static storage. Make it 'const' if it is compile-time "
-                        + "constant, or expose an instance field.";
-                    _lowering.Diagnostics.Add(new EmitDiagnostic { Severity = "Error", Message = crossMsg });
-                    throw new NotSupportedException(crossMsg);
-                }
-                // static MUTABLE field → compile error (Udon VM has no shared static storage). §3.7/R8:
-                // message sharpened to make clear 'static readonly' IS supported (only mutable statics aren't).
-                var mutableMsg = $"Static field '{fieldRef.Field.Name}' is not supported on UdonSharpBehaviour "
-                    + "types: the Udon VM has no shared static storage. 'static readonly' IS supported (each "
-                    + "behaviour instance materializes its own immutable copy) — use 'const' for a compile-time "
-                    + "constant, 'static readonly' for immutable per-instance data, or convert to an instance field.";
-                _lowering.Diagnostics.Add(new EmitDiagnostic { Severity = "Error", Message = mutableMsg });
-                throw new NotSupportedException(mutableMsg);
-            }
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    fieldRef.Field);
             // Unity/System static field → extern getter
             var fldType = _lowering.GetStorageTypeName(fieldRef.Field.Type);
             var containingType = _lowering.GetStorageTypeName(fieldRef.Field.ContainingType);
@@ -267,9 +217,8 @@ internal sealed class ExpressionHandler
     CLeaf VisitEventReference(IEventReferenceOperation eventRef)
     {
         if (eventRef.Event.IsStatic)
-            return _lowering.LoadField(StaticOwnerAbi.EventName(eventRef.Event,
-                _lowering.ResolveType(eventRef.Event.ContainingType) as INamedTypeSymbol
-                ?? eventRef.Event.ContainingType), new StorageType(DelegateAbi.BundleType));
+            throw ClassAbiPolicy.UnsupportedStaticStorage(
+                eventRef.Event);
         if (eventRef.Instance is not IInstanceReferenceOperation)
             throw new NotSupportedException(
                 $"Cannot reference event '{eventRef.Event.Name}' through a non-this receiver; only "
@@ -279,18 +228,6 @@ internal sealed class ExpressionHandler
     }
 
     // ── Conversion ──
-
-    // True when fieldContainingType is _classSymbol or one of its user-defined base classes — i.e. a
-    // static readonly field declared there is materialized as a heap var IN THIS PROGRAM (UasmEmitter's
-    // static field walk covers the same hierarchy). Design §3.5, Q-S5: any OTHER class has no storage
-    // for it here at all, regardless of accessibility.
-    static bool IsDeclaredInOwnHierarchy(INamedTypeSymbol classSymbol, INamedTypeSymbol fieldContainingType)
-    {
-        for (var t = classSymbol; t != null; t = t.BaseType)
-            if (SymbolEqualityComparer.Default.Equals(t, fieldContainingType))
-                return true;
-        return false;
-    }
 
     // Wave-12 r4 [W1]/[W2]: true when converting src to dst re-types a DELEGATE somewhere inside an
     // array (covariance: Func<string>[] → Func<object>[]) or a tuple ((Func<string>,int) →

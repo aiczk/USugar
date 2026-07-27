@@ -598,18 +598,6 @@ public static class ClassAbi
         return prefix + n.Name + (n.Arity > 0 ? "`" + n.Arity : "");
     }
 
-    /// <summary>Reject static field storage on a v1 user class, except consts folded before this point.</summary>
-    public static void RejectStaticField(
-        IFieldSymbol field, bool containingTypeIsUserClass)
-    {
-        if (field.IsStatic && field.ContainingType is INamedTypeSymbol classTy
-            && containingTypeIsUserClass)
-            throw new NotSupportedException(
-                $"Static field '{classTy.Name}.{field.Name}' on a v1 user class is not "
-                + "supported (only `const` is): a class has no per-type static storage yet. Move the data "
-                + "to a field on the UdonSharpBehaviour class, or make it a `const`.");
-    }
-
     public static bool IsReferenceEquality(
         BinaryOperatorKind kind,
         bool leftIsUserClass,

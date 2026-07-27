@@ -171,7 +171,6 @@ internal sealed class LValueLowerer
                 var layout = _lowering.State.Aggregates.GetLayout(aggCapType);
                 if (layout.TryGetIndex(aggFieldRef.Field, out var elemIdx))
                 {
-                    LoweringServices.RejectStaticReadonlyWriteThrough(aggFieldRef.Instance); // §3.3, R5 (compound/inc-dec write-back)
                     var arrVal = _lowering.LoadInstanceRaw(aggFieldRef.Instance);
                     var idxVal = _lowering.Const(elemIdx, StorageTypes.Int32);
                     var currentVal = AggregateAbi.ReadSlot(_lowering.Builder, arrVal, elemIdx, StorageTypes.Object);
@@ -181,7 +180,6 @@ internal sealed class LValueLowerer
             }
             case IArrayElementReferenceOperation ndimCapElem when ndimCapElem.Indices.Length > 1:
             {
-                LoweringServices.RejectStaticReadonlyWriteThrough(ndimCapElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var ndimType = (IArrayTypeSymbol)ndimCapElem.ArrayReference.Type;
                 var elemUdonType = _lowering.GetStorageTypeName(ndimType.ElementType);
                 var plan = _lowering.Ndim.PrepareNdimAccess(ndimCapElem.ArrayReference, ndimCapElem.Indices, ndimType);
@@ -190,7 +188,6 @@ internal sealed class LValueLowerer
             }
             case IArrayElementReferenceOperation arrayElem:
             {
-                LoweringServices.RejectStaticReadonlyWriteThrough(arrayElem.ArrayReference); // §3.3, R5 (compound/inc-dec write-back)
                 var arrSymbol = arrayElem.ArrayReference.Type as IArrayTypeSymbol;
                 var arrayType = _lowering.GetArrayType(arrSymbol);
                 var elemAccessorType = _lowering.GetArrayElemType(arrSymbol);
@@ -460,12 +457,8 @@ internal sealed class LValueLowerer
                     && !USugarCompilerHelper.IsFrameworkNamespace(propRef.Property.ContainingNamespace))
                 {
                     if (!UasmEmitter.IsComputedProperty(propRef.Property))
-                    {
-                        var owner = _lowering.ResolveType(propRef.Property.ContainingType) as INamedTypeSymbol
-                                    ?? propRef.Property.ContainingType;
-                        _lowering.EmitStoreField(StaticOwnerAbi.PropertyName(propRef.Property, owner), valueVal);
-                        return;
-                    }
+                        throw ClassAbiPolicy.UnsupportedStaticStorage(
+                            propRef.Property);
                     var setter = _lowering.RequireBoundCallable(
                         propRef, CallableSiteKind.PropertySet);
                     _lowering.EmitExprStmt(_lowering.EmitCallToMethod(setter, new List<CLeaf> { valueVal }));
@@ -562,10 +555,11 @@ internal sealed class LValueLowerer
             case IFieldReferenceOperation { Instance: IInstanceReferenceOperation } fieldRef:
                 return _lowering.State.SourceStorageName(fieldRef.Field);
             case IFieldReferenceOperation { Instance: null } staticField
-                when StaticOwnerAbi.IsSourceStatic(staticField.Field) && !staticField.Field.IsReadOnly:
-                return StaticOwnerAbi.FieldName(staticField.Field,
-                    _lowering.ResolveType(staticField.Field.ContainingType) as INamedTypeSymbol
-                    ?? staticField.Field.ContainingType);
+                when staticField.Field.DeclaringSyntaxReferences.Length > 0
+                     && !USugarCompilerHelper.IsFrameworkNamespace(
+                         staticField.Field.ContainingNamespace):
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    staticField.Field);
             case IParameterReferenceOperation paramRef:
                 return _lowering.GetParamVarId(paramRef.Parameter);
             default:

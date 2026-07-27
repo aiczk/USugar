@@ -975,19 +975,6 @@ public class FIStructObjInitTest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void StaticReadonlyFieldInitializer_UserStructCtorCall_NoBogusExtern()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class FIStaticStructCtorTest : UdonSharpBehaviour {
-    static readonly TestStubs.MyVec3 _s = new TestStubs.MyVec3(1, 2, 3);
-    void Start() { }
-}");
-        Assert.DoesNotContain("SystemObjectArray.__ctor__SystemSingle_SystemSingle_SystemSingle__SystemObjectArray", uasm);
-        Assert.Contains("SystemObjectArray.__ctor__SystemInt32__SystemObjectArray", uasm);
-    }
-
-    [Fact]
     public void FieldInitializer_UserStructCtorCallWithObjectInitializer_AppliesBothCtorAndInitializer()
     {
         var uasm = TestHelper.CompileToUasm(@"

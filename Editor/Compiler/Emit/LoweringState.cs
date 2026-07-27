@@ -60,10 +60,6 @@ internal sealed class LoweringState
         string FieldName,
         IOperation InitOp,
         ITypeSymbol FieldType)> FieldInitOps = new();
-    public readonly List<(
-        string FieldName,
-        IOperation InitOp,
-        ITypeSymbol FieldType)> StaticFieldInitOps = new();
     public readonly Dictionary<string, string>
         FieldChangeCallbacks = new();
     public readonly List<EmitDiagnostic> Diagnostics = new();

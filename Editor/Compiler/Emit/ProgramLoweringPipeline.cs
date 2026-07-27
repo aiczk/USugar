@@ -33,7 +33,6 @@ public sealed class UasmEmitter
     HashSet<IMethodSymbol> _inheritedMethods = new(SymbolEqualityComparer.Default);
     HashSet<IMethodSymbol> _userClassDefaultMethods = new(SymbolEqualityComparer.Default);
     List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _fieldInitOps => _state.FieldInitOps;
-    List<(string fieldName, IOperation initOp, ITypeSymbol fieldType)> _staticFieldInitOps => _state.StaticFieldInitOps;
     Dictionary<string, string> _fieldChangeCallbacks => _state.FieldChangeCallbacks;
     List<EmitDiagnostic> _diagnostics => _state.Diagnostics;
 
@@ -217,9 +216,6 @@ public sealed class UasmEmitter
     // RecursionFacetEquivalenceTests can census the legacy BuildRecursionInfo product and diff it
     // against the worklist-produced facets before the M5b swap. Unused by production emission.
     internal RecursionInfo DebugRecursionInfo => _state.Recursion;
-    internal IReadOnlyList<string> DebugStaticInitializerOrder
-        => _staticFieldInitOps.Select(x => x.fieldName).ToArray();
-
     public string Emit()
     {
         var fields = DiscoverFields();
@@ -404,8 +400,7 @@ public sealed class UasmEmitter
             if (member.IsImplicitlyDeclared) continue;
             if (member.IsStatic)
             {
-                if (!EmitStaticReadonlyField(member) && !member.HasConstantValue)
-                    EmitStaticOwnerField(member);
+                RequireStorageFreeStaticField(member);
                 continue;
             }
 
@@ -501,12 +496,16 @@ public sealed class UasmEmitter
         foreach (var evt in _classSymbol.GetMembers().OfType<IEventSymbol>())
             DeclareEvent(evt);
 
-        EmitExternalStaticOwnerFields();
-
         // Properties → declare as heap variables
         foreach (var prop in _classSymbol.GetMembers().OfType<IPropertySymbol>())
         {
-            if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
+            if (prop.IsImplicitlyDeclared) continue;
+            if (prop.IsStatic)
+            {
+                if (!IsComputedProperty(prop))
+                    throw ClassAbiPolicy.UnsupportedStaticStorage(prop);
+                continue;
+            }
             // Auto-property iff it has a compiler-generated backing field (its accessors have empty bodies).
             // The old DeclaringSyntaxReferences.IsEmpty check was always false for source `{ get; set; }`
             // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
@@ -528,9 +527,7 @@ public sealed class UasmEmitter
         // Record count of derived-class field init ops; base class init ops added below
         // must be reordered to come first (C# spec: base → derived initializer order).
         int derivedFieldInitCount = _fieldDiscovery.InstanceInitializers.Count;
-        int derivedStaticFieldInitCount = _fieldDiscovery.StaticInitializers.Count;
         var baseClassInitBoundaries = new List<int>(); // track boundaries per base class
-        var baseStaticInitBoundaries = new List<int>();
 
         // Collect declared member SYMBOLS (name → derived-most declaration). A base member whose
         // name matches is either (a) part of one override chain — legal, one virtual slot — or
@@ -539,15 +536,12 @@ public sealed class UasmEmitter
         // SetBase/GetBase through the base symbol read the derived symbol's writes, and a
         // type-conflicting shadow halts the VM with HeapTypeMismatchException at runtime).
         // Storage collision is never acceptable → loud reject per design §8-3 (predates fcd-stage1).
-        // Non-const, non-mutable static readonly fields are tracked here too (feature B materializes
-        // them into a heap var by the same bare name) — a static MUTABLE field gets no storage, so
-        // reusing its name lower in the hierarchy collides with nothing and is left untracked.
         // Field-like events materialize storage under their bare name too (DeclareEvent/DeclareDelegateField)
         // — tracked here so a base field/prop/event of the same name collides loudly (design §8 item 6).
         var declaredMemberSyms = new Dictionary<string, ISymbol>();
         foreach (var m in _classSymbol.GetMembers())
             if (m is IFieldSymbol or IPropertySymbol or IEventSymbol && !m.IsImplicitlyDeclared
-                && (!m.IsStatic || (m is IFieldSymbol { IsReadOnly: true, HasConstantValue: false }))
+                && !m.IsStatic
                 && !declaredMemberSyms.ContainsKey(m.Name))
                 declaredMemberSyms[m.Name] = m;
 
@@ -557,7 +551,6 @@ public sealed class UasmEmitter
         {
             if (USugarCompilerHelper.IsFrameworkNamespace(baseType.ContainingNamespace) || baseType.Name == "UdonSharpBehaviour") break;
             baseClassInitBoundaries.Add(_fieldDiscovery.InstanceInitializers.Count);
-            baseStaticInitBoundaries.Add(_fieldDiscovery.StaticInitializers.Count);
             foreach (var member in baseType.GetMembers().OfType<IFieldSymbol>())
             {
                 if (member.IsImplicitlyDeclared) continue;
@@ -575,8 +568,7 @@ public sealed class UasmEmitter
                 }
                 if (member.IsStatic)
                 {
-                    EmitStaticReadonlyField(member);
-                    if (!member.IsConst && member.IsReadOnly) declaredMemberSyms[member.Name] = member;
+                    RequireStorageFreeStaticField(member);
                     continue;
                 }
 
@@ -654,7 +646,14 @@ public sealed class UasmEmitter
             }
             foreach (var prop in baseType.GetMembers().OfType<IPropertySymbol>())
             {
-                if (prop.IsStatic || prop.IsImplicitlyDeclared) continue;
+                if (prop.IsImplicitlyDeclared) continue;
+                if (prop.IsStatic)
+                {
+                    if (!IsComputedProperty(prop))
+                        throw ClassAbiPolicy.UnsupportedStaticStorage(
+                            prop);
+                    continue;
+                }
                 // Auto-property iff it has a compiler-generated backing field (its accessors have empty bodies).
             // The old DeclaringSyntaxReferences.IsEmpty check was always false for source `{ get; set; }`
             // accessors, so a PRIVATE auto-property was never detected and its backing field went undeclared.
@@ -708,25 +707,11 @@ public sealed class UasmEmitter
         ReorderBaseFirst(
             _fieldDiscovery.InstanceInitializers, baseClassInitBoundaries, derivedFieldInitCount);
 
-        // §3.6 (feature B): the static TIER gets the identical base-first reorder, independently of
-        // the instance tier above (they were collected into separate lists), then splices in FRONT of
-        // it — base static → derived static → base instance → derived instance.
-        ReorderBaseFirst(
-            _fieldDiscovery.StaticInitializers, baseStaticInitBoundaries, derivedStaticFieldInitCount);
-        StaticInitializationPlan.ValidateCycles(
-            _compilation,
-            _fieldDiscovery.StaticInitializers.Select(initializer =>
-                (initializer.FieldName, initializer.Operation, initializer.FieldType)).ToList(),
-            GetMethodBodyOperation);
-        if (_fieldDiscovery.StaticInitializers.Count > 0)
-            _fieldDiscovery.InstanceInitializers.InsertRange(
-                0, _fieldDiscovery.StaticInitializers);
         var result = _fieldDiscovery.Build();
         _fieldDiscovery = null;
         return result;
     }
 
-    /// <summary>Base-first reorder shared by the instance and static field-initializer tiers (§3.6):
     void RecordSourceField(
         IFieldSymbol field,
         StorageType storageType,
@@ -821,179 +806,15 @@ public sealed class UasmEmitter
         return syncMode;
     }
 
-    /// <summary>
-    /// Static field declaration branch (design §3, feature B), shared verbatim by the own-class and
-    /// base-class field walks. `const` fields and `static readonly` fields whose initializer folds to
-    /// a compile-time constant get NO storage here — ExpressionHandler's existing read-time fold
-    /// (byte-invariant, §6 gate) keeps handling them exactly as before this feature. Static MUTABLE
-    /// fields also get no storage (reject stays at the read/write use site, §3.7/R8). A non-const,
-    /// non-foldable `static readonly` (array / struct / tuple / delegate / computed-but-pure value) is
-    /// PER-PROGRAM INSTANCE MATERIALIZED: declared exactly like an instance field (reusing
-    /// TryEvaluateFieldInitForHeap for the same constant-array/struct heap-default fast path), its
-    /// initializer enqueued to the STATIC TIER of _staticFieldInitOps (run before the instance tier at
-    /// _start — §3.6) so each behaviour instance builds its own independent copy. An impure initializer
-    /// is loud-rejected (§3.4, R6) before any storage is declared — purity is what makes running it once
-    /// per instance observationally identical to C#'s once-per-domain. Returns true iff a heap var was
-    /// declared (materialized), so callers can track the name for cross-hierarchy shadow-collision
-    /// detection the same way instance fields already are.
-    /// </summary>
-    bool EmitStaticReadonlyField(IFieldSymbol member)
+    void RequireStorageFreeStaticField(IFieldSymbol member)
     {
-        if (member.HasConstantValue) return false;    // `const` → existing fold path, no storage
-        if (!member.IsReadOnly) return false;         // static mutable → no storage; reject at use site
-
-        var syntaxRef = member.DeclaringSyntaxReferences.FirstOrDefault();
-        IOperation initOp = null;
-        if (syntaxRef?.GetSyntax() is VariableDeclaratorSyntax { Initializer: not null } declarator)
-        {
-            var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
-            initOp = model.GetOperation(declarator.Initializer.Value);
-        }
-
-        // Compile-time-constant initializer (`static readonly int X = 1 + 2;`) → the EXISTING fold
-        // path (ExpressionHandler.VisitFieldReference), byte-invariant — must stay storage-free exactly
-        // as before this feature.
-        if (initOp != null && initOp.ConstantValue.HasValue && initOp.ConstantValue.Value != null) return false;
-        if (initOp != null && EmitPolicy.TryGetConstFieldInitializer(_compilation, member, out _)) return false;
-
-        if (initOp != null && !EmitPolicy.IsPureStaticReadonlyInitializer(initOp))
-            throw new NotSupportedException(
-                $"a static readonly initializer must be pure (composed of constants and value construction); "
-                + $"'{member.Name}' calls a method or reads mutable state, which would run once per behaviour "
-                + "instance rather than once. Compute it in an instance field initializer or Start().");
-
-        // Nothing to synchronize: each instance already materializes its own immutable copy at Start.
-        if (member.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
-            throw new NotSupportedException(
-                $"[UdonSynced] static readonly field '{member.Name}' cannot be synced: each behaviour "
-                + "instance already materializes its own immutable copy at Start, so there is nothing to "
-                + "synchronize. Remove [UdonSynced].");
-
-        if (member.Type is INamedTypeSymbol delegateType && delegateType.DelegateInvokeMethod != null)
-        {
-            DeclareDelegateField(member, delegateType);
-            return true;
-        }
-
-        var udonType = GetStorageTypeName(member.Type);
-        object constValue = null;
-        if (initOp != null)
-        {
-            constValue = TryEvaluateFieldInitForHeap(initOp, member.Type);
-            if (constValue == null)
-                _fieldDiscovery.StaticInitializers.Add(
-                    new FieldInitializerPlan(member.Name, initOp, member.Type));
-        }
-        _fieldDiscovery.DeclareField(
-            member.Name, new StorageType(udonType), FieldFlags.None, constValue);
-
-        if (initOp == null && member.Type is INamedTypeSymbol aggFieldType
-            && IsAggregateValue(aggFieldType))
-            _fieldDiscovery.AggregateDefaults.Add((member.Name, aggFieldType));
-
-        return true;
-    }
-
-    void EmitExternalStaticOwnerFields()
-    {
-        var ownHierarchy = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-        for (var type = _classSymbol; type != null; type = type.BaseType) ownHierarchy.Add(type);
-        var fields = new HashSet<IFieldSymbol>(SymbolEqualityComparer.Default);
-        var properties = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
-        var events = new HashSet<IEventSymbol>(SymbolEqualityComparer.Default);
-        foreach (var tree in _compilation.SyntaxTrees)
-        {
-            var model = _compilation.GetSemanticModel(tree);
-            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<VariableDeclaratorSyntax>())
-                if (model.GetDeclaredSymbol(declaration) is IFieldSymbol field
-                    && StaticOwnerAbi.IsSourceStatic(field)
-                    && !ClassTypeObjectContext.ContainsTypeParameter(field.ContainingType)
-                    && !ownHierarchy.Contains(field.ContainingType))
-                    fields.Add(field);
-            foreach (var access in tree.GetRoot().DescendantNodes().OfType<MemberAccessExpressionSyntax>())
-            {
-                var symbol = model.GetSymbolInfo(access).Symbol;
-                if (symbol is IFieldSymbol field
-                    && StaticOwnerAbi.IsSourceStatic(field)
-                    && !ClassTypeObjectContext.ContainsTypeParameter(field.ContainingType)
-                    && !ownHierarchy.Contains(field.ContainingType))
-                    fields.Add(field);
-                if (symbol?.ContainingType is INamedTypeSymbol owner
-                    && !ClassTypeObjectContext.ContainsTypeParameter(owner))
-                    foreach (var ownerField in owner.GetMembers().OfType<IFieldSymbol>())
-                        if (StaticOwnerAbi.IsSourceStatic(ownerField) && !ownHierarchy.Contains(owner))
-                            fields.Add(ownerField);
-                if (symbol is IPropertySymbol property && IsStaticAutoProperty(property)
-                    && !USugarCompilerHelper.IsFrameworkNamespace(property.ContainingNamespace)
-                    && !ClassTypeObjectContext.ContainsTypeParameter(property.ContainingType))
-                    properties.Add(property);
-                if (symbol is IEventSymbol { IsStatic: true } evt
-                    && !USugarCompilerHelper.IsFrameworkNamespace(evt.ContainingNamespace)
-                    && !ClassTypeObjectContext.ContainsTypeParameter(evt.ContainingType))
-                    events.Add(evt);
-            }
-            foreach (var declaration in tree.GetRoot().DescendantNodes().OfType<PropertyDeclarationSyntax>())
-                if (model.GetDeclaredSymbol(declaration) is IPropertySymbol property
-                    && IsStaticAutoProperty(property)
-                    && !USugarCompilerHelper.IsFrameworkNamespace(property.ContainingNamespace)
-                    && !ClassTypeObjectContext.ContainsTypeParameter(property.ContainingType))
-                    properties.Add(property);
-        }
-        foreach (var field in fields.OrderBy(f => StaticOwnerAbi.FieldName(f), StringComparer.Ordinal))
-            EmitStaticOwnerField(field);
-        foreach (var property in properties.OrderBy(
-                     p => StaticOwnerAbi.PropertyName(p, p.ContainingType), StringComparer.Ordinal))
-            EmitStaticOwnerProperty(property);
-        foreach (var evt in events.OrderBy(
-                     e => StaticOwnerAbi.EventName(e, e.ContainingType), StringComparer.Ordinal))
-            DeclareEvent(evt);
-    }
-
-    static bool IsStaticAutoProperty(IPropertySymbol property)
-        => property.IsStatic && !IsComputedProperty(property);
-
-    void EmitStaticOwnerProperty(IPropertySymbol property)
-    {
-        var id = StaticOwnerAbi.PropertyName(property, property.ContainingType);
-        _fieldDiscovery.DeclareGeneratedField(id, GetStorageType(property.Type));
-        if (property.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-            is PropertyDeclarationSyntax { Initializer: not null } declaration)
-        {
-            var model = _compilation.GetSemanticModel(declaration.SyntaxTree);
-            if (model.GetOperation(declaration.Initializer.Value) is { } init)
-                _fieldDiscovery.StaticInitializers.Add(
-                    new FieldInitializerPlan(id, init, property.Type));
-        }
-        else if (property.Type is INamedTypeSymbol aggregate
-                 && IsAggregateValue(aggregate))
-            _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
-    }
-
-    void EmitStaticOwnerField(IFieldSymbol field)
-    {
-        if (field.GetAttributes().Any(a => a.AttributeClass?.Name == "UdonSyncedAttribute"))
-            throw new NotSupportedException(
-                $"[UdonSynced] static field '{field.ContainingType.Name}.{field.Name}' is not supported: "
-                + "static-owner storage is local to one Udon program instance.");
-        var id = StaticOwnerAbi.FieldName(field);
-        if (field.Type is INamedTypeSymbol { DelegateInvokeMethod: not null } delegateType)
-        {
-            DeclareDelegateField(field, delegateType, id);
+        if (member.HasConstantValue)
             return;
-        }
-        var storageType = GetStorageType(field.Type);
-        _fieldDiscovery.DeclareGeneratedField(id, storageType);
-        var syntax = field.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-        if (syntax is VariableDeclaratorSyntax { Initializer: not null } declarator)
-        {
-            var model = _compilation.GetSemanticModel(declarator.SyntaxTree);
-            if (model.GetOperation(declarator.Initializer.Value) is { } init)
-                _fieldDiscovery.StaticInitializers.Add(
-                    new FieldInitializerPlan(id, init, field.Type));
-        }
-        else if (field.Type is INamedTypeSymbol aggregate
-                 && IsAggregateValue(aggregate))
-            _fieldDiscovery.AggregateDefaults.Add((id, aggregate));
+        if (member.IsReadOnly
+            && EmitPolicy.TryGetConstFieldInitializer(
+                _compilation, member, out _))
+            return;
+        throw ClassAbiPolicy.UnsupportedStaticStorage(member);
     }
 
     /// <summary>
@@ -1075,6 +896,8 @@ public sealed class UasmEmitter
     /// </summary>
     void DeclareEvent(IEventSymbol evt)
     {
+        if (evt.IsStatic)
+            throw ClassAbiPolicy.UnsupportedStaticStorage(evt);
         // Field-like events get compiler-synthesized (IsImplicitlyDeclared) add/remove accessors; a
         // custom accessor body means the user wrote add{...}/remove{...} explicitly.
         if (evt.AddMethod == null || !evt.AddMethod.IsImplicitlyDeclared
@@ -1082,17 +905,13 @@ public sealed class UasmEmitter
             return;
         if (evt.Type is not INamedTypeSymbol delegateType || delegateType.DelegateInvokeMethod == null)
             throw new NotSupportedException($"Event '{evt.Name}' has a non-delegate type.");
-        var storageName = evt.IsStatic
-            ? StaticOwnerAbi.EventName(evt, evt.ContainingType)
-            : evt.Name;
-        DeclareDelegateField(evt, delegateType, storageName);
-        if (!evt.IsStatic)
-            _fieldDiscovery.RecordSourceField(
-                evt.Name,
-                evt,
-                evt.Type,
-                StorageTypes.ObjectArray,
-                isSerialized: false);
+        DeclareDelegateField(evt, delegateType, evt.Name);
+        _fieldDiscovery.RecordSourceField(
+            evt.Name,
+            evt,
+            evt.Type,
+            StorageTypes.ObjectArray,
+            isSerialized: false);
     }
 
     /// <summary>True when <paramref name="ancestor"/> is reachable from <paramref name="leaf"/> via

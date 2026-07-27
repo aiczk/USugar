@@ -182,6 +182,8 @@ internal sealed class CompoundAssignmentHandler
         if (op.EventReference is not IEventReferenceOperation evtRef)
             throw new System.NotSupportedException("Unsupported event assignment target.");
         var evt = evtRef.Event;
+        if (evt.IsStatic)
+            throw ClassAbiPolicy.UnsupportedStaticStorage(evt);
         var accessor = op.Adds ? evt.AddMethod : evt.RemoveMethod;
         if (accessor == null)
             throw new System.NotSupportedException($"Event '{evt.Name}' has no accessor.");
@@ -189,10 +191,7 @@ internal sealed class CompoundAssignmentHandler
             op,
             op.Adds ? CallableSiteKind.EventAdd : CallableSiteKind.EventRemove);
         accessor = boundSite.Callable.Site.Target;
-        var storageName = evt.IsStatic
-            ? StaticOwnerAbi.EventName(evt,
-                _lowering.ResolveType(evt.ContainingType) as INamedTypeSymbol ?? evt.ContainingType)
-            : evt.Name;
+        var storageName = evt.Name;
 
         if (evt.ContainingType is INamedTypeSymbol { TypeKind: TypeKind.Interface } localInterface
             && _lowering.Planner.InterfaceIsLocalUserClassOnly(localInterface))

@@ -136,8 +136,8 @@ public static class EmitPolicy
     /// string). A `static readonly` field has no ConstantValue of its own (only `const` does), so this
     /// folds `static readonly int X = 1 + 2;`-style initializers that ARE compile-time-constant
     /// expressions. Shared by ExpressionHandler's read-time fold and UasmEmitter's field-declaration
-    /// walk — the two must agree on which static readonly fields get no storage (const-fold path)
-    /// vs. which get per-program materialized (design §3.1, feature B).</summary>
+    /// walk — the two must agree on the only accepted static-field shape: a value that needs
+    /// no runtime storage.</summary>
     public static bool TryGetConstFieldInitializer(Compilation compilation, IFieldSymbol field, out object value)
     {
         value = null;
@@ -149,70 +149,6 @@ public static class EmitPolicy
             if (cv.HasValue) { value = cv.Value; return true; }
         }
         return false;
-    }
-
-    /// <summary>True when a `static readonly` field initializer's operation tree is composed ONLY of
-    /// side-effect-free, instance-invariant shapes: literals, other static readonly reads (const or
-    /// materialized — cross-class non-const reads are independently loud-rejected at emit time, §3.5,
-    /// not a purity concern), value-type construction, array/tuple initializers of pure elements,
-    /// built-in (non-overloaded) arithmetic/conversion operators, and nameof/typeof/default (design
-    /// §3.4, Q-S3). Per-program materialization runs the initializer once PER BEHAVIOUR INSTANCE
-    /// (Udon has no shared static storage) — an impure initializer (method call, instance-state read,
-    /// a Time/Random-style extern) would silently diverge per instance where C# runs it exactly once.
-    /// Deliberately conservative: any operation kind not recognized here rejects rather than risk
-    /// silently re-running a side effect N times (§8-4 self-critique — a stricter gate is the
-    /// accepted trade against rejecting some pure-but-unrecognized shapes).</summary>
-    public static bool IsPureStaticReadonlyInitializer(IOperation op)
-    {
-        switch (op)
-        {
-            case null:
-            case ILiteralOperation:
-            case IDefaultValueOperation:
-            case ITypeOfOperation:
-            case INameOfOperation:
-                return true;
-            case IFieldReferenceOperation fieldRef:
-                return fieldRef.Field.IsStatic && (fieldRef.Field.IsConst || fieldRef.Field.IsReadOnly);
-            // A delegate field's initializer is bound via the EqualsValueClause's conversion-STRIPPED
-            // inner op (matching UasmEmitter.DeclareDelegateField's own binding — see its comment), so a
-            // `static readonly Action a = SomeStaticMethod;` initializer arrives here as a bare
-            // IMethodReferenceOperation, not IDelegateCreationOperation. Binding a static method group is
-            // side-effect-free (no instance to read); an instance-bound method reference can't legally
-            // appear in a static initializer in the first place, but is rejected defensively anyway.
-            case IMethodReferenceOperation mref:
-                return mref.Instance == null;
-            // wave-13 staticro lens (2026-07-04): minting a delegate from a lambda literal or an
-            // explicit delegate-creation expression is itself side-effect-free (the lambda BODY only
-            // runs later, at invocation — never during the mint). A lambda appearing directly in a
-            // static field initializer can never capture instance state (no `this`/locals exist in
-            // that scope; C# itself rejects an instance-member reference there), so unlike an ordinary
-            // method call this is unconditionally pure — same category as the method-group case above.
-            case IAnonymousFunctionOperation:
-                return true;
-            case IDelegateCreationOperation dc:
-                return IsPureStaticReadonlyInitializer(dc.Target);
-            case IConversionOperation conv:
-                return IsPureStaticReadonlyInitializer(conv.Operand);
-            case IUnaryOperation { OperatorMethod: null } un:
-                return IsPureStaticReadonlyInitializer(un.Operand);
-            case IBinaryOperation { OperatorMethod: null } bin:
-                return IsPureStaticReadonlyInitializer(bin.LeftOperand) && IsPureStaticReadonlyInitializer(bin.RightOperand);
-            case IArrayCreationOperation arrCreate:
-                return arrCreate.DimensionSizes.All(IsPureStaticReadonlyInitializer)
-                    && (arrCreate.Initializer == null || IsPureStaticReadonlyInitializer(arrCreate.Initializer));
-            case IArrayInitializerOperation arrInit:
-                return arrInit.ElementValues.All(IsPureStaticReadonlyInitializer);
-            case ITupleOperation tuple:
-                return tuple.Elements.All(IsPureStaticReadonlyInitializer);
-            case IObjectCreationOperation objCreate when objCreate.Type?.IsValueType == true:
-                return objCreate.Arguments.All(a => IsPureStaticReadonlyInitializer(a.Value))
-                    && (objCreate.Initializer == null
-                        || objCreate.Initializer.Initializers.All(m =>
-                            m is ISimpleAssignmentOperation asn && IsPureStaticReadonlyInitializer(asn.Value)));
-            default:
-                return false;
-        }
     }
 
     /// <summary>The parameterless void Dispose() of a user type (public or explicit IDisposable impl),

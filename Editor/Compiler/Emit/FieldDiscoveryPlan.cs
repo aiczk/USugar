@@ -58,7 +58,6 @@ internal sealed class FieldDiscoveryPlan
     public readonly IReadOnlyList<FieldDecl> Declarations;
     public readonly IReadOnlyList<SourceFieldPlan> SourceFields;
     public readonly IReadOnlyList<FieldInitializerPlan> Initializers;
-    public readonly IReadOnlyList<FieldInitializerPlan> StaticInitializers;
     public readonly IReadOnlyList<(string FieldName, INamedTypeSymbol AggregateType)> AggregateDefaults;
     public readonly IReadOnlyDictionary<string, string> FieldChangeCallbacks;
 
@@ -66,14 +65,12 @@ internal sealed class FieldDiscoveryPlan
         IEnumerable<FieldDecl> declarations,
         IEnumerable<SourceFieldPlan> sourceFields,
         IEnumerable<FieldInitializerPlan> initializers,
-        IEnumerable<FieldInitializerPlan> staticInitializers,
         IEnumerable<(string FieldName, INamedTypeSymbol AggregateType)> aggregateDefaults,
         IReadOnlyDictionary<string, string> fieldChangeCallbacks)
     {
         Declarations = Array.AsReadOnly(declarations.Select(Clone).ToArray());
         SourceFields = Array.AsReadOnly(sourceFields.ToArray());
         Initializers = Array.AsReadOnly(initializers.ToArray());
-        StaticInitializers = Array.AsReadOnly(staticInitializers.ToArray());
         AggregateDefaults = Array.AsReadOnly(aggregateDefaults.ToArray());
         FieldChangeCallbacks = new System.Collections.ObjectModel.ReadOnlyDictionary<string, string>(
             new Dictionary<string, string>(fieldChangeCallbacks, StringComparer.Ordinal));
@@ -103,7 +100,6 @@ internal static class FieldPlanEmitter
                 "Field materialization requires the published "
                 + "bound program.");
         if (state.FieldInitOps.Count != 0
-            || state.StaticFieldInitOps.Count != 0
             || state.FieldChangeCallbacks.Count != 0)
             throw new InvalidOperationException("Field discovery plan was published twice.");
 
@@ -111,9 +107,6 @@ internal static class FieldPlanEmitter
             state.Storage.DeclarePlannedField(Clone(declaration));
         foreach (var initializer in plan.Initializers)
             state.FieldInitOps.Add((
-                initializer.FieldName, initializer.Operation, initializer.FieldType));
-        foreach (var initializer in plan.StaticInitializers)
-            state.StaticFieldInitOps.Add((
                 initializer.FieldName, initializer.Operation, initializer.FieldType));
         foreach (var pair in plan.FieldChangeCallbacks)
             state.FieldChangeCallbacks.Add(pair.Key, pair.Value);
@@ -138,7 +131,6 @@ internal sealed class FieldDiscoveryPlanBuilder
         new(StringComparer.Ordinal);
 
     public readonly List<FieldInitializerPlan> InstanceInitializers = new();
-    public readonly List<FieldInitializerPlan> StaticInitializers = new();
     public readonly List<(string FieldName, INamedTypeSymbol AggregateType)> AggregateDefaults = new();
     public readonly Dictionary<string, string> FieldChangeCallbacks = new(StringComparer.Ordinal);
 
@@ -203,7 +195,6 @@ internal sealed class FieldDiscoveryPlanBuilder
             _declarations,
             _sourceFields,
             InstanceInitializers,
-            StaticInitializers,
             AggregateDefaults,
             FieldChangeCallbacks);
 

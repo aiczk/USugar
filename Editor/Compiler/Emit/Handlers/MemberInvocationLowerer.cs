@@ -170,12 +170,8 @@ internal sealed class MemberInvocationLowerer
             if (op.Property.GetMethod?.DeclaringSyntaxReferences.Length > 0
                 && !USugarCompilerHelper.IsFrameworkNamespace(op.Property.ContainingNamespace)
                 && !IsUserComputedStaticProperty(op.Property))
-            {
-                var owner = _lowering.ResolveType(op.Property.ContainingType) as INamedTypeSymbol
-                            ?? op.Property.ContainingType;
-                return _lowering.LoadField(StaticOwnerAbi.PropertyName(op.Property, owner),
-                    _lowering.GetStorageType(op.Property.Type));
-            }
+                throw ClassAbiPolicy.UnsupportedStaticStorage(
+                    op.Property);
 
             // Constant folding: static properties on foldable struct types (e.g., Vector3.zero)
             if (op.Property.IsStatic && ConstFoldableStructTypes.Contains(containingType))

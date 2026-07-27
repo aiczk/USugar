@@ -100,7 +100,7 @@ internal sealed class BoundaryChecker
     }
 
     /// <summary>Walks nested element/conversion links to the array's root field (the
-    /// TryGetStaticReadonlyWriteThroughRoot walk, field-reference flavor); null when the array is
+    /// storage-root walk, field-reference flavor); null when the array is
     /// not rooted at a field (local/param/fresh value — program-local storage, no hazard).</summary>
     static IFieldReferenceOperation ArrayRootFieldReference(IArrayElementReferenceOperation elem)
     {

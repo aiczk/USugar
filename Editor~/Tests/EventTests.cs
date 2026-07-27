@@ -89,21 +89,6 @@ public class EvtCustom : UdonSharpBehaviour {
         Assert.Contains("_backing", uasm);
     }
 
-    [Fact]
-    public void StaticCustomAccessorEvent_CompilesAndCallsAccessors()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-using System;
-public class EvtStaticCustom : UdonSharpBehaviour {
-    static Action _backing;
-    public static event Action Foo { add { _backing += value; } remove { _backing -= value; } }
-    void Handler() { }
-    void Start() { Foo += Handler; Foo -= Handler; }
-}", "EvtStaticCustom");
-        Assert.Contains("_backing", uasm);
-    }
-
     // ── R2: cross-behaviour field-like event subscription ──
 
     [Fact]
@@ -183,23 +168,6 @@ public class EvtNetCallable : UdonSharpBehaviour {
     public event Action Foo;
 }", "EvtNetCallable"));
         Assert.Contains("[NetworkCallable]", ex.Message);
-    }
-
-    // ── static event: no shared-static storage on Udon ──
-
-    [Fact]
-    public void StaticEvent_UsesOwnerScopedStorage()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-using System;
-public class EvtStatic : UdonSharpBehaviour {
-    public static event Action Foo;
-    public int Result;
-    void Mark() { Result++; }
-    void Start() { Foo += Mark; Foo(); Foo -= Mark; }
-}", "EvtStatic");
-        Assert.Contains("_event_Foo", uasm);
     }
 
     // ── tuple-return delegate event (Stage 1.75 design 2026-07-04 §1): SUPPORTED ──

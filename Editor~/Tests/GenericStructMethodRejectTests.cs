@@ -338,27 +338,6 @@ public class GR2User : UdonSharpBehaviour {
             uasm);
     }
 
-    // ── G-R3: a generic struct in a static-readonly field / field initializer (the B41-fixed S1 path)
-    // works — accept, not reject. ──
-
-    [Fact]
-    public void GenericStructInStaticReadonlyField_Compiles()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public struct Box<T> {
-    public T value;
-    public Box(T v) { value = v; }
-    public T Get() { return value; }
-}
-public class GR3User : UdonSharpBehaviour {
-    static readonly Box<int> _s = new Box<int>(5);
-    public int outv;
-    void Start() { outv = _s.Get(); }
-}", "GR3User");
-        Assert.NotNull(uasm);
-    }
-
     [Fact]
     public void GenericStructFieldInitializer_Compiles()
     {

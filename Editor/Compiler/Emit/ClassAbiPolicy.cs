@@ -5,6 +5,14 @@ using Microsoft.CodeAnalysis;
 /// <summary>Class ABI invariants and runtime-type-test policy, independent of IR emission.</summary>
 internal static class ClassAbiPolicy
 {
+    public static NotSupportedException UnsupportedStaticStorage(
+        ISymbol member)
+        => new NotSupportedException(
+            $"Static state '{member.ContainingType.Name}.{member.Name}' is not supported: "
+            + "each Udon program has an isolated heap, so per-program materialization would "
+            + "not have C# static semantics. Use const, a compile-time-foldable static readonly "
+            + "value, a computed static member without static state, or an instance member.");
+
     public static void AssertClosed(ITypeSymbol type, string site)
     {
         if (!ClassTypeObjectContext.ContainsTypeParameter(type)) return;
