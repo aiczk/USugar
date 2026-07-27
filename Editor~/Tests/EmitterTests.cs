@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -3689,6 +3689,50 @@ public class IdxCompoundOnceTest : UdonSharpBehaviour {
         const string tok = "__get_Length__SystemInt32";
         while ((idx = code.IndexOf(tok, idx, System.StringComparison.Ordinal)) >= 0) { count++; idx += tok.Length; }
         Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public void CrossBehaviourPropertyCompound_EvaluatesReceiverOnce()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CrossPropOnceTarget : UdonSharpBehaviour { public int P { get; set; } }
+public class CrossPropOnceHost : UdonSharpBehaviour {
+    public CrossPropOnceTarget[] targets;
+    CrossPropOnceTarget Pick() { return targets[0]; }
+    void Start() { Pick().P += 1; }
+}
+", "CrossPropOnceHost");
+        var code = uasm.Substring(uasm.IndexOf(".code_start", System.StringComparison.Ordinal));
+        Assert.Equal(1, CountToken(code, "__callret_"));
+    }
+
+    [Fact]
+    public void InterfacePropertyCompound_EvaluatesReceiverOnce()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public interface IPropOnce { int P { get; set; } }
+public class PropOnceImpl : UdonSharpBehaviour, IPropOnce { public int P { get; set; } }
+public class IfacePropOnceHost : UdonSharpBehaviour {
+    public PropOnceImpl[] targets;
+    IPropOnce Pick() { return targets[0]; }
+    void Start() { Pick().P += 1; }
+}
+", "IfacePropOnceHost");
+        var code = uasm.Substring(uasm.IndexOf(".code_start", System.StringComparison.Ordinal));
+        Assert.Equal(1, CountToken(code, "__callret_"));
+    }
+
+    static int CountToken(string text, string token)
+    {
+        int count = 0, index = 0;
+        while ((index = text.IndexOf(token, index, System.StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += token.Length;
+        }
+        return count;
     }
 
     [Fact]

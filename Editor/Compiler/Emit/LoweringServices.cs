@@ -3611,6 +3611,20 @@ internal sealed class LoweringServices
     /// setter), SendCustomEvent the bridge, GetProgramVariable the return. Tuple-returning accessors
     /// dispatch the bare export (no bridge), mirroring EmitInterfaceCall. Void accessors self-emit
     /// and return null — never wrap in EmitExprStmt.</summary>
+    internal CLeaf EmitCrossBehaviourPropertyGet(IPropertyReferenceOperation op, CLeaf instanceVal,
+        StorageType returnType)
+    {
+        if (IsNonPublicAutoCrossProperty(op.Property.GetMethod, op.Property))
+            return LoadProgramVariable(instanceVal, op.Property.Name, returnType);
+        var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
+        var getReturns = getRetId != null
+            ? new[] { new ReturnSlot(getRetId, returnType) }
+            : System.Array.Empty<ReturnSlot>();
+        return CrossCall(instanceVal, getExportName, System.Array.Empty<CrossCallParameter>(),
+            getReturns, returnType,
+            TryMarkReentrantCrossDispatch(op, op.Property.GetMethod));
+    }
+
     internal CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
         List<CLeaf> orderedArgs, bool reentrant = false)
     {

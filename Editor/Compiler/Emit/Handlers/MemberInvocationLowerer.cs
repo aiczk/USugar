@@ -191,29 +191,8 @@ internal sealed class MemberInvocationLowerer
         {
             _lowering.RejectProgramLocalCrossBehaviourPropertyRead(op.Property); // CW22 (field-read twin)
             var instanceVal = _lowering.VisitExpression(op.Instance);
-            // Wave-12 [V2]: non-public autos read the declared backing symbol directly (their
-            // accessors are never exported); see IsNonPublicAutoCrossProperty.
-            var isAuto = LoweringServices.IsNonPublicAutoCrossProperty(op.Property.GetMethod, op.Property);
-
-            if (isAuto)
-            {
-                // Auto-property: direct GetProgramVariable("PropertyName")
-                return _lowering.LoadProgramVariable(
-                    instanceVal, op.Property.Name, new StorageType(returnType));
-            }
-            else
-            {
-                // Non-auto property getter: a single-return cross-behaviour call. CrossCall binds it to a
-                // scratch slot at this point (A-normal form), so the SendCustomEvent fires exactly once in
-                // program order — inside the branch block when this getter is a ternary arm.
-                var (getExportName, _, getRetId) = _lowering.GetCalleeLayout(op.Property.GetMethod);
-                var getReturns = getRetId != null
-                    ? new[] { new ReturnSlot(getRetId, new StorageType(returnType)) }
-                    : System.Array.Empty<ReturnSlot>();
-                return _lowering.CrossCall(instanceVal, getExportName,
-                    System.Array.Empty<CrossCallParameter>(), getReturns, new StorageType(returnType),
-                    _lowering.TryMarkReentrantCrossDispatch(op, op.Property.GetMethod)); // wave-12 r2 [V1]
-            }
+            return _lowering.EmitCrossBehaviourPropertyGet(
+                op, instanceVal, new StorageType(returnType));
         }
 
         // Interface property get → dispatch the getter through its interface bridge (SendCustomEvent),

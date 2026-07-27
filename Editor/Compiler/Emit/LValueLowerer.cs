@@ -117,11 +117,12 @@ internal sealed class LValueLowerer
             // them (index side effects run exactly once). Pre-fix both legs fell to extern resolution
             // and emitted nonexistent IUdonEventReceiver.__get_Item/__set_Item externs.
             case IPropertyReferenceOperation iIdxRef
-                when iIdxRef.Property.IsIndexer
-                && _lowering.TryGetInterfaceAccessorLayout(iIdxRef, iIdxRef.Property.GetMethod, out var iIdxGetMl):
+                when _lowering.TryGetInterfaceAccessorLayout(iIdxRef, iIdxRef.Property.GetMethod, out var iIdxGetMl):
             {
                 var recvVal = _lowering.VisitExpression(iIdxRef.Instance);
-                var cachedArgs = _lowering.EvaluateIndexerArgs(iIdxRef);
+                var cachedArgs = iIdxRef.Property.IsIndexer
+                    ? _lowering.EvaluateIndexerArgs(iIdxRef)
+                    : new List<CLeaf>();
                 var currentVal = _lowering.EmitInterfaceAccessorCall(iIdxRef.Property.GetMethod, iIdxGetMl, recvVal, cachedArgs,
                     _lowering.TryMarkReentrantCrossDispatch(iIdxRef, iIdxRef.Property.GetMethod)); // wave-12 r2 [V1]
                 return new LoweringServices.LValuePlan { Value = currentVal, InstanceVal = recvVal, IndexArgs = cachedArgs };
@@ -162,6 +163,21 @@ internal sealed class LValueLowerer
                     return new LoweringServices.LValuePlan { Value = getVal, ArrayVal = recv };
                 }
                 goto default;
+            }
+            case IPropertyReferenceOperation
+                {
+                    Property: { IsIndexer: false },
+                    Instance: not null and not IInstanceReferenceOperation
+                } crossPropRef
+                when ExternResolver.IsUdonSharpBehaviour(crossPropRef.Property.ContainingType)
+                && crossPropRef.Property.GetMethod != null:
+            {
+                _lowering.RejectProgramLocalCrossBehaviourPropertyRead(crossPropRef.Property);
+                var crossRecv = _lowering.VisitExpression(crossPropRef.Instance);
+                var crossCurrent = _lowering.EmitCrossBehaviourPropertyGet(
+                    crossPropRef, crossRecv,
+                    _lowering.GetStorageType(crossPropRef.Property.Type));
+                return new LoweringServices.LValuePlan { Value = crossCurrent, InstanceVal = crossRecv };
             }
             case IFieldReferenceOperation aggFieldRef
                 when aggFieldRef.Instance != null
@@ -368,7 +384,7 @@ internal sealed class LValueLowerer
             case IPropertyReferenceOperation propRef when ExternResolver.IsUdonSharpBehaviour(propRef.Property.ContainingType) && propRef.Instance is not IInstanceReferenceOperation:
             {
                 _lowering.RejectProgramLocalCrossBehaviourPropertyWrite(propRef.Property); // CW22 (compound/`??=` leg)
-                var instanceVal = _lowering.VisitExpression(propRef.Instance);
+                var instanceVal = lv.InstanceVal ?? _lowering.VisitExpression(propRef.Instance);
                 // Wave-12 [V2]: non-public autos write the declared backing symbol directly (their
                 // accessors are never exported); see IsNonPublicAutoCrossProperty.
                 var isAutoSet = propRef.Property.SetMethod == null
