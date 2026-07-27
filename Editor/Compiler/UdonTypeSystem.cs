@@ -257,6 +257,15 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         return UdonRuntimeTypeTest.Unsupported;
     }
 
+    public static void RequireNotSelfBound(ITypeParameterSymbol parameter, ITypeSymbol resolved)
+    {
+        if (!SymbolEqualityComparer.Default.Equals(parameter, resolved)) return;
+        throw new NotSupportedException(
+            $"Type parameter '{parameter.Name}' resolves to itself in the monomorphization map — a "
+            + "self-referential binding from an unclosed containing-type specialization. The generic "
+            + "was not fully monomorphized to a concrete type at this emit site.");
+    }
+
     public ITypeSymbol Resolve(ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap)
     {
@@ -264,10 +273,7 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
                && typeParameterMap != null
                && typeParameterMap.TryGetValue(parameter, out var resolved))
         {
-            if (SymbolEqualityComparer.Default.Equals(parameter, resolved))
-                throw new NotSupportedException(
-                    $"Type parameter '{parameter.Name}' resolves to itself in "
-                    + "the monomorphization map.");
+            RequireNotSelfBound(parameter, resolved);
             type = resolved;
         }
         return type;

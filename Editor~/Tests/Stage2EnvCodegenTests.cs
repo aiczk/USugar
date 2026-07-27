@@ -33,6 +33,19 @@ public class Stage2EnvCodegenTests
     }
 
     [Fact]
+    public void EnvKindTag_CannotCollideWithBundleKindTags()
+    {
+        Assert.DoesNotContain(BundleAbi.Prefix, EnvAbi.KindTag, System.StringComparison.Ordinal);
+        foreach (RuntimeBundleKind kind in System.Enum.GetValues(typeof(RuntimeBundleKind)))
+        {
+            if (kind == RuntimeBundleKind.None) continue;
+            Assert.NotEqual(BundleAbi.KindTag(kind), EnvAbi.KindTag);
+            Assert.False(EnvAbi.KindTag.StartsWith(BundleAbi.KindTag(kind), System.StringComparison.Ordinal));
+            Assert.False(BundleAbi.KindTag(kind).StartsWith(EnvAbi.KindTag, System.StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void Curry_ReturnsCapturingClosure_CompilesThroughEnv()
     {
         // fcd36: `a => b => a + b`, then add(3), add3(4)+add3(10). Pre-B1 this threw at the OUTER

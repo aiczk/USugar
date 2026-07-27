@@ -854,18 +854,10 @@ public sealed class ResolvedEdgeResolver
         // User-struct operator: v1 + v2, -v, s += t, c++ (static operator methods). Compound-assignment and
         // increment/decrement carry their operator method too, so yield those so the emit side can JUMP to
         // the user operator instead of a bogus SystemObjectArray.__op_* extern.
-        var opMethod = (op as IBinaryOperation)?.OperatorMethod
-            ?? (op as IUnaryOperation)?.OperatorMethod
-            ?? (op as ICompoundAssignmentOperation)?.OperatorMethod
-            ?? (op as IIncrementOrDecrementOperation)?.OperatorMethod;
-        if (opMethod is { MethodKind: MethodKind.UserDefinedOperator }
+        if (CallableSites.OperatorMethod(op) is
+                { MethodKind: MethodKind.UserDefinedOperator or MethodKind.Conversion } opMethod
             && opMethod.ContainingType is INamedTypeSymbol ot && TypeClassifier.IsObjectArrayEmulated(ot))
             yield return opMethod;
-        // User-struct CONVERSION operator (implicit/explicit). MethodKind is Conversion (not UserDefinedOperator),
-        // so it needs its own arm — invoked implicitly by an IConversionOperation, routed to the method on emit.
-        if (op is IConversionOperation convOp && convOp.OperatorMethod is { MethodKind: MethodKind.Conversion } convM
-            && convM.ContainingType is INamedTypeSymbol convCt && TypeClassifier.IsObjectArrayEmulated(convCt))
-            yield return convM;
     }
 
     IMethodSymbol ResolveUserDeconstruct(IDeconstructionAssignmentOperation operation)
