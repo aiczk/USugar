@@ -29,7 +29,7 @@ internal static class CoreFlatOptimizer
 
     const string RecurStackId = RecurStack.StackId;
     const string RecurSpId = RecurStack.SpId;
-    const string RecurEnsureFunction = "__recurEnsure";
+    internal const string RecurEnsureFunction = "__recurEnsure";
     const string RecurEnsureNeed = "__recurEnsureNeed";
 
     /// <summary>

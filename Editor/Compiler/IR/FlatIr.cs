@@ -285,6 +285,7 @@ internal sealed class VerifiedFlatModule
         if (module == null)
             throw new ArgumentNullException(nameof(module));
         FlatVerify.Verify(module);
+        FlatVerify.VerifySpillsInserted(module);
         return new VerifiedFlatModule(module);
     }
 }

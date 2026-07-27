@@ -357,6 +357,35 @@ internal static class FlatVerify
         }
     }
 
+    /// <summary>Post-spill only: a function that still carries a non-tail recursive edge or a
+    /// Reentrant dispatch must also carry the frame save the spill pass inserts. Nothing else fails
+    /// when InsertRecursionSpills is skipped or is reordered before CoalesceSlots (whose rebuild
+    /// drops the inserted statements) — the corpus stays byte-identical for shapes it does not
+    /// cover, and the frame silently survives into the callee.</summary>
+    internal static void VerifySpillsInserted(FlatModule module)
+    {
+        foreach (var f in module.Functions)
+        {
+            var needsFrame = false;
+            var hasFrame = false;
+            foreach (var b in f.Blocks)
+                foreach (var inst in b.Instructions)
+                {
+                    if (CoreFlatOptimizer.IsRecursiveCall(inst, f.RecursiveCalleeNames)
+                        || inst is CExprStmt { Expr: CExternCall { Reentrant: true } }
+                        || inst is CExprStmt { Expr: CInternalCall { Reentrant: true } })
+                        needsFrame = true;
+                    if (inst is CExprStmt { Expr: CInternalCall ensure }
+                        && ensure.FuncName == CoreFlatOptimizer.RecurEnsureFunction)
+                        hasFrame = true;
+                }
+            if (needsFrame && !hasFrame)
+                throw new InvalidOperationException(
+                    $"{f.Name}: a recursive or reentrant call site survived without a recursion "
+                    + "frame save — InsertRecursionSpills did not run after CoalesceSlots.");
+        }
+    }
+
     static bool IsVoidSetProgramVariableCopyIn(IFlatInstruction stmt)
         => stmt is CExprStmt { Expr: CExternCall { DestSlot: null } call }
            && call.Type.Name == "SystemVoid"
