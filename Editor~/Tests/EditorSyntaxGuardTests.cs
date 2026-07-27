@@ -12,6 +12,33 @@ namespace USugar.Tests;
 public class EditorSyntaxGuardTests
 {
     [Fact]
+    public void ProgramAssetApplyMatchesUdonSharpWithoutRollbackSnapshots()
+    {
+        var packageRoot = FindPackageRoot();
+        var path = Path.Combine(
+            packageRoot, "Editor",
+            "USugarCompilationOrchestrator.cs");
+        var source = File.ReadAllText(path);
+
+        Assert.DoesNotContain(
+            "Object.Instantiate(",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "CopySerialized(",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "AssetDatabase.SaveAssets(",
+            source,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Snapshot",
+            source,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DemandedDelegateBridgesCannotBeSilentlySkipped()
     {
         var packageRoot = FindPackageRoot();

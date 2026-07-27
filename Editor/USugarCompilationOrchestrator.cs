@@ -120,10 +120,6 @@ static class USugarCompilationOrchestrator
         public Dictionary<string, FieldDefinition> FieldDefinitions;
         public NetworkCallingEntrypointMetadata[] NetworkMetadata;
         public int SyncMode;
-        public UdonSharpProgramAsset AssetSnapshot;
-        public UnityEngine.Object SerializedAssetSnapshot;
-        public Dictionary<string, FieldDefinition> PreviousFieldDefinitions;
-        public NetworkCallingEntrypointMetadata[] PreviousNetworkMetadata;
     }
 
     sealed class ProgramAssetBinding
@@ -531,17 +527,6 @@ static class USugarCompilationOrchestrator
                         if (serializedAsset == null)
                             throw new InvalidOperationException(
                                 $"Serialized program asset is missing for {result.Symbol.Name}");
-                        var assetSnapshot = UnityEngine.Object.Instantiate(programAsset);
-                        UnityEngine.Object serializedSnapshot;
-                        try
-                        {
-                            serializedSnapshot = UnityEngine.Object.Instantiate(serializedAsset);
-                        }
-                        catch
-                        {
-                            UnityEngine.Object.DestroyImmediate(assetSnapshot);
-                            throw;
-                        }
                         preparedApplies.Add(new PreparedApply
                         {
                             Result = result,
@@ -550,13 +535,7 @@ static class USugarCompilationOrchestrator
                             Program = program,
                             FieldDefinitions = fieldDefinitions,
                             NetworkMetadata = netMeta,
-                            SyncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol),
-                            AssetSnapshot = assetSnapshot,
-                            SerializedAssetSnapshot = serializedSnapshot,
-                            PreviousFieldDefinitions = programAsset.fieldDefinitions,
-                            PreviousNetworkMetadata =
-                                serializedAsset.GetNetworkCallingMetadata()?.ToArray()
-                                ?? Array.Empty<NetworkCallingEntrypointMetadata>()
+                            SyncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol)
                         });
                     }
                     catch (Exception ex)
@@ -583,80 +562,27 @@ static class USugarCompilationOrchestrator
                 }
             }
 
-            var commitSucceeded = false;
             if (applyToAssets && failures == 0)
             {
-                try
-                {
-                    foreach (var prepared in preparedApplies)
-                    {
-                        var programAsset = prepared.Asset;
-                        programAsset.fieldDefinitions = prepared.FieldDefinitions;
-                        programAsset.SetNetworkCallingMetadata(prepared.NetworkMetadata);
-                        if (prepared.NetworkMetadata.Length > 0)
-                            prepared.SerializedAsset.StoreProgram(
-                                prepared.Program, prepared.NetworkMetadata);
-                        else
-                            prepared.SerializedAsset.StoreProgram(prepared.Program);
-                        programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
-                        if (prepared.SyncMode >= 0)
-                            programAsset.behaviourSyncMode = (BehaviourSyncMode)prepared.SyncMode;
-                        EditorUtility.SetDirty(programAsset);
-                        EditorUtility.SetDirty(prepared.SerializedAsset);
-                    }
-                    AssetDatabase.SaveAssets();
-                    InvalidateSerializationCaches();
-                    commitSucceeded = true;
-                }
-                catch (Exception ex)
-                {
-                    var message = $"Program asset commit failed and was rolled back: {ex.Message}";
-                    USugarLog.Error(message);
-                    collectedDiagnostics.Add(("", 0, 0, message, "Error"));
-                    failures++;
-                    foreach (var prepared in preparedApplies)
-                    {
-                        try
-                        {
-                            EditorUtility.CopySerialized(
-                                prepared.AssetSnapshot, prepared.Asset);
-                            EditorUtility.CopySerialized(
-                                prepared.SerializedAssetSnapshot, prepared.SerializedAsset);
-                            prepared.Asset.fieldDefinitions = prepared.PreviousFieldDefinitions;
-                            prepared.Asset.SetNetworkCallingMetadata(
-                                prepared.PreviousNetworkMetadata);
-                            EditorUtility.SetDirty(prepared.Asset);
-                            EditorUtility.SetDirty(prepared.SerializedAsset);
-                        }
-                        catch (Exception rollbackEx)
-                        {
-                            var rollbackMessage =
-                                $"Failed to roll back {prepared.Result.Symbol.Name}: "
-                                + rollbackEx.Message;
-                            USugarLog.Error(rollbackMessage);
-                            collectedDiagnostics.Add((
-                                prepared.Result.Tree.FilePath, 0, 0,
-                                rollbackMessage, "Error"));
-                        }
-                    }
-                    try
-                    {
-                        AssetDatabase.SaveAssets();
-                    }
-                    catch (Exception rollbackSaveEx)
-                    {
-                        var rollbackMessage =
-                            "Failed to save rolled-back program assets: "
-                            + rollbackSaveEx.Message;
-                        USugarLog.Error(rollbackMessage);
-                        collectedDiagnostics.Add(("", 0, 0, rollbackMessage, "Error"));
-                    }
-                }
-            }
-            if (commitSucceeded && preparedApplies.Count > 0)
-            {
                 foreach (var prepared in preparedApplies)
-                    PushUasmToEditorCache(prepared.Asset, prepared.Result.Uasm);
+                {
+                    var programAsset = prepared.Asset;
+                    programAsset.fieldDefinitions = prepared.FieldDefinitions;
+                    programAsset.SetNetworkCallingMetadata(prepared.NetworkMetadata);
+                    if (prepared.NetworkMetadata.Length > 0)
+                        prepared.SerializedAsset.StoreProgram(
+                            prepared.Program, prepared.NetworkMetadata);
+                    else
+                        prepared.SerializedAsset.StoreProgram(prepared.Program);
+                    programAsset.CompiledVersion = UdonSharpProgramVersion.CurrentVersion;
+                    if (prepared.SyncMode >= 0)
+                        programAsset.behaviourSyncMode = (BehaviourSyncMode)prepared.SyncMode;
+                    EditorUtility.SetDirty(programAsset);
+                    EditorUtility.SetDirty(prepared.SerializedAsset);
+                    PushUasmToEditorCache(programAsset, prepared.Result.Uasm);
+                }
+                if (preparedApplies.Count > 0)
+                    InvalidateSerializationCaches();
             }
             sw.Stop();
             LastCompileHadErrors = failures > 0;
@@ -683,28 +609,7 @@ static class USugarCompilationOrchestrator
         }
         finally
         {
-            DestroyApplySnapshots(preparedApplies);
             PushDiagnosticsToEditorCache(collectedDiagnostics);
-        }
-    }
-
-    static void DestroyApplySnapshots(IEnumerable<PreparedApply> preparedApplies)
-    {
-        foreach (var prepared in preparedApplies)
-        {
-            try
-            {
-                if (prepared.AssetSnapshot != null)
-                    UnityEngine.Object.DestroyImmediate(prepared.AssetSnapshot);
-                if (prepared.SerializedAssetSnapshot != null)
-                    UnityEngine.Object.DestroyImmediate(prepared.SerializedAssetSnapshot);
-            }
-            catch (Exception ex)
-            {
-                USugarLog.Warn(
-                    $"Failed to destroy apply snapshot for {prepared.Result.Symbol.Name}: "
-                    + ex.Message);
-            }
         }
     }
 
