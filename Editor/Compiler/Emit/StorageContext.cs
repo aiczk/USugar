@@ -58,7 +58,7 @@ public sealed class StorageContext
     {
         if (_declarations.TryGetValue(id, out var existing))
         {
-            EnsureCompatible(existing, new FieldDecl(id, type, StorageDomain.Generated));
+            FieldDecl.RequireCompatible(existing, new FieldDecl(id, type, StorageDomain.Generated), "");
             return false;
         }
         Declare(new FieldDecl(id, type, StorageDomain.Generated));
@@ -129,23 +129,11 @@ public sealed class StorageContext
     {
         if (_declarations.TryGetValue(declaration.Name, out var existing))
         {
-            EnsureCompatible(existing, declaration);
+            FieldDecl.RequireCompatible(existing, declaration, "");
             return;
         }
         _declarations.Add(declaration.Name, declaration);
         _module.Fields.Add(declaration);
     }
 
-    static void EnsureCompatible(FieldDecl existing, FieldDecl requested)
-    {
-        if (existing.Domain == requested.Domain
-            && existing.Type == requested.Type
-            && existing.Flags == requested.Flags
-            && string.Equals(existing.SyncMode, requested.SyncMode, StringComparison.Ordinal)
-            && Equals(existing.DefaultValue, requested.DefaultValue))
-            return;
-        throw new InvalidOperationException(
-            $"Storage '{requested.Name}' declaration conflicts: "
-            + $"existing {existing.Domain}/{existing.Type}, requested {requested.Domain}/{requested.Type}.");
-    }
 }

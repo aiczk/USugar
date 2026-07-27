@@ -2248,7 +2248,7 @@ public sealed class UasmEmitter
         // Static methods on a user UdonSharpBehaviour subclass are inlinable (no instance ⇒ no cross-program
         // SendCustomEvent path); the syntax-less base/SDK behaviours are already excluded above.
         if (SymbolEqualityComparer.Default.Equals(resolved.ContainingType, classSymbol)) return false;
-        if (IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
+        if (USugarCompilerHelper.IsExternNamespace(resolved.ContainingType.ContainingNamespace)) return false;
         return true;
     }
 
@@ -2356,12 +2356,4 @@ public sealed class UasmEmitter
         return true;
     }
 
-    static bool IsExternNamespace(INamespaceSymbol ns)
-    {
-        if (ns == null || ns.IsGlobalNamespace) return false;
-        var root = ns;
-        while (root.ContainingNamespace != null && !root.ContainingNamespace.IsGlobalNamespace)
-            root = root.ContainingNamespace;
-        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System";
-    }
 }

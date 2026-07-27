@@ -383,12 +383,3 @@ internal static class DelegateAbi
         return result;
     }
 }
-
-/// <summary>
-/// Calling convention for delegate parameters: which UASM fields hold arguments and return value.
-/// </summary>
-public struct DelegateConvention
-{
-    public string[] ArgVarIds;
-    public string RetVarId;
-}

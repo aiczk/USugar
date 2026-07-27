@@ -66,15 +66,19 @@ internal sealed class LoweringServices
     internal CLeaf EmitPatternCheck(CLeaf value, ITypeSymbol valueType, IPatternOperation pattern)
         => _state.Operations.EmitPatternCheck(value, valueType, pattern);
 
+    CallSiteBindingScope RequireBindingScope(IOperation operation, string what)
+    {
+        if (operation == null) throw new ArgumentNullException(nameof(operation));
+        return _state.CurrentBindingScope
+            ?? throw new InvalidOperationException(
+                what + " is being lowered outside a bound semantic scope.");
+    }
+
     internal BoundCallSite RequireBoundCallSite(
         IOperation operation,
         CallableSiteKind kind)
     {
-        if (operation == null) throw new ArgumentNullException(nameof(operation));
-        var scope = _state.CurrentBindingScope
-            ?? throw new InvalidOperationException(
-                $"Callable site '{operation.Syntax}' is being lowered "
-                + "outside a bound semantic scope.");
+        var scope = RequireBindingScope(operation, $"Callable site '{operation?.Syntax}'");
         return _state.Program.RequireCallSite(
             operation.Syntax, kind, scope);
     }
@@ -94,11 +98,7 @@ internal sealed class LoweringServices
 
     internal IMethodSymbol RequireBoundDeconstruction(IOperation operation)
     {
-        if (operation == null) throw new ArgumentNullException(nameof(operation));
-        var scope = _state.CurrentBindingScope
-            ?? throw new InvalidOperationException(
-                $"Deconstruction '{operation.Syntax}' is being lowered "
-                + "outside a bound semantic scope.");
+        var scope = RequireBindingScope(operation, $"Deconstruction '{operation?.Syntax}'");
         return _state.Program.RequireDeconstruction(
             operation, scope);
     }
@@ -106,12 +106,7 @@ internal sealed class LoweringServices
     internal ClosedConversionPlan RequireBoundConversion(
         IConversionOperation operation)
     {
-        if (operation == null)
-            throw new ArgumentNullException(nameof(operation));
-        var scope = _state.CurrentBindingScope
-            ?? throw new InvalidOperationException(
-                $"Conversion '{operation.Syntax}' is being lowered "
-                + "outside a bound semantic scope.");
+        var scope = RequireBindingScope(operation, $"Conversion '{operation?.Syntax}'");
         return _state.Program.RequireConversion(
             operation, scope);
     }
@@ -151,12 +146,7 @@ internal sealed class LoweringServices
         IOperation operation,
         BoundAbiRole role)
     {
-        if (operation == null)
-            throw new ArgumentNullException(nameof(operation));
-        var scope = _state.CurrentBindingScope
-            ?? throw new InvalidOperationException(
-                $"ABI role '{role}' for '{operation.Syntax}' is being "
-                + "lowered outside a bound semantic scope.");
+        var scope = RequireBindingScope(operation, $"ABI role '{role}' for '{operation?.Syntax}'");
         return _state.BoundAbi.RequireOperation(
             operation, scope, role);
     }
@@ -165,12 +155,7 @@ internal sealed class LoweringServices
         IOperation operation,
         out bool expand)
     {
-        if (operation == null)
-            throw new ArgumentNullException(nameof(operation));
-        var scope = _state.CurrentBindingScope
-            ?? throw new InvalidOperationException(
-                $"Params ABI for '{operation.Syntax}' is being "
-                + "lowered outside a bound semantic scope.");
+        var scope = RequireBindingScope(operation, $"Params ABI for '{operation?.Syntax}'");
         return _state.BoundAbi.RequireParamsInvocation(
             operation, scope, out expand);
     }

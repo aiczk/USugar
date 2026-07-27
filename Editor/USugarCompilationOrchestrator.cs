@@ -570,7 +570,7 @@ static class USugarCompilationOrchestrator
                             Asset = programAsset,
                             FieldDefinitions = fieldDefinitions,
                             NetworkMetadata = netMeta,
-                            SyncMode = USugarCompilerHelper.GetBehaviourSyncMode(result.Symbol)
+                            SyncMode = EmitPolicy.GetBehaviourSyncMode(result.Symbol)
                         });
                     }
                     catch (Exception ex)
@@ -977,7 +977,7 @@ static class USugarCompilationOrchestrator
             {
                 if (!loadedAssemblies.TryGetValue(unityAssembly.name, out var loadedAssembly))
                     continue;
-                if (GetLoadableTypes(loadedAssembly).Any(type =>
+                if (USugarCompilerHelper.LoadableTypes(loadedAssembly).Any(type =>
                     type != null && type != typeof(UdonSharpBehaviour)
                     && typeof(UdonSharpBehaviour).IsAssignableFrom(type)))
                     behaviourAssemblyNames.Add(unityAssembly.name);
@@ -1164,15 +1164,4 @@ static class USugarCompilationOrchestrator
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
 
-    static IEnumerable<Type> GetLoadableTypes(System.Reflection.Assembly assembly)
-    {
-        try
-        {
-            return assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            return ex.Types.Where(type => type != null);
-        }
-    }
 }

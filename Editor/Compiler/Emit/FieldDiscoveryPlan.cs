@@ -152,7 +152,7 @@ internal sealed class FieldDiscoveryPlanBuilder
     {
         if (_declarationsByName.TryGetValue(name, out var existing))
         {
-            EnsureCompatible(existing, new FieldDecl(name, type, StorageDomain.Generated));
+            FieldDecl.RequireCompatible(existing, new FieldDecl(name, type, StorageDomain.Generated), " during field discovery");
             return false;
         }
         Declare(new FieldDecl(name, type, StorageDomain.Generated));
@@ -202,24 +202,11 @@ internal sealed class FieldDiscoveryPlanBuilder
     {
         if (_declarationsByName.TryGetValue(declaration.Name, out var existing))
         {
-            EnsureCompatible(existing, declaration);
+            FieldDecl.RequireCompatible(existing, declaration, " during field discovery");
             return;
         }
         _declarationsByName.Add(declaration.Name, declaration);
         _declarations.Add(declaration);
     }
 
-    static void EnsureCompatible(FieldDecl existing, FieldDecl requested)
-    {
-        if (existing.Domain == requested.Domain
-            && existing.Type == requested.Type
-            && existing.Flags == requested.Flags
-            && string.Equals(existing.SyncMode, requested.SyncMode, StringComparison.Ordinal)
-            && Equals(existing.DefaultValue, requested.DefaultValue))
-            return;
-        throw new InvalidOperationException(
-            $"Storage '{requested.Name}' declaration conflicts during field discovery: "
-            + $"existing {existing.Domain}/{existing.Type}, requested "
-            + $"{requested.Domain}/{requested.Type}.");
-    }
 }

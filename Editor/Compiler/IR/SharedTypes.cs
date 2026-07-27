@@ -128,6 +128,20 @@ public enum StorageDomain
 /// <summary>Module-level field declaration (heap variable).</summary>
 public sealed class FieldDecl
 {
+    public static void RequireCompatible(FieldDecl existing, FieldDecl requested, string context)
+    {
+        if (existing.Domain == requested.Domain
+            && existing.Type == requested.Type
+            && existing.Flags == requested.Flags
+            && string.Equals(existing.SyncMode, requested.SyncMode, System.StringComparison.Ordinal)
+            && Equals(existing.DefaultValue, requested.DefaultValue))
+            return;
+        throw new System.InvalidOperationException(
+            $"Storage '{requested.Name}' declaration conflicts{context}: "
+            + $"existing {existing.Domain}/{existing.Type}, requested "
+            + $"{requested.Domain}/{requested.Type}.");
+    }
+
     bool _frozen;
     object _defaultValue;
     FieldFlags _flags;

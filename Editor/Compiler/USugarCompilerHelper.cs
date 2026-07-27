@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
@@ -5,19 +9,31 @@ using Microsoft.CodeAnalysis;
 /// </summary>
 public static class USugarCompilerHelper
 {
-    /// <summary>
-    /// Walk inheritance chain to find [UdonBehaviourSyncMode] attribute.
-    /// Returns the int value of BehaviourSyncMode enum, or -1 if not specified.
-    /// </summary>
-    public static bool IsFrameworkNamespace(INamespaceSymbol ns)
+    public static string NamespaceRoot(INamespaceSymbol ns)
     {
-        if (ns == null || ns.IsGlobalNamespace) return false;
+        if (ns == null || ns.IsGlobalNamespace) return null;
         var root = ns;
         while (root.ContainingNamespace != null && !root.ContainingNamespace.IsGlobalNamespace)
             root = root.ContainingNamespace;
-        return root.Name is "UnityEngine" or "VRC" or "TMPro" or "System" or "UdonSharp";
+        return root.Name;
     }
 
-    public static int GetBehaviourSyncMode(INamedTypeSymbol type)
-        => EmitPolicy.GetBehaviourSyncMode(type);
+    public static bool IsFrameworkNamespace(INamespaceSymbol ns)
+        => NamespaceRoot(ns) is "UnityEngine" or "VRC" or "TMPro" or "System" or "UdonSharp";
+
+    /// <summary>Framework minus UdonSharp: a UdonSharp-namespace member is user-side, never an extern.</summary>
+    public static bool IsExternNamespace(INamespaceSymbol ns)
+        => NamespaceRoot(ns) is "UnityEngine" or "VRC" or "TMPro" or "System";
+
+    public static IEnumerable<Type> LoadableTypes(Assembly assembly)
+    {
+        try
+        {
+            return assembly.GetTypes();
+        }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type => type != null);
+        }
+    }
 }

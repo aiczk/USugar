@@ -268,7 +268,7 @@ internal static class BundleDataCodec
         }
         foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
         {
-            foreach (var candidate in LoadableTypes(assembly))
+            foreach (var candidate in USugarCompilerHelper.LoadableTypes(assembly))
             {
                 if (candidate == null
                     || IsNative(candidate, isNativeLeaf)
@@ -353,17 +353,6 @@ internal static class BundleDataCodec
            || type == typeof(decimal)
            || isNativeLeaf(type);
 
-    static IEnumerable<Type> LoadableTypes(Assembly assembly)
-    {
-        try
-        {
-            return assembly.GetTypes();
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            return ex.Types.Where(type => type != null);
-        }
-    }
 
     static NotSupportedException Unsupported(
         Type type, string reason)
