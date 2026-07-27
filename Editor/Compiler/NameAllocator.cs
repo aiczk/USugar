@@ -30,17 +30,6 @@ public class NameAllocator
         return n;
     }
 
-    /// <summary>
-    /// Ensure the counter for key is at least usedValue + 1,
-    /// so future Allocate() calls skip past already-used values.
-    /// </summary>
-    public void Reserve(string key, int usedValue)
-    {
-        _counters.TryGetValue(key, out var current);
-        if (usedValue + 1 > current)
-            _counters[key] = usedValue + 1;
-    }
-
     /// <summary>Format a key + counter into "__N_key" form.</summary>
     public static string FormatId(string key, int counter) => $"__{counter}_{key}";
 
@@ -68,17 +57,6 @@ public class NameAllocator
 
     /// <summary>Entry label of an exported function's body: "{functionName}__body".</summary>
     public static string BodyLabel(string functionName) => functionName + "__body";
-
-    /// <summary>Parse "__N_key" back into (counter, key). Returns null if format doesn't match.</summary>
-    public static (int counter, string key)? ParseId(string id)
-    {
-        if (id == null || !id.StartsWith("__")) return null;
-        var rest = id.Substring(2);
-        var idx = rest.IndexOf('_');
-        if (idx <= 0) return null;
-        if (!int.TryParse(rest.Substring(0, idx), out var counter)) return null;
-        return (counter, rest.Substring(idx + 1));
-    }
 }
 
 /// <summary>

@@ -182,8 +182,7 @@ public sealed class UasmEmitter
     /// <summary>Compiler-internal verified CFG inspection surface.</summary>
     internal VerifiedFlatModule FlatModule => _flatModule;
 
-    /// <summary>Test/tooling accessors for the Stage 2 M1 CaptureScopeAnalysis (built in <see cref="Emit"/>,
-    /// consumed by nothing yet — see LoweringState.CaptureScope).</summary>
+    /// <summary>The capture-scope analysis built in <see cref="Emit"/> — see LoweringState.CaptureScope.</summary>
     internal CaptureScopeAnalysis CaptureScope => _state.Captures;
     public Compilation Compilation => _state.Compilation;
     public INamedTypeSymbol ClassSymbol => _state.ClassSymbol;
