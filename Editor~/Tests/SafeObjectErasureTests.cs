@@ -137,21 +137,19 @@ public class DynamicEqualsHost : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void DynamicGetType_GuardsCompilerBundleBeforeExtern()
+    public void DynamicGetType_RejectsCompilerBundleCarrier()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class DynamicGetTypeNode { }
 public class DynamicGetTypeHost : UdonSharpBehaviour {
     object Read(object value) { return value.GetType(); }
     void Start() { Read(new DynamicGetTypeNode()); }
-}", "DynamicGetTypeHost");
+}", "DynamicGetTypeHost"));
         Assert.Contains(
-            "SystemString.__StartsWith__SystemString__SystemBoolean",
-            uasm);
-        Assert.Contains(
-            "UnityEngineDebug.__LogError__SystemObject__SystemVoid",
-            uasm);
+            "GetType() is not supported for a value that may contain a compiler bundle",
+            ex.Message);
     }
 
     [Fact]

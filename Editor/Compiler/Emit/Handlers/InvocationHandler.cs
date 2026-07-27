@@ -95,9 +95,11 @@ internal sealed class InvocationHandler
             && _lowering.State.Boundary
                 .ClassifyValue(op.Instance)
                 .MayContainCompilerBundle)
-            return _lowering.EmitDynamicObjectGetType(
-                op,
-                _lowering.VisitExpression(op.Instance));
+            throw new System.NotSupportedException(
+                "GetType() is not supported for a value that may contain "
+                + "a compiler bundle: Udon cannot preserve the CLR runtime "
+                + "type identity of program-local classes, structs, records, "
+                + "or delegates.");
 
         if (op.Instance != null
             && _lowering.ResolveType(op.Instance.Type)

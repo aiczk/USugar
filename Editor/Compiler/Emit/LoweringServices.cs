@@ -3264,35 +3264,6 @@ internal sealed class LoweringServices
         return SlotRef(result);
     }
 
-    internal CLeaf EmitDynamicObjectGetType(
-        IInvocationOperation operation, CLeaf value)
-    {
-        var result = _builder.AllocScratch(
-            GetStorageType(operation.Type));
-        EmitAssign(
-            result,
-            Const(null, GetStorageType(operation.Type)));
-        _builder.EmitIf(
-            EmitIsCompilerBundle(value),
-            _ => EmitExternVoid(
-                UdonAbi.DebugLogError,
-                new List<CLeaf>
-                {
-                    Const(
-                        "USugar: GetType() is unavailable for a compiler bundle.",
-                        StorageTypes.String)
-                }),
-            _ => EmitAssign(
-                result,
-                ExternCall(
-                    RequireBoundAbi(
-                        operation,
-                        BoundAbiRole.Invocation),
-                    new List<CLeaf> { value },
-                    GetStorageType(operation.Type))));
-        return SlotRef(result);
-    }
-
     CLeaf EmitIsCompilerBundle(CLeaf value)
     {
         var result =
