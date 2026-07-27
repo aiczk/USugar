@@ -306,6 +306,33 @@ public class M4bGt : UdonSharpBehaviour {
         Assert.Contains("GetType", ex2.Message);
     }
 
+    [Fact]
+    public void RejectedHelperOperationCarriesItsOwnSourcePath()
+    {
+        var exception = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(
+                new[]
+                {
+                    @"
+public class TaggedNode { }
+public class TaggedHelper {
+    public void Fail() { new TaggedNode().GetType(); }
+}",
+                    @"
+using UdonSharp;
+public class TaggedRoot : UdonSharpBehaviour {
+    void Start() { new TaggedHelper().Fail(); }
+}",
+                },
+                "TaggedRoot"));
+
+        Assert.True(OperationLowerer.TryGetTaggedLocation(
+            exception, out var file, out var line, out var character));
+        Assert.Equal("TestSource0.cs", file);
+        Assert.Equal(4, line);
+        Assert.True(character > 0);
+    }
+
     // ── Compound-concat parity (B67/M4b twin found by the M4b DiffFuzz sweep): `s += x` is
     //    string.Concat one surface over — a user-enum operand must synthesize its name (was: silent
     //    number, CLR "xSpades" vs VM "x2") and a v1-class operand must dispatch ToString (was: loud

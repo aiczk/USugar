@@ -454,17 +454,30 @@ static class USugarCompilationOrchestrator
                 {
                     var inner = ex is TargetInvocationException tie
                         && tie.InnerException != null ? tie.InnerException : ex;
-                    // Use the declaration's actual source path so editor diagnostics remain clickable.
-                    var filePath = tree.FilePath ?? "";
-                    var line = 0;
-                    var character = 0;
-                    var syntaxRef = symbol.DeclaringSyntaxReferences.FirstOrDefault();
-                    if (syntaxRef != null)
+                    // A reachable helper can fail outside the root behaviour's
+                    // declaration file. Prefer the operation tagged by the
+                    // lowerer; fall back to the root declaration only when no
+                    // source operation was available.
+                    if (!OperationLowerer.TryGetTaggedLocation(
+                            inner,
+                            out var filePath,
+                            out var line,
+                            out var character))
                     {
-                        filePath = syntaxRef.SyntaxTree.FilePath ?? filePath;
-                        var span = syntaxRef.SyntaxTree.GetLineSpan(syntaxRef.Span);
-                        line = span.StartLinePosition.Line + 1;
-                        character = span.StartLinePosition.Character + 1;
+                        filePath = tree.FilePath ?? "";
+                        var syntaxRef =
+                            symbol.DeclaringSyntaxReferences.FirstOrDefault();
+                        if (syntaxRef != null)
+                        {
+                            filePath =
+                                syntaxRef.SyntaxTree.FilePath ?? filePath;
+                            var span = syntaxRef.SyntaxTree.GetLineSpan(
+                                syntaxRef.Span);
+                            line =
+                                span.StartLinePosition.Line + 1;
+                            character =
+                                span.StartLinePosition.Character + 1;
+                        }
                     }
                     emitResults.Add(EmitResult.Error(
                         symbol, tree, filePath, line, character,

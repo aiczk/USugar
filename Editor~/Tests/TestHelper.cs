@@ -678,8 +678,10 @@ namespace VRC.TestStubs
     public static string CompileToUasm(string[] sources, string className)
     {
         var trees = new List<Microsoft.CodeAnalysis.SyntaxTree> { CSharpSyntaxTree.ParseText(Stubs) };
-        foreach (var src in sources)
-            trees.Add(CSharpSyntaxTree.ParseText(src));
+        for (var index = 0; index < sources.Length; index++)
+            trees.Add(CSharpSyntaxTree.ParseText(
+                sources[index],
+                path: $"TestSource{index}.cs"));
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));

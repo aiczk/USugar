@@ -250,8 +250,10 @@ internal sealed class OperationLowerer
         if (exception.Data.Contains("usugar_located") || operation?.Syntax == null)
             return exception;
         var span = operation.Syntax.GetLocation().GetLineSpan();
+        var line = span.StartLinePosition.Line + 1;
+        var character = span.StartLinePosition.Character + 1;
         var where =
-            $"{span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}";
+            $"{line},{character}";
         var snippet = operation.Syntax.ToString()
             .Replace("\r", " ").Replace("\n", " ");
         if (snippet.Length > 100) snippet = snippet.Substring(0, 100) + "…";
@@ -259,6 +261,27 @@ internal sealed class OperationLowerer
             $"{exception.Message}  [at ({where}) {operation.Kind}: `{snippet}`]",
             exception);
         wrapped.Data["usugar_located"] = true;
+        wrapped.Data["usugar_file"] =
+            span.Path ?? operation.Syntax.SyntaxTree.FilePath ?? "";
+        wrapped.Data["usugar_line"] = line;
+        wrapped.Data["usugar_character"] = character;
         return wrapped;
+    }
+
+    internal static bool TryGetTaggedLocation(
+        Exception exception,
+        out string file,
+        out int line,
+        out int character)
+    {
+        file = exception?.Data["usugar_file"] as string;
+        line = exception?.Data["usugar_line"] is int taggedLine
+            ? taggedLine
+            : 0;
+        character =
+            exception?.Data["usugar_character"] is int taggedCharacter
+                ? taggedCharacter
+                : 0;
+        return !string.IsNullOrEmpty(file);
     }
 }
