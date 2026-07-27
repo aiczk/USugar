@@ -1291,23 +1291,10 @@ public class SelfDelegateTest : UdonSharpBehaviour {
     public void RecordClass_CompilesWithValueSemantics()
     {
         var uasm = TestHelper.CompileToUasm(@"
-public record class MyRecord(int Value);
+public record MyRecord(int Value);
 public class Dummy : UdonSharp.UdonSharpBehaviour {
     public int result;
     void Start() { var a = new MyRecord(1); var b = a with { Value = 2 }; result = b.Value; }
-}
-", "Dummy");
-        Assert.NotNull(uasm);
-    }
-
-    [Fact]
-    public void RecordStruct_CompilesWithValueSemantics()
-    {
-        var uasm = TestHelper.CompileToUasm(@"
-public record struct Point(int X, int Y);
-public class Dummy : UdonSharp.UdonSharpBehaviour {
-    public int result;
-    void Start() { var a = new Point(1, 2); var b = a with { X = 3 }; result = b.X + b.Y; }
 }
 ", "Dummy");
         Assert.NotNull(uasm);

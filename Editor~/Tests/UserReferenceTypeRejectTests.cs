@@ -43,7 +43,7 @@ public class PlainQuxCtorUser : UdonSharpBehaviour {
         // Here a plain behaviour merely USES a record class as a value — the reachable hole.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-public record class PlainRec(int Value);
+public record PlainRec(int Value);
 public class PlainRecUser : UdonSharpBehaviour {
     void Start() { var r = new PlainRec(1); }
 }", "PlainRecUser");

@@ -462,8 +462,14 @@ namespace VRC.TestStubs
 }
 ";
 
+    // C#9 mirrors what Unity's bundled Roslyn resolves LanguageVersion.Latest to; without the pin a
+    // test can green-light syntax the production compiler cannot parse.
+    static readonly CSharpParseOptions ParseOptions =
+        new CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp9);
+
     static Microsoft.CodeAnalysis.SyntaxTree Parse(string text, string path = "")
-        => CSharpSyntaxTree.ParseText(text.Replace("\r\n", "\n").Replace("\r", "\n"), path: path);
+        => CSharpSyntaxTree.ParseText(
+            text.Replace("\r\n", "\n").Replace("\r", "\n"), ParseOptions, path: path);
 
     public static string CompileToUasm(string source)
     {
