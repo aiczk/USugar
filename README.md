@@ -47,7 +47,7 @@ USugar integrates with the existing UdonSharp pipeline and requires no SDK modif
 
 ## Supported C#
 
-USugar supports user-defined classes, structs, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, recursion, and multidimensional arrays.
+USugar supports user-defined classes, structs, records, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, and recursion.
 
 It also supports common language constructs such as `ref` and `out` parameters, `using`, user-defined operators and conversions, ranges, index-from-end expressions, and string interpolation.
 
@@ -80,12 +80,13 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - Exceptions, `async` and `await`, iterator `yield`, `lock`, unsafe code, function pointers, C# `dynamic`, and checked overflow are unsupported.
 - `ref` and `out` parameters are supported, but ref locals and `in` parameters are not.
 - `foreach` supports arrays, not `IEnumerable` or `List<T>`.
-- Records and runtime construction of `UdonSharpBehaviour` instances are unsupported.
-- User-class `GetHashCode()` and `GetType()` are unsupported.
+- Multidimensional arrays are unsupported; use one-dimensional or jagged arrays.
+- Runtime construction of `UdonSharpBehaviour` instances is unsupported.
+- `GetType()` is unsupported when a value can contain a USugar class, struct, record, or delegate bundle.
 - Delegate signatures containing `ref` or `out` parameters are unsupported.
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
-- Mutable static state belongs to each generated Udon program rather than a global runtime.
+- Mutable static fields, auto-properties, and events are unsupported. Constants, compile-time-foldable `static readonly` values, static methods, and computed static properties are supported.
 - Non-tail recursion uses a shared software stack with 8,192 object slots. Effective recursion
   depth depends on the number of values live across each recursive call.
 - User classes, delegates, tuples, and other `object[]`-backed values cannot round-trip through

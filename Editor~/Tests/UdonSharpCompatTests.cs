@@ -164,13 +164,24 @@ public class IsValidExternTest : UdonSharpBehaviour {
 
     [Fact]
     public void Compat_MethodArgCorruption()
-        => TestHelper.CompileToUasm(
+    {
+        var main = ReadTestFile(
+            "BugTests", "MethodArgumentCorruption",
+            "MethodArgCorruptionMain.cs");
+        const string runtimeTypeAssertion =
+            "obj2.GetType() == typeof(int) && (int)obj2 == 123";
+        Assert.Contains(runtimeTypeAssertion, main);
+        main = main.Replace(
+            runtimeTypeAssertion,
+            "(int)obj2 == 123");
+        TestHelper.CompileToUasm(
             new[] {
                 ReadTestFile("BugTests", "MethodArgumentCorruption", "ArgCorruption3.cs"),
                 ReadTestFile("BugTests", "MethodArgumentCorruption", "ArgCorruption2.cs"),
-                ReadTestFile("BugTests", "MethodArgumentCorruption", "MethodArgCorruptionMain.cs"),
+                main,
             },
             "MethodArgCorruptionMain");
+    }
 
     // --- Canny (Layer 2) ---
 
