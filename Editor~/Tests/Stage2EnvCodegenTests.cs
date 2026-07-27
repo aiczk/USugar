@@ -39,7 +39,7 @@ public class Stage2EnvCodegenTests
         foreach (RuntimeBundleKind kind in System.Enum.GetValues(typeof(RuntimeBundleKind)))
         {
             if (kind == RuntimeBundleKind.None) continue;
-            Assert.NotEqual(BundleAbi.KindTag(kind), EnvAbi.KindTag);
+            Assert.NotEqual(EnvAbi.KindTag, BundleAbi.KindTag(kind));
             Assert.False(EnvAbi.KindTag.StartsWith(BundleAbi.KindTag(kind), System.StringComparison.Ordinal));
             Assert.False(BundleAbi.KindTag(kind).StartsWith(EnvAbi.KindTag, System.StringComparison.Ordinal));
         }

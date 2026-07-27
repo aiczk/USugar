@@ -146,6 +146,26 @@ public class CoreFlatOptimizerTests
     }
 
     [Fact]
+    public void VerifyNoInterference_RejectsAHandBuiltBadMapping()
+    {
+        var func = MakeFunc();
+        func.Slots.Add(new SlotDecl(0, StorageTypes.Int32, SlotClass.Scratch));
+        func.Slots.Add(new SlotDecl(1, StorageTypes.Int32, SlotClass.Scratch));
+
+        var bb0 = func.NewBlock();
+        bb0.Instructions.Add(new CAssign(0, new CConst(10, StorageTypes.Int32)));
+        bb0.Instructions.Add(new CAssign(1, new CConst(20, StorageTypes.Int32)));
+        bb0.Instructions.Add(Call(null,
+            "TestFixture.__Foo__SystemInt32_SystemInt32__SystemVoid",
+            new List<CLeaf> { new CSlotRef(0, StorageTypes.Int32), new CSlotRef(1, StorageTypes.Int32) },
+            "SystemVoid"));
+        bb0.Terminator = new CRet();
+
+        Assert.Throws<System.InvalidOperationException>(() =>
+            CoreFlatOptimizer.VerifyNoInterference(func, new Dictionary<int, int> { [1] = 0 }));
+    }
+
+    [Fact]
     public void Coalesce_DifferentTypes_NotMerged()
     {
         // slot0 (Int32) and slot1 (Boolean): non-overlapping but different types → separate
