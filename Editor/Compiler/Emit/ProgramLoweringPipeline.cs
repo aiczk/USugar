@@ -1086,6 +1086,13 @@ public sealed class UasmEmitter
             ? StaticOwnerAbi.EventName(evt, evt.ContainingType)
             : evt.Name;
         DeclareDelegateField(evt, delegateType, storageName);
+        if (!evt.IsStatic)
+            _fieldDiscovery.RecordSourceField(
+                evt.Name,
+                evt,
+                evt.Type,
+                StorageTypes.ObjectArray,
+                isSerialized: false);
     }
 
     /// <summary>True when <paramref name="ancestor"/> is reachable from <paramref name="leaf"/> via

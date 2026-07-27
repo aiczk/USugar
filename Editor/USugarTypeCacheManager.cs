@@ -148,10 +148,15 @@ static class USugarTypeCacheManager
     // ── Field definitions ──
 
     internal static Dictionary<string, FieldDefinition> BuildFieldDefinitions(
-        FieldDiscoveryPlan fields)
+        FieldDiscoveryPlan fields,
+        INamedTypeSymbol behaviourSymbol)
     {
         if (fields == null) throw new ArgumentNullException(nameof(fields));
+        if (behaviourSymbol == null)
+            throw new ArgumentNullException(nameof(behaviourSymbol));
         var defs = new Dictionary<string, FieldDefinition>();
+        var sourceTypes = new Dictionary<string, Type>(
+            StringComparer.Ordinal);
         foreach (var field in fields.SourceFields)
         {
             var userType = ResolveClrType(field.UserType)
@@ -177,8 +182,87 @@ static class USugarTypeCacheManager
                     ParseSyncMode(field.SyncMode),
                     field.IsSerialized,
                     GetRuntimeAttributes(field.Member)));
+            sourceTypes.Add(field.Name, userType);
         }
+        ProjectProxyFieldDefinitions(
+            defs, sourceTypes, behaviourSymbol);
         return defs;
+    }
+
+    static void ProjectProxyFieldDefinitions(
+        Dictionary<string, FieldDefinition> defs,
+        IReadOnlyDictionary<string, Type> sourceTypes,
+        INamedTypeSymbol behaviourSymbol)
+    {
+        var proxyType = ResolveClrType(behaviourSymbol)
+            ?? throw new InvalidOperationException(
+                $"Could not resolve the loaded CLR proxy type for "
+                + $"'{behaviourSymbol.ToDisplayString()}'. Unity must finish "
+                + "compiling scripts before USugar can publish field definitions.");
+        if (!typeof(UdonSharpBehaviour).IsAssignableFrom(proxyType))
+            throw new InvalidOperationException(
+                $"Resolved CLR type '{proxyType.FullName}' is not an "
+                + $"{nameof(UdonSharpBehaviour)} proxy.");
+
+        foreach (var projection
+                 in USugarEditorIntegrationPolicy.ProjectProxyFields(
+                     proxyType,
+                     typeof(UdonSharpBehaviour),
+                     sourceTypes))
+        {
+            var field = projection.Field;
+            if (projection.IsProxyOnly)
+            {
+                var attributes = GetRuntimeAttributes(field);
+                attributes.Add(
+                    new USugarProxySerialization
+                        .ProxyOnlyFieldAttribute());
+                defs.Add(
+                    field.Name,
+                    new FieldDefinition(
+                        field.Name,
+                        field.FieldType,
+                        field.FieldType,
+                        null,
+                        false,
+                        attributes));
+                continue;
+            }
+
+            var sourceDefinition = defs[projection.SourceName];
+            if (string.Equals(
+                    field.Name,
+                    projection.SourceName,
+                    StringComparison.Ordinal))
+                continue;
+            if (defs.TryGetValue(
+                    field.Name, out var existingAlias))
+            {
+                if (existingAlias.UserType == field.FieldType
+                    && existingAlias.SystemType
+                    == sourceDefinition.SystemType)
+                    continue;
+                throw new InvalidOperationException(
+                    $"CLR proxy alias '{field.Name}' has conflicting "
+                    + "field definitions.");
+            }
+
+            var isSerialized = IsFieldSerializedClr(field);
+            RejectOpaqueSerializedField(
+                $"{field.DeclaringType?.FullName}.{field.Name}",
+                field.FieldType,
+                sourceDefinition.SystemType,
+                isSerialized);
+            defs.Add(
+                field.Name,
+                new FieldDefinition(
+                    field.Name,
+                    field.FieldType,
+                    sourceDefinition.SystemType,
+                    sourceDefinition.SyncMode,
+                    isSerialized,
+                    GetRuntimeAttributes(field)));
+        }
     }
 
     static UdonSyncMode? ParseSyncMode(string mode)
@@ -229,6 +313,29 @@ static class USugarTypeCacheManager
         }
 
         return InstantiateSymbolAttributes(symbol);
+    }
+
+    static List<Attribute> GetRuntimeAttributes(FieldInfo field)
+        => field.GetCustomAttributes(false)
+            .OfType<Attribute>()
+            .ToList();
+
+    static bool IsFieldSerializedClr(FieldInfo field)
+    {
+        if (field.IsInitOnly || field.IsStatic) return false;
+        var attributes = GetRuntimeAttributes(field);
+        if (attributes.Any(attribute =>
+                attribute.GetType().Name
+                == "OdinSerializeAttribute"))
+            return true;
+        if (attributes.Any(attribute =>
+                attribute is NonSerializedAttribute))
+            return false;
+        return field.IsPublic
+               || attributes.Any(attribute =>
+                   attribute is SerializeField
+                   || attribute.GetType().Name
+                   == "SerializeReference");
     }
 
     static List<Attribute> InstantiateSymbolAttributes(ISymbol symbol)

@@ -31,6 +31,23 @@ public class EvtBasic : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void FieldLikeEvent_IsPartOfTheSourceFieldSchema()
+    {
+        TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class EvtSchema : UdonSharpBehaviour {
+    public event Action Foo;
+}", "EvtSchema", out var emitter);
+
+        var field = Assert.Single(
+            emitter.Program.Fields.SourceFields,
+            candidate => candidate.Name == "Foo");
+        Assert.Equal(StorageTypes.ObjectArray, field.StorageType);
+        Assert.False(field.IsSerialized);
+    }
+
+    [Fact]
     public void FieldLikeEvent_WithInitializer_Compiles()
         => TestHelper.CompileToUasm(@"
 using UdonSharp;

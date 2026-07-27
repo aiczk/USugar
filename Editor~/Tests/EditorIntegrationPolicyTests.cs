@@ -8,6 +8,23 @@ namespace USugar.Tests;
 
 public class EditorIntegrationPolicyTests
 {
+    class ProxyBase
+    {
+    }
+
+    sealed class CompleteProxy : ProxyBase
+    {
+        public int Direct = 0;
+        public int Auto { get; set; }
+        public event Action Changed;
+        [NonSerialized] public int EditorOnly = 0;
+    }
+
+    sealed class UnknownProxy : ProxyBase
+    {
+        public int Missing = 0;
+    }
+
     [Fact]
     public void AcceptsAssetsAndPackageCSharpSources()
     {
@@ -82,6 +99,44 @@ public class EditorIntegrationPolicyTests
                 "Foreign", references, domain);
         });
         Assert.Contains("outside the USugar source domain", error.Message);
+    }
+
+    [Fact]
+    public void PreprocessorDefinesPreserveTheRequestedBuildMode()
+    {
+        var assemblyDefines = new[]
+        {
+            "UNITY_STANDALONE",
+            "CUSTOM_ASSEMBLY",
+            "UNITY_EDITOR",
+        };
+        var editorDefines = new[]
+        {
+            "UNITY_EDITOR",
+            "UNITY_EDITOR_WIN",
+            "CUSTOM_PROJECT",
+        };
+
+        var editor =
+            USugarEditorIntegrationPolicy.SelectPreprocessorDefines(
+                assemblyDefines, editorDefines, editorBuild: true);
+        Assert.Contains("UNITY_EDITOR", editor);
+        Assert.Contains("UNITY_EDITOR_WIN", editor);
+        Assert.Contains("CUSTOM_ASSEMBLY", editor);
+        Assert.Contains("CUSTOM_PROJECT", editor);
+
+        var client =
+            USugarEditorIntegrationPolicy.SelectPreprocessorDefines(
+                assemblyDefines, editorDefines, editorBuild: false);
+        Assert.DoesNotContain(
+            client,
+            define => define.StartsWith(
+                "UNITY_EDITOR",
+                StringComparison.Ordinal));
+        Assert.Contains("CUSTOM_ASSEMBLY", client);
+        Assert.Contains("CUSTOM_PROJECT", client);
+        Assert.Contains("COMPILER_UDONSHARP", client);
+        Assert.Contains("UDONSHARP", client);
     }
 
     [Fact]
@@ -212,6 +267,68 @@ public class GenericHelper<T> : UdonSharpBehaviour { }
             typeof(Action), typeof(object[]), IsExtern, IsBehaviour));
         Assert.True(USugarEditorIntegrationPolicy.RequiresOpaqueObjectArrayStorage(
             typeof(Action[][]), typeof(object[]), IsExtern, IsBehaviour));
+    }
+
+    [Fact]
+    public void ProxyProjectionClassifiesExactBackingAndEditorOnlyFields()
+    {
+        var sourceFields = new Dictionary<string, Type>
+        {
+            [nameof(CompleteProxy.Direct)] = typeof(int),
+            [nameof(CompleteProxy.Auto)] = typeof(int),
+            [nameof(CompleteProxy.Changed)] = typeof(Action),
+        };
+
+        var projection =
+            USugarEditorIntegrationPolicy.ProjectProxyFields(
+                typeof(CompleteProxy),
+                typeof(ProxyBase),
+                sourceFields);
+
+        Assert.Contains(projection, item =>
+            item.Field.Name == nameof(CompleteProxy.Direct)
+            && item.SourceName == nameof(CompleteProxy.Direct)
+            && !item.IsProxyOnly);
+        Assert.Contains(projection, item =>
+            item.Field.Name == "<Auto>k__BackingField"
+            && item.SourceName == nameof(CompleteProxy.Auto)
+            && !item.IsProxyOnly);
+        Assert.Contains(projection, item =>
+            item.Field.Name == nameof(CompleteProxy.Changed)
+            && item.SourceName == nameof(CompleteProxy.Changed)
+            && !item.IsProxyOnly);
+        Assert.Contains(projection, item =>
+            item.Field.Name == nameof(CompleteProxy.EditorOnly)
+            && item.SourceName == null
+            && item.IsProxyOnly);
+    }
+
+    [Fact]
+    public void ProxyProjectionRejectsAnUnclassifiedClrField()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            USugarEditorIntegrationPolicy.ProjectProxyFields(
+                typeof(UnknownProxy),
+                typeof(ProxyBase),
+                new Dictionary<string, Type>()));
+
+        Assert.Contains("has no compiler-owned Udon field", error.Message);
+    }
+
+    [Fact]
+    public void ProxyProjectionRejectsATypeMismatch()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            USugarEditorIntegrationPolicy.ProjectProxyFields(
+                typeof(UnknownProxy),
+                typeof(ProxyBase),
+                new Dictionary<string, Type>
+                {
+                    [nameof(UnknownProxy.Missing)] = typeof(string),
+                }));
+
+        Assert.Contains("has type 'System.Int32'", error.Message);
+        Assert.Contains("has type 'System.String'", error.Message);
     }
 
     [Fact]

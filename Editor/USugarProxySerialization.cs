@@ -11,6 +11,12 @@ using VRC.Udon;
 /// </summary>
 static class USugarProxySerialization
 {
+    [Serializable]
+    [AttributeUsage(AttributeTargets.Field)]
+    internal sealed class ProxyOnlyFieldAttribute : Attribute
+    {
+    }
+
     internal static bool TryCreateStorage(
         UdonHeapStorageInterface heapStorage,
         string fieldName,
@@ -53,8 +59,25 @@ static class USugarProxySerialization
         storage = null;
         if (behaviour?.programSource is not UdonSharpProgramAsset asset
             || asset.fieldDefinitions == null
-            || !asset.fieldDefinitions.TryGetValue(fieldName, out var definition)
-            || definition.SystemType != typeof(object[]))
+            || !asset.fieldDefinitions.TryGetValue(
+                fieldName, out var definition))
+            return false;
+        if (definition.GetAttribute<ProxyOnlyFieldAttribute>() != null)
+        {
+            if (!TryGetProxyFieldType(
+                    behaviour, fieldName, out var proxyOnlyType)
+                || proxyOnlyType != definition.UserType)
+                throw new InvalidOperationException(
+                    $"USugar proxy-only field '{fieldName}' on "
+                    + $"'{behaviour.name}' no longer matches its compiled "
+                    + "CLR field definition.");
+            storage = (IValueStorage)Activator.CreateInstance(
+                typeof(OpaqueProxyStorage<>).MakeGenericType(
+                    proxyOnlyType),
+                nonPublic: true);
+            return true;
+        }
+        if (definition.SystemType != typeof(object[]))
             return false;
         if (!TryGetProxyFieldType(behaviour, fieldName, out var proxyType))
             throw new InvalidOperationException(

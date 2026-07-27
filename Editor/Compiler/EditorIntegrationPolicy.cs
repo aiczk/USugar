@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
@@ -65,6 +66,35 @@ static class USugarEditorIntegrationPolicy
             .ToArray();
     }
 
+    public static IReadOnlyList<string> SelectPreprocessorDefines(
+        IEnumerable<string> assemblyDefines,
+        IEnumerable<string> activeEditorDefines,
+        bool editorBuild)
+    {
+        if (assemblyDefines == null)
+            throw new ArgumentNullException(nameof(assemblyDefines));
+        if (activeEditorDefines == null)
+            throw new ArgumentNullException(
+                nameof(activeEditorDefines));
+        var defines = new HashSet<string>(
+            assemblyDefines.Where(define =>
+                editorBuild
+                || !define.StartsWith(
+                    "UNITY_EDITOR",
+                    StringComparison.Ordinal)),
+            StringComparer.Ordinal);
+        defines.UnionWith(activeEditorDefines.Where(define =>
+            editorBuild
+            || !define.StartsWith(
+                "UNITY_EDITOR",
+                StringComparison.Ordinal)));
+        defines.Add("COMPILER_UDONSHARP");
+        defines.Add("UDONSHARP");
+        return defines
+            .OrderBy(define => define, StringComparer.Ordinal)
+            .ToArray();
+    }
+
     public static bool RequiresOpaqueObjectArrayStorage(
         Type proxyType,
         Type systemType,
@@ -90,6 +120,118 @@ static class USugarEditorIntegrationPolicy
         if (leaf.IsEnum || isBehaviourType(leaf))
             return false;
         return !isExternType(leaf);
+    }
+
+    /// <summary>
+    /// Projects the compiler-owned source field schema onto the field names used by
+    /// UdonSharp's reflection formatter. The projection is deliberately closed:
+    /// every CLR field must be an exact source field, an auto-property backing alias,
+    /// or an explicitly non-serialized proxy-only field.
+    /// </summary>
+    public static IReadOnlyList<(
+        FieldInfo Field,
+        string SourceName,
+        bool IsProxyOnly)> ProjectProxyFields(
+        Type proxyType,
+        Type exclusiveBaseType,
+        IReadOnlyDictionary<string, Type> sourceFields)
+    {
+        if (proxyType == null) throw new ArgumentNullException(nameof(proxyType));
+        if (exclusiveBaseType == null)
+            throw new ArgumentNullException(nameof(exclusiveBaseType));
+        if (sourceFields == null)
+            throw new ArgumentNullException(nameof(sourceFields));
+        if (!exclusiveBaseType.IsAssignableFrom(proxyType))
+            throw new InvalidOperationException(
+                $"CLR proxy type '{proxyType.FullName}' does not derive from "
+                + $"'{exclusiveBaseType.FullName}'.");
+
+        var hierarchy = new Stack<Type>();
+        for (var current = proxyType;
+             current != null && current != exclusiveBaseType;
+             current = current.BaseType)
+            hierarchy.Push(current);
+
+        var result = new List<(
+            FieldInfo Field,
+            string SourceName,
+            bool IsProxyOnly)>();
+        while (hierarchy.Count > 0)
+        {
+            var owner = hierarchy.Pop();
+            foreach (var field in owner.GetFields(
+                         BindingFlags.Public
+                         | BindingFlags.NonPublic
+                         | BindingFlags.Instance
+                         | BindingFlags.DeclaredOnly))
+            {
+                if (field.IsStatic) continue;
+                if (sourceFields.TryGetValue(
+                        field.Name, out var exactType))
+                {
+                    RequireProxyType(field, exactType, field.Name);
+                    result.Add((field, field.Name, false));
+                    continue;
+                }
+
+                if (TryGetAutoPropertyName(
+                        field.Name, out var propertyName)
+                    && sourceFields.TryGetValue(
+                        propertyName, out var propertyType))
+                {
+                    RequireProxyType(field, propertyType, propertyName);
+                    result.Add((field, propertyName, false));
+                    continue;
+                }
+
+                if (field.IsDefined(
+                        typeof(NonSerializedAttribute),
+                        inherit: false))
+                {
+                    result.Add((field, null, true));
+                    continue;
+                }
+
+                throw new InvalidOperationException(
+                    $"CLR proxy field '{owner.FullName}.{field.Name}' "
+                    + "has no compiler-owned Udon field, auto-property "
+                    + "alias, or [NonSerialized] proxy-only classification.");
+            }
+        }
+        return result;
+    }
+
+    internal static bool TryGetAutoPropertyName(
+        string fieldName,
+        out string propertyName)
+    {
+        const string suffix = ">k__BackingField";
+        propertyName = null;
+        if (string.IsNullOrEmpty(fieldName)
+            || fieldName[0] != '<'
+            || !fieldName.EndsWith(
+                suffix, StringComparison.Ordinal))
+            return false;
+        var length = fieldName.Length - suffix.Length - 1;
+        if (length <= 0) return false;
+        propertyName = fieldName.Substring(1, length);
+        return true;
+    }
+
+    static void RequireProxyType(
+        FieldInfo field,
+        Type sourceType,
+        string sourceName)
+    {
+        if (sourceType == null)
+            throw new InvalidOperationException(
+                $"Compiler-owned field '{sourceName}' has no CLR type.");
+        if (field.FieldType == sourceType) return;
+        throw new InvalidOperationException(
+            $"CLR proxy field '{field.DeclaringType?.FullName}."
+            + $"{field.Name}' has type '{field.FieldType}', but "
+            + $"compiler-owned field '{sourceName}' has type "
+            + $"'{sourceType}'.");
     }
 }
 

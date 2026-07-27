@@ -23,6 +23,9 @@ using UnityCompilationAssembly = UnityEditor.Compilation.Assembly;
 static class USugarCompilationOrchestrator
 {
     static readonly USugarCompileRequestState CompileState = new();
+    static bool RequestedEditorBuild = true;
+    static bool RequestedForce;
+    static int RequestedPayloadVersion;
     internal static bool IsCompiling;
     internal static bool CompileScheduled;
     internal static USugarCompileHealth Health => CompileState.Health;
@@ -38,7 +41,7 @@ static class USugarCompilationOrchestrator
 
     const string FingerprintKey = "USugar_LastFingerprint";
     const string AppliedKey = "USugar_LastApplied";
-    const string FingerprintSchema = "editor-integration-v3";
+    const string FingerprintSchema = "editor-integration-v4";
     internal sealed class CompilationUnit
     {
         public UnityCompilationAssembly UnityAssembly { get; }
@@ -140,10 +143,23 @@ static class USugarCompilationOrchestrator
     internal static void MarkCompileUnknown()
         => CompileState.MarkUnknown();
 
-    internal static void RequestCompile()
+    internal static void RequestCompile(
+        bool editorBuild = true,
+        bool force = false)
     {
-        CompileState.Request();
+        RecordCompileRequest(editorBuild, force);
         SchedulePendingCompile();
+    }
+
+    static int RecordCompileRequest(
+        bool editorBuild,
+        bool force)
+    {
+        var version = CompileState.Request();
+        RequestedEditorBuild = editorBuild;
+        RequestedForce |= force;
+        RequestedPayloadVersion = version;
+        return version;
     }
 
     static void SchedulePendingCompile()
@@ -162,11 +178,20 @@ static class USugarCompilationOrchestrator
             SchedulePendingCompile();
             return;
         }
-        IsCompiling = true;
         var versionAtStart = CompileState.RequestedVersion;
+        if (RequestedPayloadVersion != versionAtStart)
+            throw new InvalidOperationException(
+                "The pending USugar compile request has no build-mode payload.");
+        var editorBuild = RequestedEditorBuild;
+        var force = RequestedForce;
+        RequestedForce = false;
+        IsCompiling = true;
         try
         {
-            CompileInternal(applyToAssets: true);
+            CompileInternal(
+                applyToAssets: true,
+                force: force,
+                editorBuild: editorBuild);
         }
         finally
         {
@@ -176,19 +201,27 @@ static class USugarCompilationOrchestrator
         }
     }
 
-    internal static void CompileSynchronously(bool force = false)
+    internal static void CompileSynchronously(
+        bool force = false,
+        bool editorBuild = true)
     {
-        var versionAtStart = CompileState.Request();
+        var versionAtStart =
+            RecordCompileRequest(editorBuild, force);
         if (IsCompiling)
         {
             SchedulePendingCompile();
             return;
         }
 
+        force = RequestedForce;
+        RequestedForce = false;
         IsCompiling = true;
         try
         {
-            CompileInternal(applyToAssets: true, force: force);
+            CompileInternal(
+                applyToAssets: true,
+                force: force,
+                editorBuild: editorBuild);
         }
         finally
         {
@@ -198,7 +231,10 @@ static class USugarCompilationOrchestrator
         }
     }
 
-    internal static void CompileInternal(bool applyToAssets, bool force = false)
+    internal static void CompileInternal(
+        bool applyToAssets,
+        bool force = false,
+        bool editorBuild = true)
     {
         MarkCompileUnknown();
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -227,7 +263,10 @@ static class USugarCompilationOrchestrator
                 return;
             }
 
-            fingerprint = ComputeFingerprint(compilationUnits, programAssetBindings);
+            fingerprint = ComputeFingerprint(
+                compilationUnits,
+                programAssetBindings,
+                editorBuild);
             var lastFp = SessionState.GetString(FingerprintKey, "");
             var lastApplied = SessionState.GetBool(AppliedKey, false);
             if (!force && fingerprint == lastFp && (!applyToAssets || lastApplied))
@@ -246,7 +285,8 @@ static class USugarCompilationOrchestrator
 
             foreach (var unit in compilationUnits)
             {
-                unit.Compilation = BuildCompilation(unit);
+                unit.Compilation = BuildCompilation(
+                    unit, editorBuild);
                 unit.Session = new CompilationSession(unit.Compilation, externRegistry);
                 unit.Behaviours = CollectBehaviourDeclarations(
                     unit.Compilation, unit.RootSourcePaths);
@@ -479,7 +519,8 @@ static class USugarCompilationOrchestrator
                         USugarConstantApplier.ApplyConstantValues(program, result.Constants);
                         var fieldDefinitions =
                             USugarTypeCacheManager.BuildFieldDefinitions(
-                                result.Program.Fields);
+                                result.Program.Fields,
+                                result.Symbol);
                         // [NetworkCallable] entry-point metadata — required for SendCustomNetworkEvent with
                         // parameters (the runtime looks up the event + its param types via this metadata).
                         var netMeta = BuildNetworkCallingMetadata(
@@ -931,12 +972,14 @@ static class USugarCompilationOrchestrator
 
     static string ComputeFingerprint(
         IReadOnlyList<CompilationUnit> compilationUnits,
-        IReadOnlyList<ProgramAssetBinding> programAssetBindings)
+        IReadOnlyList<ProgramAssetBinding> programAssetBindings,
+        bool editorBuild)
     {
         using var sha256 = SHA256.Create();
         using var ms = new MemoryStream();
         using var writer = new BinaryWriter(ms);
         writer.Write(FingerprintSchema);
+        writer.Write(editorBuild);
         writer.Write(typeof(USugarCompilationOrchestrator).Assembly.ManifestModule.ModuleVersionId
             .ToString("N"));
         var referenceIdentities = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -953,7 +996,8 @@ static class USugarCompilationOrchestrator
                          assembly => assembly.name, StringComparer.Ordinal))
             {
                 writer.Write(sourceAssembly.name);
-                foreach (var d in BuildPreprocessorDefines(sourceAssembly)
+                foreach (var d in BuildPreprocessorDefines(
+                             sourceAssembly, editorBuild)
                              .OrderBy(s => s, StringComparer.Ordinal))
                     writer.Write(d);
                 writer.Write(sourceAssembly.compilerOptions.AllowUnsafeCode);
@@ -1180,30 +1224,33 @@ static class USugarCompilationOrchestrator
 
     static readonly Dictionary<string, (string sourceText, string defineKey, SyntaxTree tree)> _treeCache = new();
 
-    // Preprocessor symbols for parsing user Udon sources. Mirrors stock UdonSharp's GetProjectDefines with
-    // editorBuild:false — the compiled Udon program runs IN-GAME, so honor the project's platform/SDK/custom
-    // scripting defines but drop UNITY_EDITOR* (editor-only branches must not leak into the shipped program).
-    // USugar's own markers are always defined. Hardcoding only the two markers (the prior behavior) silently
-    // compiled the WRONG #if branch for any platform/SDK/custom-symbol guard the user wrote.
-    static string[] BuildPreprocessorDefines(UnityCompilationAssembly assembly)
-    {
-        var defines = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var d in assembly.defines)
-            if (!d.StartsWith("UNITY_EDITOR"))
-                defines.Add(d);
-        defines.Add("COMPILER_UDONSHARP");
-        defines.Add("UDONSHARP");
-        return defines.ToArray();
-    }
+    // Preprocessor symbols for parsing user Udon sources. The intercepted UdonSharp
+    // build mode is authoritative: editor/Play compiles keep UNITY_EDITOR*, while
+    // client builds remove them. Assembly-specific defines remain intact and the
+    // active editor defines supply the UNITY_EDITOR family absent from Player
+    // CompilationPipeline assemblies.
+    static string[] BuildPreprocessorDefines(
+        UnityCompilationAssembly assembly,
+        bool editorBuild)
+        => USugarEditorIntegrationPolicy
+            .SelectPreprocessorDefines(
+                assembly.defines,
+                EditorUserBuildSettings
+                    .activeScriptCompilationDefines,
+                editorBuild)
+            .ToArray();
 
-    internal static CSharpCompilation BuildCompilation(CompilationUnit unit)
+    internal static CSharpCompilation BuildCompilation(
+        CompilationUnit unit,
+        bool editorBuild = true)
     {
         var trees = new SyntaxTree[unit.SourcePaths.Count];
         for (int i = 0; i < unit.SourcePaths.Count; i++)
         {
             var path = unit.SourcePaths[i];
             var owner = unit.SourceOwners[path];
-            var defines = BuildPreprocessorDefines(owner);
+            var defines = BuildPreprocessorDefines(
+                owner, editorBuild);
             var defineKey = owner.name + "\n"
                 + string.Join("\n", defines.OrderBy(
                     define => define, StringComparer.Ordinal));

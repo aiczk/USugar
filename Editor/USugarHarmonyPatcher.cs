@@ -2,6 +2,7 @@ using System.Reflection;
 using HarmonyLib;
 using UnityEditor;
 using UdonSharp;
+using UdonSharp.Compiler;
 using UdonSharp.Serialization;
 
 /// <summary>
@@ -42,14 +43,21 @@ static class USugarHarmonyPatcher
         }
 
         var harmony = new Harmony(HarmonyId);
-        var redirect = new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_Redirect));
-        var redirectSync = new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_RedirectSync));
+        var redirectAll = new HarmonyMethod(
+            typeof(USugarHarmonyPatcher),
+            nameof(Prefix_RedirectAll));
+        var redirectCompile = new HarmonyMethod(
+            typeof(USugarHarmonyPatcher),
+            nameof(Prefix_RedirectCompile));
+        var redirectSync = new HarmonyMethod(
+            typeof(USugarHarmonyPatcher),
+            nameof(Prefix_RedirectSync));
 
         try
         {
-            PatchRequired(harmony, USugarReflectionTargets.CompileAllProgramsMethod, redirect,
+            PatchRequired(harmony, USugarReflectionTargets.CompileAllProgramsMethod, redirectAll,
                 "UdonSharpProgramAsset.CompileAllCsPrograms");
-            PatchRequired(harmony, USugarReflectionTargets.CompileMethod, redirect,
+            PatchRequired(harmony, USugarReflectionTargets.CompileMethod, redirectCompile,
                 $"{compilerType.Name}.Compile");
             PatchRequired(harmony, USugarReflectionTargets.CompileSyncMethod, redirectSync,
                 $"{compilerType.Name}.CompileSync");
@@ -103,17 +111,31 @@ static class USugarHarmonyPatcher
         USugarLog.Info("Compiler override removed");
     }
 
-    static bool Prefix_Redirect()
+    static bool Prefix_RedirectAll(
+        bool forceCompile,
+        bool editorBuild)
     {
         if (!USugarCompiler.OverrideEnabled) return true;
-        USugarCompilationOrchestrator.RequestCompile();
+        USugarCompilationOrchestrator.RequestCompile(
+            editorBuild, forceCompile);
         return false;
     }
 
-    static bool Prefix_RedirectSync()
+    static bool Prefix_RedirectCompile(
+        UdonSharpCompileOptions options)
     {
         if (!USugarCompiler.OverrideEnabled) return true;
-        USugarCompilationOrchestrator.CompileSynchronously();
+        USugarCompilationOrchestrator.RequestCompile(
+            options?.IsEditorBuild ?? true);
+        return false;
+    }
+
+    static bool Prefix_RedirectSync(
+        UdonSharpCompileOptions options)
+    {
+        if (!USugarCompiler.OverrideEnabled) return true;
+        USugarCompilationOrchestrator.CompileSynchronously(
+            editorBuild: options?.IsEditorBuild ?? true);
         return false;
     }
 
@@ -150,7 +172,8 @@ static class USugarHarmonyPatcher
     {
         if (state == PlayModeStateChange.ExitingEditMode && USugarCompiler.OverrideEnabled)
         {
-            USugarCompilationOrchestrator.CompileSynchronously();
+            USugarCompilationOrchestrator.CompileSynchronously(
+                editorBuild: true);
             if (USugarCompilationOrchestrator.Health != USugarCompileHealth.Clean)
             {
                 USugarLog.Error(
