@@ -241,6 +241,10 @@ public static class ValueClassifier
                     coalesce.Value,
                     coalesce.WhenNull
                 },
+            ISwitchExpressionOperation switchExpression
+                => switchExpression.Arms.Select(arm => arm.Value),
+            IConditionalAccessOperation conditionalAccess
+                => new[] { conditionalAccess.WhenNotNull },
             _ => Array.Empty<IOperation>()
         };
         foreach (var carrier in carriers)
@@ -294,6 +298,14 @@ public static class ValueClassifier
                        || MayContainErasedCompilerBundle(
                            UnwrapConversions(coalesce.WhenNull),
                            typeCtx);
+            case ISwitchExpressionOperation switchExpression:
+                return switchExpression.Arms.Any(
+                    arm => MayContainErasedCompilerBundle(
+                        UnwrapConversions(arm.Value), typeCtx));
+            case IConditionalAccessOperation conditionalAccess:
+                return MayContainErasedCompilerBundle(
+                    UnwrapConversions(conditionalAccess.WhenNotNull),
+                    typeCtx);
             case IFieldReferenceOperation field:
                 return field.Field.DeclaringSyntaxReferences
                     .Length != 0;
@@ -311,7 +323,7 @@ public static class ValueClassifier
             case IArrayElementReferenceOperation:
                 return true;
             default:
-                return false;
+                return true;
         }
     }
 

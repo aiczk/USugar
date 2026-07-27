@@ -153,6 +153,41 @@ public class DynamicGetTypeHost : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void SwitchExpressionCarrier_RejectsAtExternBoundary()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class SwitchArmNode { }
+public class SwitchArmCarrierHost : UdonSharpBehaviour {
+    public bool flag;
+    void Start() {
+        var node = new SwitchArmNode();
+        Debug.Log(flag switch { true => (object)node, _ => null });
+    }
+}", "SwitchArmCarrierHost"));
+        Assert.Contains("may carry a compiler bundle", ex.Message);
+    }
+
+    [Fact]
+    public void ConditionalAccessCarrier_RejectsAtExternBoundary()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class AccessArmNode { public object Payload; }
+public class AccessArmCarrierHost : UdonSharpBehaviour {
+    void Start() {
+        var node = new AccessArmNode { Payload = new AccessArmNode() };
+        Debug.Log(node?.Payload);
+    }
+}", "AccessArmCarrierHost"));
+        Assert.Contains("may carry a compiler bundle", ex.Message);
+    }
+
+    [Fact]
     public void UserClassGetHashCode_UsesBundleReferenceHash()
     {
         var uasm = TestHelper.CompileToUasm(@"
