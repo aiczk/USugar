@@ -7,6 +7,80 @@ namespace USugar.Tests;
 public class PackageCompatibilityTests
 {
     [Fact]
+    public void ExplicitNativeCastsFromObjectArrayEstablishExternBoundaryTypes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+
+public class ObjectArrayCastCompatibility : UdonSharpBehaviour
+{
+    public UdonSharpBehaviour Target;
+    public bool Result;
+
+    void Start()
+    {
+        object[] track = new object[] { ""https://example.invalid/"" };
+        string originalUrl = (string)((object[])(object)track)[0];
+        Result = string.IsNullOrEmpty(originalUrl);
+
+        object[] callback = new object[] { Target, ""Refresh"" };
+        UdonSharpBehaviour receiver =
+            (UdonSharpBehaviour)((object[])(object)callback)[0];
+        receiver.SendCustomEvent((string)callback[1]);
+    }
+}
+", "ObjectArrayCastCompatibility");
+
+        Assert.Contains(
+            "SystemString.__IsNullOrEmpty__SystemString__SystemBoolean",
+            uasm);
+        Assert.Contains(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid",
+            uasm);
+    }
+
+    [Fact]
+    public void RawSetProgramVariableUsesTheTypedProgramChannel()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+
+public class ProgramVariableCompatibility : UdonSharpBehaviour
+{
+    public UdonSharpBehaviour Target;
+    public object Value;
+
+    void Start()
+    {
+        Target.SetProgramVariable(""SelectedIndex"", Value);
+    }
+}
+", "ProgramVariableCompatibility");
+
+        Assert.Contains(
+            "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid",
+            uasm);
+    }
+
+    [Fact]
+    public void UnknownObjectStillCannotCrossAnOrdinaryExternBoundary()
+    {
+        var ex = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+
+public class OrdinaryExternObjectBoundary : UdonSharpBehaviour
+{
+    public object Value;
+    void Start() { Debug.Log((object)Value); }
+}
+", "OrdinaryExternObjectBoundary"));
+
+        Assert.Contains("may carry a compiler bundle", ex.Message);
+    }
+
+    [Fact]
     public void PickupMembersUseSdk3ExternOwnerAndRegistrySetterShape()
     {
         var uasm = TestHelper.CompileToUasm(@"

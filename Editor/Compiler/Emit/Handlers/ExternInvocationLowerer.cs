@@ -99,6 +99,9 @@ internal sealed class ExternInvocationLowerer
                 }
             }
         }
+        var invocationExtern = expandedParamsExtern
+            ?? _lowering.RequireBoundAbi(
+                op, BoundAbiRole.Invocation);
 
         // For out/ref params: pass the field's heap address directly via CFieldRef.
         // Udon VM extern writes to the pushed address, so the original variable
@@ -121,10 +124,18 @@ internal sealed class ExternInvocationLowerer
             var argumentType = LoweringServices.UnwrapConversions(op.Arguments[i].Value).Type
                 ?? op.Arguments[i].Parameter?.Type;
             if (argumentType != null)
-                _lowering.State.Boundary.RequireCanPassExternArgument(
-                    op.Arguments[i].Value, argumentType,
-                    op.Arguments[i].Parameter?.Name ?? $"argument {i}", objectIdentityExtern,
-                    deferAggregateReceiverPolicy: objectMemberExtern);
+            {
+                if (op.Arguments[i].Parameter?.Ordinal == 1
+                    && invocationExtern.Key
+                        == ExternResolver.EventReceiverSetProgramVariable)
+                    _lowering.State.Boundary
+                        .RequireCanPassCrossBehaviourArgument(argumentType);
+                else
+                    _lowering.State.Boundary.RequireCanPassExternArgument(
+                        op.Arguments[i].Value, argumentType,
+                        op.Arguments[i].Parameter?.Name ?? $"argument {i}", objectIdentityExtern,
+                        deferAggregateReceiverPolicy: objectMemberExtern);
+            }
 
             var param = target.Parameters[i];
             if (param.IsParams && paramsElems != null)
@@ -185,9 +196,7 @@ internal sealed class ExternInvocationLowerer
         externArgs.AddRange(argVals);
 
         // Extern signature — the validated expanded form when trailing params were expanded, else the default.
-        var sig = expandedParamsExtern
-                  ?? _lowering.RequireBoundAbi(
-                      op, BoundAbiRole.Invocation);
+        var sig = invocationExtern;
 
         CLeaf result;
         if (!target.ReturnsVoid)

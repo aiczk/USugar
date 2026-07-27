@@ -83,7 +83,7 @@ public static class ValueClassifier
             stableLocalInitializers,
         HashSet<ISymbol> tracing)
     {
-        var unwrapped = UnwrapConversions(value);
+        var unwrapped = UnwrapBoundaryConversions(value, typeCtx);
         if (unwrapped is ILocalReferenceOperation local
             && tracing.Add(local.Local)
             && stableLocalInitializers != null
@@ -100,7 +100,7 @@ public static class ValueClassifier
         TypeClassifierContext typeCtx,
         CaptureScopeAnalysis captureScope)
     {
-        var unwrapped = UnwrapConversions(value);
+        var unwrapped = UnwrapBoundaryConversions(value, typeCtx);
         var staticType = unwrapped?.Type ?? value?.Type;
         if (unwrapped == null)
             return Create(
@@ -162,6 +162,33 @@ public static class ValueClassifier
         var v = value;
         while (v is IConversionOperation c) v = c.Operand;
         return v;
+    }
+
+    static IOperation UnwrapBoundaryConversions(
+        IOperation value,
+        TypeClassifierContext typeCtx)
+    {
+        var current = value;
+        while (current is IConversionOperation conversion)
+        {
+            var destination = conversion.Type;
+            var destinationShape = destination == null
+                ? default
+                : TypeClassifier.ShapeOf(destination, typeCtx);
+            // An explicit cast to a concrete native type is the source-level
+            // type assertion which permits the value to enter that type's ABI.
+            // Implicit erasure, object/object[], compiler bundles, and user
+            // interfaces add no such proof and keep tracing to their carrier.
+            if (!conversion.IsImplicit
+                && destination != null
+                && destination.TypeKind != TypeKind.Interface
+                && !destinationShape.IsBundle
+                && !destinationShape.ContainsUserClassPayload
+                && !destinationShape.ContainsOpaqueObject)
+                break;
+            current = conversion.Operand;
+        }
+        return current;
     }
 
     static ValueInfo Create(
