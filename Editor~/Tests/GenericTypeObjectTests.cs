@@ -6,8 +6,43 @@ using Xunit;
 
 namespace USugar.Tests;
 
+public class SpecKeyParityPlain { }
+public class SpecKeyParityWrapper<T> { }
+public class SpecKeyParityOuter<T> { public class Inner { } }
+
 public class GenericTypeObjectTests
 {
+    [Fact]
+    public void SpecKey_SymbolAndReflectionSpellingsAgree()
+    {
+        TestHelper.BuildCompilation(@"
+namespace USugar.Tests {
+  public class SpecKeyParityPlain { }
+  public class SpecKeyParityWrapper<T> { }
+  public class SpecKeyParityOuter<T> { public class Inner { } }
+}
+class SpecKeyHost {
+  public USugar.Tests.SpecKeyParityPlain a;
+  public USugar.Tests.SpecKeyParityWrapper<int> b;
+  public USugar.Tests.SpecKeyParityOuter<int>.Inner c;
+}", "SpecKeyHost", out var host);
+        var fields = host.GetMembers().OfType<Microsoft.CodeAnalysis.IFieldSymbol>().ToArray();
+        var clr = new[]
+        {
+            typeof(SpecKeyParityPlain),
+            typeof(SpecKeyParityWrapper<int>),
+            typeof(SpecKeyParityOuter<int>.Inner),
+        };
+        var keys = new string[clr.Length];
+        for (var i = 0; i < clr.Length; i++)
+        {
+            keys[i] = ClassTypeObjectContext.SpecKey(clr[i]);
+            Assert.False(string.IsNullOrEmpty(keys[i]));
+            Assert.Equal(ClassTypeObjectContext.SpecKey(fields[i].Type), keys[i]);
+        }
+        Assert.Equal(keys.Length, keys.Distinct().Count());
+    }
+
     [Fact]
     public void NestedTypeSpecKey_IncludesConstructedOwner()
     {
