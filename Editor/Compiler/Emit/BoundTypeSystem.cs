@@ -186,6 +186,13 @@ internal sealed class MaterializingUdonTypeSystem : IUdonTypeSystem
             delegateVariantTargets);
     }
 
+    public IReadOnlyList<ITypeSymbol> SnapshotKnownBundleTypes()
+    {
+        RequireMutable();
+        return BoundUdonTypeSystem.SelectKnownBundleTypes(
+            _sourceShapes, _resolutions);
+    }
+
     void RequireMutable()
     {
         if (_published)
@@ -460,17 +467,8 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
                     ?? new Dictionary<string, RuntimeShape>(),
                     StringComparer.Ordinal));
         _knownBundleTypes = Array.AsReadOnly(
-            _sourceShapes
-                .Where(pair => pair.Value.IsBundle)
-                .Select(pair => _resolutions.TryGetValue(
-                    pair.Key, out var type) ? type : null)
-                .Where(type => type != null)
-                .Distinct<ITypeSymbol>(
-                    SymbolEqualityComparer.Default)
-                .OrderBy(
-                    ClassTypeObjectContext.SpecKey,
-                    StringComparer.Ordinal)
-                .ToArray());
+            SelectKnownBundleTypes(
+                _sourceShapes, _resolutions));
         _delegateVariantRuntimeTestTargets =
             Array.AsReadOnly((
                 delegateVariantRuntimeTestTargets
@@ -479,6 +477,21 @@ internal sealed class BoundUdonTypeSystem : IUdonTypeSystem
                 .OrderBy(key => key, StringComparer.Ordinal)
                 .ToArray());
     }
+
+    internal static ITypeSymbol[] SelectKnownBundleTypes(
+        IReadOnlyDictionary<string, RuntimeShape> sourceShapes,
+        IReadOnlyDictionary<string, ITypeSymbol> resolutions)
+        => sourceShapes
+            .Where(pair => pair.Value.IsBundle)
+            .Select(pair => resolutions.TryGetValue(
+                pair.Key, out var type) ? type : null)
+            .Where(type => type != null)
+            .Distinct<ITypeSymbol>(
+                SymbolEqualityComparer.Default)
+            .OrderBy(
+                ClassTypeObjectContext.SpecKey,
+                StringComparer.Ordinal)
+            .ToArray();
 
     public bool DelegateRuntimeTestNeedsVariantAdapter(
         ITypeSymbol target,

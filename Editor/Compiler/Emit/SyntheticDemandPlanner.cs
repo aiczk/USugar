@@ -32,6 +32,7 @@ internal sealed class SyntheticDemandPlanner
     // B67: user enums whose ToString()/concat/interpolation needs the synthesized __enumstr_ helper.
     readonly HashSet<INamedTypeSymbol> _enumToString = new(SymbolEqualityComparer.Default);
     readonly HashSet<INamedTypeSymbol> _classToString = new(SymbolEqualityComparer.Default);
+    bool _dynamicBundleString;
 
     // Variance (2026-07-04 design 2.2, B-1): per-(target, sig-S) sig adapter bridges. DelegateInvoke
     // is the DESTINATION delegate's own Invoke (conv-var declarations), distinct from TargetMethod
@@ -210,6 +211,9 @@ internal sealed class SyntheticDemandPlanner
     internal SyntheticDemandPlan PublishPlan()
     {
         RequireMutable();
+        if (_dynamicBundleString)
+            throw new InvalidOperationException(
+                "Dynamic bundle string demands were not expanded before publication.");
         var plan = new SyntheticDemandPlan(
             _closureBridgeTargets,
             _plannedDelegateSites,
@@ -316,6 +320,29 @@ internal sealed class SyntheticDemandPlanner
     {
         RequireMutable();
         _classToString.Add(classType);
+    }
+
+    public void RegisterDynamicBundleString()
+    {
+        RequireMutable();
+        _dynamicBundleString = true;
+    }
+
+    public void ExpandDynamicBundleStringDemands(
+        IEnumerable<ITypeSymbol> knownBundleTypes,
+        LoweringServices lowering)
+    {
+        RequireMutable();
+        if (!_dynamicBundleString) return;
+        if (knownBundleTypes == null)
+            throw new ArgumentNullException(nameof(knownBundleTypes));
+        if (lowering == null)
+            throw new ArgumentNullException(nameof(lowering));
+
+        _dynamicBundleString = false;
+        foreach (var type in knownBundleTypes)
+            lowering.PlanBundleStringDemands(type);
+        _dynamicBundleString = false;
     }
 
     public void RegisterWrapper(DelegateBindingPlan binding, IMethodSymbol outerInvoke,

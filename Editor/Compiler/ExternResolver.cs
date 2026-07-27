@@ -59,7 +59,7 @@ public static class ExternResolver
     public static bool IsPlainUserClass(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named) return false;
-        if (named.TypeKind != TypeKind.Class) return false;
+        if (named.TypeKind != TypeKind.Class || named.IsStatic) return false;
         if (named.SpecialType != SpecialType.None) return false; // string, object, … — natively supported
         if (named.DeclaringSyntaxReferences.IsEmpty) return false; // compiled assembly (SDK/Unity/System)
         if (IsSdkNamespace(named.ContainingNamespace)) return false;

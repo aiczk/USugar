@@ -1267,6 +1267,11 @@ public sealed class UasmEmitter
             fieldInitializers,
             methodBodies,
             abiBuilder);
+        _state.SyntheticDemandPlanner
+            .ExpandDynamicBundleStringDemands(
+                _materializingTypes
+                    .SnapshotKnownBundleTypes(),
+                _lowering);
         var syntheticDemands = _state.PublishSyntheticDemands();
         var syntheticDispatch = BindSyntheticDispatch(syntheticDemands);
         var recursion = RecursionAnalysis.Analyze(bodyGraph);

@@ -2492,10 +2492,18 @@ internal sealed class LoweringServices
     }
 
     internal void PlanBundleStringDemands(ITypeSymbol type)
-        => PlanBundleStringDemands(
-            ResolveType(type),
+    {
+        var resolved = ResolveType(type);
+        if (resolved?.SpecialType == SpecialType.System_Object
+            || resolved is INamedTypeSymbol
+                { TypeKind: TypeKind.Interface })
+            _state.SyntheticDemandPlanner
+                .RegisterDynamicBundleString();
+        PlanBundleStringDemands(
+            resolved,
             new HashSet<ITypeSymbol>(
                 SymbolEqualityComparer.Default));
+    }
 
     void PlanBundleStringDemands(
         ITypeSymbol type,

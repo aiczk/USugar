@@ -15,6 +15,45 @@ namespace USugar.Tests;
 public class M4bToStringDispatchTests
 {
     [Fact]
+    public void ObjectInterpolationPlansEveryKnownClassButNotStaticHelpers()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public static class StringHelper {
+    public static object Pass(object value) { return value; }
+}
+public class DynamicPayload {
+    public int value;
+    public override string ToString() { return ""payload:"" + value; }
+}
+public class DynamicStringHost : UdonSharpBehaviour {
+    public int result;
+    string Format(object value) { return $""{value}""; }
+    void Start() {
+        object value = StringHelper.Pass(new DynamicPayload { value = 7 });
+        result = Format(value).Length;
+    }
+}", "DynamicStringHost");
+
+        Assert.Contains("__typeobj_DynamicPayload", uasm);
+        Assert.Matches(@"__\d+_ToString", uasm);
+        Assert.DoesNotContain("__typeobj_StringHelper", uasm);
+    }
+
+    [Fact]
+    public void StaticClassIsNotACompilerBundleType()
+    {
+        var compilation = TestHelper.BuildCompilation(@"
+public static class StaticHelper { public static int Id(int value) { return value; } }
+public class StaticHelperHost { }
+", "StaticHelperHost", out _);
+        var helper = compilation.GetTypeByMetadataName("StaticHelper");
+
+        Assert.NotNull(helper);
+        Assert.False(TypeClassifier.IsUserClass(helper));
+    }
+
+    [Fact]
     public void NonSealedOverride_Interpolation_DispatchesBothImpls()
     {
         // Both minted classes override: the hole lowers to a typeobj chain of two direct calls —
