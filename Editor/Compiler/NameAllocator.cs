@@ -59,21 +59,13 @@ public class NameAllocator
     public static string BodyLabel(string functionName) => functionName + "__body";
 }
 
-/// <summary>
-/// The UASM LABEL namespace, distinct from NameAllocator's counter-qualified slot ids: these name
-/// jump targets, not heap variables. CoreToUasm is the only consumer; keeping the spellings here
-/// puts every "__"-prefixed identifier shape under one census-pinned owner.
-/// </summary>
 public static class LabelNames
 {
-    /// <summary>Entry label of a non-exported function: "__{function}".</summary>
     public static string FunctionEntry(string functionName) => "__" + functionName;
 
-    /// <summary>Basic-block label: "__{function}_bb{id}".</summary>
     public static string Block(string functionName, int blockId)
         => "__" + functionName + "_bb" + blockId;
 
-    /// <summary>Return-site label of an internal call: "__{function}__callret_{index}".</summary>
     public static string CallReturn(string functionName, int index)
         => "__" + functionName + "__callret_" + index;
 }

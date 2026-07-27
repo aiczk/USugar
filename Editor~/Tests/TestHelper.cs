@@ -462,8 +462,6 @@ namespace VRC.TestStubs
 }
 ";
 
-    // C#9 mirrors what Unity's bundled Roslyn resolves LanguageVersion.Latest to; without the pin a
-    // test can green-light syntax the production compiler cannot parse.
     static readonly CSharpParseOptions ParseOptions =
         new CSharpParseOptions(Microsoft.CodeAnalysis.CSharp.LanguageVersion.CSharp9);
 

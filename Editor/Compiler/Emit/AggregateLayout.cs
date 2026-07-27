@@ -470,9 +470,6 @@ public static class AggregateAbi
         }
     }
 
-    /// <summary>The heap literal for <c>default(T)</c> of a VALUE type, or null when the type has no
-    /// scalar literal (enum, decimal, SDK struct) and the assembler materializes default(T) from the
-    /// declared type instead. Reference types have no business here: their default is the absent slot.</summary>
     public static object DefaultScalarValue(ITypeSymbol type)
     {
         if (!type.IsValueType)

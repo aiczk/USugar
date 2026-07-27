@@ -75,9 +75,6 @@ class Deconstructable { public void Deconstruct(out int a, out int b) { a = 0; b
         Assert.Equal(new[] { CallableSiteKind.PropertyGet, CallableSiteKind.PropertySet },
             CallableSites.FromOperation(increment).Select(s => s.Kind));
 
-        // A Method site is NOT always an invocation: a method-group reference and a recursive
-        // pattern's Deconstruct produce one too, and a resolver arm keyed on IInvocationOperation
-        // alone drops their call edge.
         var methodGroup = operation.DescendantsAndSelf().OfType<IMethodReferenceOperation>().Single();
         var deconstruct = operation.DescendantsAndSelf().OfType<IRecursivePatternOperation>().Single();
         Assert.Equal(new[] { CallableSiteKind.Method },

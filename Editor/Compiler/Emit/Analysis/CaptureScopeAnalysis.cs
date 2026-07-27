@@ -12,9 +12,6 @@ using Microsoft.CodeAnalysis.Operations;
 /// and — per closure — the nearest enclosing capture-bearing scope it binds its env chain to
 /// (BindingScope) plus static hop-distance along that chain.
 ///
-/// Structure only — no independent type resolution (design §2 rule 1: types are resolved at emit
-/// time from the live _typeParamMap, never re-derived here).
-///
 /// Keying discipline (design §2 rule 2): <see cref="Build"/> walks DEFINITION symbols only (generic
 /// method original definitions, never constructed specs), so every symbol reached during the walk —
 /// locals, params, closure method symbols — is itself definition-side. All maps use

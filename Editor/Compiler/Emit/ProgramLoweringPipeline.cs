@@ -182,7 +182,6 @@ public sealed class UasmEmitter
     /// <summary>Compiler-internal verified CFG inspection surface.</summary>
     internal VerifiedFlatModule FlatModule => _flatModule;
 
-    /// <summary>The capture-scope analysis built in <see cref="Emit"/> — see LoweringState.CaptureScope.</summary>
     internal CaptureScopeAnalysis CaptureScope => _state.Captures;
     public Compilation Compilation => _state.Compilation;
     public INamedTypeSymbol ClassSymbol => _state.ClassSymbol;

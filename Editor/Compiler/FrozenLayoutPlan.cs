@@ -93,8 +93,6 @@ public sealed class FrozenLayoutPlan
             $"Interface bridges for '{classType?.Name}' were not pre-planned.");
     }
 
-    /// <summary>Walk an override to the declaring base whose layout owns the slot; the chain stops at
-    /// UdonSharpBehaviour and at any type without source, which have no planned layout.</summary>
     static IMethodSymbol NormalizeOverrideChain(IMethodSymbol method)
     {
         while (method.IsOverride && method.OverriddenMethod != null)
