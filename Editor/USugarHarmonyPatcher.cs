@@ -1,6 +1,5 @@
 using System.Reflection;
 using HarmonyLib;
-using UnityEditor;
 using UdonSharp;
 using UdonSharp.Compiler;
 using UdonSharp.Serialization;
@@ -20,7 +19,6 @@ static class USugarHarmonyPatcher
             ApplyPatches();
         else
             USugarReflectionTargets.Validate();
-        EditorApplication.playModeStateChanged += OnPlayModeChanged;
     }
 
     internal static void ApplyPatches()
@@ -43,26 +41,28 @@ static class USugarHarmonyPatcher
         }
 
         var harmony = new Harmony(HarmonyId);
-        var redirectAll = new HarmonyMethod(
-            typeof(USugarHarmonyPatcher),
-            nameof(Prefix_RedirectAll));
         var redirectCompile = new HarmonyMethod(
             typeof(USugarHarmonyPatcher),
             nameof(Prefix_RedirectCompile));
         var redirectSync = new HarmonyMethod(
             typeof(USugarHarmonyPatcher),
             nameof(Prefix_RedirectSync));
+        var waitForCompile = new HarmonyMethod(
+            typeof(USugarHarmonyPatcher),
+            nameof(Prefix_WaitForCompile));
 
         try
         {
-            PatchRequired(harmony, USugarReflectionTargets.CompileAllProgramsMethod, redirectAll,
-                "UdonSharpProgramAsset.CompileAllCsPrograms");
             PatchRequired(harmony, USugarReflectionTargets.CompileMethod, redirectCompile,
                 $"{compilerType.Name}.Compile");
             PatchRequired(harmony, USugarReflectionTargets.CompileSyncMethod, redirectSync,
                 $"{compilerType.Name}.CompileSync");
+            PatchRequired(harmony, USugarReflectionTargets.WaitForCompileMethod, waitForCompile,
+                $"{compilerType.Name}.WaitForCompile");
             PatchRequired(harmony, USugarReflectionTargets.AnyScriptHasErrorMethod,
-                new HarmonyMethod(typeof(USugarHarmonyPatcher), nameof(Prefix_NoError)),
+                new HarmonyMethod(
+                    typeof(USugarHarmonyPatcher),
+                    nameof(Prefix_AnyScriptHasError)),
                 "UdonSharpProgramAsset.AnyUdonSharpScriptHasError");
 
             PatchRequired(harmony,
@@ -111,22 +111,13 @@ static class USugarHarmonyPatcher
         USugarLog.Info("Compiler override removed");
     }
 
-    static bool Prefix_RedirectAll(
-        bool forceCompile,
-        bool editorBuild)
-    {
-        if (!USugarCompiler.OverrideEnabled) return true;
-        USugarCompilationOrchestrator.RequestCompile(
-            editorBuild, forceCompile);
-        return false;
-    }
-
     static bool Prefix_RedirectCompile(
         UdonSharpCompileOptions options)
     {
         if (!USugarCompiler.OverrideEnabled) return true;
         USugarCompilationOrchestrator.RequestCompile(
-            options?.IsEditorBuild ?? true);
+            options?.IsEditorBuild ?? true,
+            force: true);
         return false;
     }
 
@@ -135,14 +126,24 @@ static class USugarHarmonyPatcher
     {
         if (!USugarCompiler.OverrideEnabled) return true;
         USugarCompilationOrchestrator.CompileSynchronously(
+            force: true,
             editorBuild: options?.IsEditorBuild ?? true);
         return false;
     }
 
-    static bool Prefix_NoError(ref bool __result)
+    static bool Prefix_WaitForCompile()
     {
         if (!USugarCompiler.OverrideEnabled) return true;
-        __result = USugarCompilationOrchestrator.Health != USugarCompileHealth.Clean;
+        USugarCompilationOrchestrator.WaitForCompile();
+        return false;
+    }
+
+    static bool Prefix_AnyScriptHasError(ref bool __result)
+    {
+        if (!USugarCompiler.OverrideEnabled) return true;
+        if (USugarCompilationOrchestrator.Health == USugarCompileHealth.Clean)
+            return true;
+        __result = true;
         return false;
     }
 
@@ -168,18 +169,4 @@ static class USugarHarmonyPatcher
         return false;
     }
 
-    static void OnPlayModeChanged(PlayModeStateChange state)
-    {
-        if (state == PlayModeStateChange.ExitingEditMode && USugarCompiler.OverrideEnabled)
-        {
-            USugarCompilationOrchestrator.CompileSynchronously(
-                editorBuild: true);
-            if (USugarCompilationOrchestrator.Health != USugarCompileHealth.Clean)
-            {
-                USugarLog.Error(
-                    "Play Mode entry cancelled because the USugar compile is not clean.");
-                EditorApplication.isPlaying = false;
-            }
-        }
-    }
 }

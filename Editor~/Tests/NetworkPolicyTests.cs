@@ -243,6 +243,87 @@ public class SyncPol9 : UdonSharpBehaviour {
         Assert.Contains(".sync speed, linear", uasm);
     }
 
+    [Theory]
+    [InlineData("None")]
+    [InlineData("NoVariableSync")]
+    public void UdonSynced_FieldOnDisabledSyncBehaviour_Throws(
+        string behaviourMode)
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() =>
+            TestHelper.CompileToUasm($@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.{behaviourMode})]
+public class SyncDisabledMode : UdonSharpBehaviour {{
+    [UdonSynced] public int value;
+}}", "SyncDisabledMode"));
+        Assert.Contains("cannot be synced", ex.Message);
+        Assert.Contains("sync mode None", ex.Message);
+    }
+
+    [Fact]
+    public void UdonSynced_ArrayOnContinuousBehaviour_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
+public class SyncContinuousArray : UdonSharpBehaviour {
+    [UdonSynced] public int[] values;
+}", "SyncContinuousArray"));
+        Assert.Contains("not supported by Continuous sync", ex.Message);
+    }
+
+    [Fact]
+    public void UdonSynced_LinearFieldOnManualBehaviour_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
+public class SyncManualLinear : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Linear)] public float value;
+}" + ModeStub, "SyncManualLinear"));
+        Assert.Contains("cannot be used with Manual sync", ex.Message);
+    }
+
+    [Fact]
+    public void UdonSynced_LinearStringField_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
+public class SyncLinearString : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Linear)] public string value;
+}" + ModeStub, "SyncLinearString"));
+        Assert.Contains("not supported for linear sync", ex.Message);
+    }
+
+    [Fact]
+    public void UdonSynced_SmoothColorField_Throws()
+    {
+        var ex = Assert.ThrowsAny<System.Exception>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
+public class SyncSmoothColor : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Smooth)] public UnityEngine.Color value;
+}" + ModeStub, "SyncSmoothColor"));
+        Assert.Contains("not supported for smooth sync", ex.Message);
+    }
+
+    [Fact]
+    public void UdonSynced_LinearFloatOnContinuousBehaviour_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+[UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
+public class SyncContinuousLinear : UdonSharpBehaviour {
+    [SyncStub.UdonSynced(SyncStub.UdonSyncMode.Linear)] public float value;
+}" + ModeStub, "SyncContinuousLinear");
+        Assert.Contains(".sync value, linear", uasm);
+    }
+
     [Fact]
     public void UdonSynced_InvalidType_OnBaseClass_ThrowsInDerivedProgram()
     {

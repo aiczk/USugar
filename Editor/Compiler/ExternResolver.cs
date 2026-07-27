@@ -413,6 +413,24 @@ public static class ExternResolver
         "VRCSDKBaseVRCUrl",
     };
 
+    static readonly HashSet<string> LinearSyncableUdonTypes = new()
+    {
+        "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16",
+        "SystemInt32", "SystemUInt32", "SystemInt64", "SystemUInt64",
+        "SystemSingle", "SystemDouble",
+        "UnityEngineVector2", "UnityEngineVector3",
+        "UnityEngineQuaternion", "UnityEngineColor", "UnityEngineColor32",
+    };
+
+    static readonly HashSet<string> SmoothSyncableUdonTypes = new()
+    {
+        "SystemByte", "SystemSByte", "SystemInt16", "SystemUInt16",
+        "SystemInt32", "SystemUInt32", "SystemInt64", "SystemUInt64",
+        "SystemSingle", "SystemDouble",
+        "UnityEngineVector2", "UnityEngineVector3",
+        "UnityEngineQuaternion",
+    };
+
     public static bool IsSyncableType(string udonType)
     {
         if (SyncableUdonTypes.Contains(udonType)) return true;
@@ -420,6 +438,12 @@ public static class ExternResolver
             return SyncableUdonTypes.Contains(udonType.Substring(0, udonType.Length - 5));
         return false;
     }
+
+    public static bool IsLinearSyncableType(string udonType)
+        => LinearSyncableUdonTypes.Contains(udonType);
+
+    public static bool IsSmoothSyncableType(string udonType)
+        => SmoothSyncableUdonTypes.Contains(udonType);
 
     static readonly Dictionary<SpecialType, string> ConvertMethodNames = new()
     {

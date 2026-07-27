@@ -803,6 +803,33 @@ public sealed class UasmEmitter
                 + "Udon sync. Udon can sync only bool, char, byte, sbyte, short, ushort, int, "
                 + "uint, long, ulong, float, double, string, VRCUrl, Vector2/3/4, Quaternion, "
                 + "Color, Color32, and arrays of these.");
+
+        var behaviourSyncMode =
+            EmitPolicy.GetBehaviourSyncModeName(_classSymbol);
+        if (behaviourSyncMode is "None" or "NoVariableSync")
+            throw new NotSupportedException(
+                $"Field '{member.Name}' cannot be synced on an UdonBehaviour "
+                + "with sync mode None.");
+        if (behaviourSyncMode == "Continuous"
+            && member.Type is IArrayTypeSymbol)
+            throw new NotSupportedException(
+                $"Field '{member.Name}' is an array, which is not supported "
+                + "by Continuous sync. Use Manual sync for array fields.");
+        if (behaviourSyncMode == "Manual"
+            && syncMode is "linear" or "smooth")
+            throw new NotSupportedException(
+                $"Field '{member.Name}' uses {syncMode} interpolation, which "
+                + "cannot be used with Manual sync.");
+        if (syncMode == "linear"
+            && !ExternResolver.IsLinearSyncableType(syncCheckType))
+            throw new NotSupportedException(
+                $"Field '{member.Name}' type '{member.Type}' is not supported "
+                + "for linear sync.");
+        if (syncMode == "smooth"
+            && !ExternResolver.IsSmoothSyncableType(syncCheckType))
+            throw new NotSupportedException(
+                $"Field '{member.Name}' type '{member.Type}' is not supported "
+                + "for smooth sync.");
         return syncMode;
     }
 

@@ -76,7 +76,14 @@ public static class TestHelper
     const string Stubs = @"
 namespace UdonSharp
 {
-    public enum BehaviourSyncMode { None, Manual, Continuous, NoVariableSync }
+    public enum BehaviourSyncMode
+    {
+        Any,
+        None,
+        NoVariableSync,
+        Continuous,
+        Manual,
+    }
     public class UdonBehaviourSyncModeAttribute : System.Attribute
     {
         public UdonBehaviourSyncModeAttribute(BehaviourSyncMode mode) { }

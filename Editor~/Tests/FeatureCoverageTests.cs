@@ -842,7 +842,7 @@ public class SyncTest : UdonSharp.UdonSharpBehaviour { }
         var comp = CSharpCompilation.Create("Test", new[] { tree }, TestHelper.StandardRefs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var sym = comp.GetTypeByMetadataName("SyncTest");
-        Assert.Equal(1, USugarCompilerHelper.GetBehaviourSyncMode(sym)); // Manual = 1
+        Assert.Equal(4, USugarCompilerHelper.GetBehaviourSyncMode(sym)); // Manual = 4
     }
 
     [Fact]
@@ -870,7 +870,7 @@ public class SyncDerived : SyncBase { }
         var comp = CSharpCompilation.Create("Test", new[] { tree }, TestHelper.StandardRefs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
         var sym = comp.GetTypeByMetadataName("SyncDerived");
-        Assert.Equal(2, USugarCompilerHelper.GetBehaviourSyncMode(sym)); // Continuous = 2
+        Assert.Equal(3, USugarCompilerHelper.GetBehaviourSyncMode(sym)); // Continuous = 3
     }
 
     // ── Enum type-tag safety ──

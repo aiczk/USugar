@@ -6,21 +6,40 @@ using VRC.Udon.Common.Interfaces;
 /// </summary>
 static class USugarConstantApplier
 {
-    internal static IUdonProgram AssembleUasm(string uasm, uint heapSize)
+    internal static IUdonProgram AssembleUasm(
+        string uasm,
+        uint heapSize,
+        out string error)
     {
+        error = null;
         var method = USugarReflectionTargets.AssembleMethod;
         if (method == null)
         {
-            USugarLog.Error("CompilerUdonInterface.Assemble not found");
+            error = "CompilerUdonInterface.Assemble not found";
+            USugarLog.Error(error);
             return null;
         }
         try
         {
-            return method.Invoke(null, new object[] { uasm, heapSize }) as IUdonProgram;
+            var program =
+                method.Invoke(null, new object[] { uasm, heapSize })
+                as IUdonProgram;
+            if (program == null)
+                error = "CompilerUdonInterface.Assemble returned no program.";
+            return program;
         }
         catch (System.Reflection.TargetInvocationException ex)
         {
-            USugarLog.Error($"UASM assembly failed: {ex.InnerException?.Message ?? ex.Message}\n{ex.InnerException?.StackTrace ?? ex.StackTrace}");
+            error = ex.InnerException?.Message ?? ex.Message;
+            USugarLog.Error(
+                $"UASM assembly failed: {error}\n"
+                + $"{ex.InnerException?.StackTrace ?? ex.StackTrace}");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            USugarLog.Error($"UASM assembly failed: {ex}");
             return null;
         }
     }

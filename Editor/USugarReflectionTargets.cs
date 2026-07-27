@@ -24,6 +24,18 @@ static class USugarReflectionTargets
         EditorCacheType?.GetMethod("SetUASMStr", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
     internal static readonly MethodInfo GetUasmStr =
         EditorCacheType?.GetMethod("GetUASMStr", BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+    internal static readonly MethodInfo RehashAllScripts =
+        EditorCacheType?.GetMethod(
+            "RehashAllScripts",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+    internal static readonly PropertyInfo LastBuildType =
+        EditorCacheType?.GetProperty(
+            "LastBuildType",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+    internal static readonly Type DebugInfoType =
+        EditorCacheType?.GetNestedType(
+            "DebugInfoType",
+            BindingFlags.Public | BindingFlags.NonPublic);
 
     // CompileDiagnostic nested type + fields
     internal static readonly Type CompileDiagnosticType =
@@ -37,18 +49,47 @@ static class USugarReflectionTargets
     // UdonSharpCompilerV1 (Harmony patch targets + CompileSync invocation)
     internal static readonly Type CompilerType =
         Type.GetType("UdonSharp.Compiler.UdonSharpCompilerV1, UdonSharp.Editor");
-    internal static readonly MethodInfo CompileAllProgramsMethod =
-        typeof(UdonSharpProgramAsset).GetMethod(
-            "CompileAllCsPrograms", BindingFlags.Public | BindingFlags.Static);
     internal static readonly MethodInfo CompileMethod =
         CompilerType?.GetMethod("Compile", BindingFlags.Public | BindingFlags.Static);
     internal static readonly MethodInfo CompileSyncMethod =
         CompilerType?.GetMethod("CompileSync", BindingFlags.Public | BindingFlags.Static);
+    internal static readonly MethodInfo WaitForCompileMethod =
+        CompilerType?.GetMethod(
+            "WaitForCompile",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
     internal static readonly MethodInfo AnyScriptHasErrorMethod =
         typeof(UdonSharpProgramAsset).GetMethod(
             "AnyUdonSharpScriptHasError", BindingFlags.Public | BindingFlags.Static);
-    internal static readonly Type CompileOptionsType =
-        CompilerType?.Assembly.GetType("UdonSharp.Compiler.UdonSharpCompileOptions");
+
+    // UdonSharp editor lifecycle. A successful stock compile rehashes the source cache,
+    // fixes scene links/sync modes, and records whether the emitted program was an editor
+    // or client build.
+    internal static readonly Type EditorManagerType =
+        UdonSharpAsm.GetType("UdonSharpEditor.UdonSharpEditorManager");
+    internal static readonly MethodInfo RunPostBuildSceneFixup =
+        EditorManagerType?.GetMethod(
+            "RunPostBuildSceneFixup",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+    internal static readonly Type SettingsType =
+        UdonSharpAsm.GetType("UdonSharpEditor.UdonSharpSettings");
+    internal static readonly MethodInfo FilterBlacklistedPaths =
+        SettingsType?.GetMethod(
+            "FilterBlacklistedPaths",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+    internal static readonly Type UdonSharpUtilsType =
+        UdonSharpAsm.GetType("UdonSharpEditor.UdonSharpUtils");
+    internal static readonly MethodInfo DoesUnityProjectHaveCompileErrors =
+        UdonSharpUtilsType?.GetMethod(
+            "DoesUnityProjectHaveCompileErrors",
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static);
+
+    // UdonSharpProgramAsset's stock assembler updates these inherited fields before
+    // ApplyProgram serializes the program. USugar assembles up front, so it must project
+    // the same state explicitly at commit time.
+    internal static readonly FieldInfo ProgramField =
+        FindInstanceField(typeof(UdonSharpProgramAsset), "program");
+    internal static readonly FieldInfo AssemblyErrorField =
+        FindInstanceField(typeof(UdonSharpProgramAsset), "assemblyError");
 
     // CompilerUdonInterface (UASM assembly)
     internal static readonly Type UdonInterfaceType =
@@ -82,12 +123,34 @@ static class USugarReflectionTargets
     // the inspector and stay at Warn.
     static readonly HashSet<string> CriticalBindings = new()
     {
-        nameof(CompilerType), nameof(CompileAllProgramsMethod), nameof(CompileMethod),
-        nameof(CompileSyncMethod), nameof(AnyScriptHasErrorMethod),
+        nameof(CompilerType), nameof(CompileMethod),
+        nameof(CompileSyncMethod), nameof(WaitForCompileMethod),
+        nameof(AnyScriptHasErrorMethod),
         nameof(AssembleMethod), nameof(UdonInterfaceType), nameof(EditorCacheType),
+        nameof(RehashAllScripts), nameof(LastBuildType), nameof(DebugInfoType),
+        nameof(EditorManagerType), nameof(RunPostBuildSceneFixup),
+        nameof(SettingsType), nameof(FilterBlacklistedPaths),
+        nameof(UdonSharpUtilsType), nameof(DoesUnityProjectHaveCompileErrors),
+        nameof(ProgramField), nameof(AssemblyErrorField),
         nameof(IsExternTypeMethod), nameof(HeapStorageBehaviour), nameof(VariableStorageBehaviour),
         nameof(HeapGetElementStorageMethod), nameof(VariableGetElementStorageMethod),
     };
+
+    static FieldInfo FindInstanceField(Type type, string name)
+    {
+        for (var current = type; current != null; current = current.BaseType)
+        {
+            var field = current.GetField(
+                name,
+                BindingFlags.Instance
+                | BindingFlags.Public
+                | BindingFlags.NonPublic
+                | BindingFlags.DeclaredOnly);
+            if (field != null)
+                return field;
+        }
+        return null;
+    }
 
     internal static bool Validate()
     {

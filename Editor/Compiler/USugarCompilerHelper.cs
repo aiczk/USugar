@@ -1,5 +1,4 @@
 using Microsoft.CodeAnalysis;
-using System.Linq;
 
 /// <summary>
 /// Testable helpers extracted from USugarCompiler (Unity-dependent parts remain in USugarCompiler).
@@ -20,17 +19,5 @@ public static class USugarCompilerHelper
     }
 
     public static int GetBehaviourSyncMode(INamedTypeSymbol type)
-    {
-        var current = type;
-        while (current != null && current.Name != "UdonSharpBehaviour")
-        {
-            var attr = current.GetAttributes()
-                .FirstOrDefault(a => a.AttributeClass?.Name == "UdonBehaviourSyncModeAttribute");
-            if (attr != null && attr.ConstructorArguments.Length > 0
-                && attr.ConstructorArguments[0].Value is int modeVal)
-                return modeVal;
-            current = current.BaseType;
-        }
-        return -1;
-    }
+        => EmitPolicy.GetBehaviourSyncMode(type);
 }

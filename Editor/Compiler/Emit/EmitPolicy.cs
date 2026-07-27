@@ -10,6 +10,45 @@ using Microsoft.CodeAnalysis.Operations;
 /// an LoweringState instance is needed.</summary>
 public static class EmitPolicy
 {
+    public static int GetBehaviourSyncMode(INamedTypeSymbol type)
+        => GetBehaviourSyncModeArgument(type)?.Value is int mode
+            ? mode
+            : -1;
+
+    public static string GetBehaviourSyncModeName(
+        INamedTypeSymbol type)
+    {
+        var argument = GetBehaviourSyncModeArgument(type);
+        if (argument?.Type is not INamedTypeSymbol enumType
+            || argument.Value.Value is not int value)
+            return null;
+        return enumType.GetMembers()
+            .OfType<IFieldSymbol>()
+            .FirstOrDefault(field =>
+                field.HasConstantValue
+                && field.ConstantValue is int fieldValue
+                && fieldValue == value)
+            ?.Name;
+    }
+
+    static TypedConstant? GetBehaviourSyncModeArgument(
+        INamedTypeSymbol type)
+    {
+        for (var current = type;
+             current != null && current.Name != "UdonSharpBehaviour";
+             current = current.BaseType)
+        {
+            var attribute = current.GetAttributes()
+                .FirstOrDefault(candidate =>
+                    candidate.AttributeClass?.Name
+                    == "UdonBehaviourSyncModeAttribute");
+            if (attribute != null
+                && attribute.ConstructorArguments.Length > 0)
+                return attribute.ConstructorArguments[0];
+        }
+        return null;
+    }
+
     /// <summary>True if <paramref name="t"/> is <c>Nullable&lt;T&gt;</c>; yields the underlying T.
     /// Nullable is emulated as a boxed object (null | boxed T) — see ExternResolver type mapping.</summary>
     public static bool IsNullableT(ITypeSymbol t, out ITypeSymbol underlying)
