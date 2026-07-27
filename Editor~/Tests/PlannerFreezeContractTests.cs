@@ -68,7 +68,7 @@ public class PlannedB : UdonSharp.UdonSharpBehaviour, IPlanned { public int Read
 
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.Plan), publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.Build), publicMethods);
-        Assert.DoesNotContain(nameof(LayoutPlanBuilder.ComputeBridges), publicMethods);
+        Assert.DoesNotContain("ComputeBridges", publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterStructImplementedInterface), publicMethods);
         Assert.DoesNotContain(nameof(LayoutPlanBuilder.RegisterClassImplementedInterface), publicMethods);
         Assert.DoesNotContain(

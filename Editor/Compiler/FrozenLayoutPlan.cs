@@ -93,17 +93,24 @@ public sealed class FrozenLayoutPlan
             $"Interface bridges for '{classType?.Name}' were not pre-planned.");
     }
 
-    public DelegateBridgeLayout GetDelegateBridgeLayout(IMethodSymbol method)
+    /// <summary>Walk an override to the declaring base whose layout owns the slot; the chain stops at
+    /// UdonSharpBehaviour and at any type without source, which have no planned layout.</summary>
+    static IMethodSymbol NormalizeOverrideChain(IMethodSymbol method)
     {
-        var normalized = method;
-        while (normalized.IsOverride && normalized.OverriddenMethod != null)
+        while (method.IsOverride && method.OverriddenMethod != null)
         {
-            var containingType = normalized.OverriddenMethod.ContainingType;
+            var containingType = method.OverriddenMethod.ContainingType;
             if (containingType.Name == "UdonSharpBehaviour"
                 || containingType.DeclaringSyntaxReferences.IsEmpty)
                 break;
-            normalized = normalized.OverriddenMethod;
+            method = method.OverriddenMethod;
         }
+        return method;
+    }
+
+    public DelegateBridgeLayout GetDelegateBridgeLayout(IMethodSymbol method)
+    {
+        var normalized = NormalizeOverrideChain(method);
         var layout = GetLayout(normalized.ContainingType);
         if (layout.DelegateBridges.TryGetValue(normalized, out var bridge)) return bridge;
         throw new InvalidOperationException(
@@ -120,16 +127,7 @@ public sealed class FrozenLayoutPlan
 
     public MethodLayout TryGetCalleeLayout(IMethodSymbol target)
     {
-        var method = target;
-        while (method.IsOverride && method.OverriddenMethod != null)
-        {
-            var containingType = method.OverriddenMethod.ContainingType;
-            if (containingType.Name == "UdonSharpBehaviour"
-                || containingType.DeclaringSyntaxReferences.IsEmpty)
-                break;
-            method = method.OverriddenMethod;
-        }
-
+        var method = NormalizeOverrideChain(target);
         var layout = GetLayout(method.ContainingType);
         return layout.Methods.TryGetValue(method, out var methodLayout) ? methodLayout : null;
     }

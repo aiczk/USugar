@@ -790,7 +790,7 @@ public sealed class LayoutPlanBuilder
     /// cross-program-stable dispatch entry — avoiding the export-name collisions that arose when the bridge
     /// reused the interface's bare export name (which could equal a sibling class method or another bridge).
     /// </summary>
-    public List<(IMethodSymbol method, MethodLayout interfaceLayout, IMethodSymbol implMethod, MethodLayout classLayout)>
+    List<(IMethodSymbol method, MethodLayout interfaceLayout, IMethodSymbol implMethod, MethodLayout classLayout)>
         ComputeBridges(INamedTypeSymbol classType)
     {
         var bridges = new List<(IMethodSymbol, MethodLayout, IMethodSymbol, MethodLayout)>();
@@ -855,50 +855,4 @@ public sealed class LayoutPlanBuilder
         return returns;
     }
 
-    /// <summary>Get bridge layout for any method, including on foreign types.</summary>
-    public DelegateBridgeLayout GetDelegateBridgeLayout(IMethodSymbol method)
-    {
-        var m = method;
-        while (m.IsOverride && m.OverriddenMethod != null)
-        {
-            var ct = m.OverriddenMethod.ContainingType;
-            if (ct.Name == "UdonSharpBehaviour" || ct.DeclaringSyntaxReferences.IsEmpty) break;
-            m = m.OverriddenMethod;
-        }
-        var layout = Plan(m.ContainingType);
-        if (layout.DelegateBridges.TryGetValue(m, out var bridge)) return bridge;
-        throw new System.InvalidOperationException($"No delegate bridge for '{method.Name}' on '{method.ContainingType.Name}'");
-    }
-
-    /// <summary>
-    /// Get layout for a method on a foreign UdonBehaviour. Checks the target's
-    /// containing type, then walks up the base type hierarchy.
-    /// </summary>
-    public MethodLayout GetCalleeLayout(IMethodSymbol target)
-    {
-        var ml = TryGetCalleeLayout(target);
-        if (ml != null) return ml;
-        throw new System.InvalidOperationException(
-            $"Method {target.Name} not found in layout for {target.ContainingType.Name}");
-    }
-
-    /// <summary>Non-throwing twin of <see cref="GetCalleeLayout(IMethodSymbol)"/>: null when the
-    /// (override-chain-normalized) method has no planned layout — e.g. a local function or a
-    /// monomorphized generic specialization, which exist only in per-emitter registration.</summary>
-    public MethodLayout TryGetCalleeLayout(IMethodSymbol target)
-    {
-        // Normalize override chain: walk to the defining base type,
-        // matching the pure compiler's GetUsbMethodLayout logic.
-        var method = target;
-        while (method.IsOverride && method.OverriddenMethod != null)
-        {
-            var ct = method.OverriddenMethod.ContainingType;
-            if (ct.Name == "UdonSharpBehaviour" || ct.DeclaringSyntaxReferences.IsEmpty)
-                break;
-            method = method.OverriddenMethod;
-        }
-
-        var layout = Plan(method.ContainingType);
-        return layout.Methods.TryGetValue(method, out var ml) ? ml : null;
-    }
 }
