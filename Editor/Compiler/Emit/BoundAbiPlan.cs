@@ -289,20 +289,6 @@ internal sealed class BoundAbiPlanBuilder
             _binder.BindIndexerSetter(
                 owner, propertyName, indexTypes, valueType, hasReceiver));
 
-    public void TryBind(Action bind)
-    {
-        RequireMutable();
-        try
-        {
-            bind();
-        }
-        catch (NotSupportedException)
-        {
-            // A conservative census can ask about an accessor that is not used.
-            // A real use still fails loudly because no decision is published.
-        }
-    }
-
     public void RecordOperation(
         IOperation operation,
         CallSiteBindingScope scope,

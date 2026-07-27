@@ -57,9 +57,8 @@ public static class EmitPolicy
     /// `in` param is neither a readonly ALIAS of the caller's storage (VM-proven: a callee observing
     /// a caller field write through the param read 1 vs CLR 5) nor protected by the readonly
     /// DEFENSIVE COPY (a mutating struct method on the param wrote the param storage, 11 vs CLR 1).
-    /// Called at every user-method registration point (class/base/struct/foreign-static methods,
-    /// generic specializations, local functions); delegates with `in` params already reject via
-    /// DelegateAbi.ValidateNoRefOutParams (RefKind != None).</summary>
+    /// Called by the single callable registrar and by delegate surface declaration, so named methods,
+    /// specializations, closures, and delegate-only declarations share one rejection contract.</summary>
     public static void RejectInParameters(IMethodSymbol method)
     {
         foreach (var p in method.Parameters)

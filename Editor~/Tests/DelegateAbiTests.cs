@@ -121,29 +121,6 @@ public class DelegateEnumCarrier : UdonSharpBehaviour
                 .DelegateInvokeMethod, types));
     }
 
-    // ── ValidateDelegateBinding unit tests ──
-
-    [Fact]
-    public void ValidateDelegateBinding_RefOutParams_Throws()
-    {
-        var c = AbiCompile(AbiSrc);
-        var ex = Assert.Throws<NotSupportedException>(
-            () => DelegateAbi.ValidateDelegateType(
-                DelegateOf(c, "R")));
-        Assert.Contains("ref/out", ex.Message);
-    }
-
-    [Fact]
-    public void ValidateDelegateBinding_TupleReturn_Passes()
-    {
-        // Stage 1.75 (design 2026-07-04 §1): a tuple return is already a single SystemObjectArray
-        // aggregate slot (same representation as a user-struct return) — no adapter needed, so binding
-        // a tuple-return delegate type is not rejected.
-        var c = AbiCompile(AbiSrc);
-        DelegateAbi.ValidateDelegateType(
-            DelegateOf(c, "T"));
-    }
-
     [Fact]
     public void ValidateDelegateBinding_VariantMethodGroup_Throws()
     {

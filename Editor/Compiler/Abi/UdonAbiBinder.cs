@@ -154,25 +154,6 @@ internal sealed class UdonAbiBinder
                     owner, methodName, parameterTypes, returnType)));
     }
 
-    /// <summary>
-    /// Bind a user-declared operator using its declared ref modes. The SDK uses
-    /// a Ref suffix for ref/out/in/read-only-ref parameters.
-    /// </summary>
-    internal BoundExtern BindOperator(IMethodSymbol method,
-        Func<ITypeSymbol, string> getUdonType)
-    {
-        if (method == null) throw new ArgumentNullException(nameof(method));
-        if (getUdonType == null) throw new ArgumentNullException(nameof(getUdonType));
-        var signature = UdonAbiKey.Method(
-            getUdonType(method.ContainingType),
-            method.Name,
-            DeclaredParameterTypes(method, getUdonType),
-            getUdonType(method.ReturnType));
-        return BindFirst(
-            $"operator '{method.ToDisplayString()}'",
-            new[] { signature });
-    }
-
     internal BoundExtern BindMethod(IMethodSymbol method, string owner,
         Func<ITypeSymbol, string> getUdonType, string[] parameterOverride = null)
     {

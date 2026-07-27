@@ -1152,30 +1152,6 @@ public class ListForeachTest : UdonSharpBehaviour {
         });
     }
 
-    [Fact]
-    public void NullableValueType_ThrowsOrCompiles()
-    {
-        // Nullable<T> may or may not be supported — capture current behavior as regression test
-        try
-        {
-            var uasm = TestHelper.CompileToUasm(@"
-using UdonSharp;
-public class NullableTest : UdonSharpBehaviour {
-    void Start() {
-        int? x = 5;
-        if (x.HasValue) { int y = x.Value; }
-    }
-}
-", "NullableTest");
-            // If it compiles, just verify we got output
-            Assert.NotNull(uasm);
-        }
-        catch (Exception)
-        {
-            // If it throws, that's also acceptable — Nullable<T> is not required
-        }
-    }
-
     // ── Enum SpecialType resolution ──
 
     [Fact]

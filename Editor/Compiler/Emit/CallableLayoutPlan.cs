@@ -91,6 +91,7 @@ internal sealed class CallableRegistrar
     {
         if (plan?.Method == null || plan.FunctionName == null)
             throw new ArgumentException("A callable layout requires a method and function name.");
+        EmitPolicy.RejectInParameters(plan.Method);
         var slot = _context.Methods.Reserve(plan.SlotPrefix);
         var index = slot.Index;
         var name = plan.FunctionName(index);

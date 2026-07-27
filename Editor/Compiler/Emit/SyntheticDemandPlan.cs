@@ -97,16 +97,6 @@ internal sealed class SyntheticDemandPlan
             $"Enum ToString helper for '{enumType}' was absent from the bound program.");
     }
 
-    public INamedTypeSymbol RequireClassToString(
-        INamedTypeSymbol classType)
-    {
-        if (_classToStringTypes.Contains(classType))
-            return classType;
-        throw new InvalidOperationException(
-            $"Class ToString dispatch for '{classType}' "
-            + "was absent from the bound program.");
-    }
-
     static IReadOnlyDictionary<string, TValue> CopyMap<TValue>(
         IDictionary<string, TValue> source)
         => new ReadOnlyDictionary<string, TValue>(

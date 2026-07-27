@@ -208,6 +208,7 @@ internal sealed class BoundaryChecker
 
     public void RequireCanDeclareDelegateSurface(ISymbol member, INamedTypeSymbol delegateType)
     {
+        EmitPolicy.RejectInParameters(delegateType.DelegateInvokeMethod);
         if (!DelegateAbi.IsProgramLocalSignature(
                 delegateType.DelegateInvokeMethod,
                 _ctx.Types,

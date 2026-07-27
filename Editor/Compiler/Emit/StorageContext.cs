@@ -225,14 +225,6 @@ public sealed class StorageContext
             { DefaultValue = 0 });
     }
 
-    public void SetFieldConstValue(string name, object value)
-    {
-        var field = _module.Fields.FirstOrDefault(f => f.Name == name);
-        if (field != null) field.DefaultValue = value;
-    }
-
-    public bool IsFieldDeclared(string name) => _declarations.ContainsKey(name);
-
     internal void DeclarePlannedField(FieldDecl declaration)
         => Declare(declaration ?? throw new ArgumentNullException(nameof(declaration)));
 

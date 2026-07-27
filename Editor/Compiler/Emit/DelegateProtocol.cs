@@ -113,23 +113,6 @@ internal static class DelegateAbi
                 + "are already identical.");
     }
 
-    public static void ValidateDelegateType(
-        INamedTypeSymbol delegateType)
-    {
-        var invoke = delegateType?.DelegateInvokeMethod;
-        if (invoke != null)
-            ValidateNoRefOutParams(invoke);
-    }
-
-    /// <summary>ref/out reject (§3.4-1) — shared by the creation path and the convention-var declaration path.</summary>
-    public static void ValidateNoRefOutParams(IMethodSymbol invoke)
-    {
-        foreach (var p in invoke.Parameters)
-            if (p.RefKind != RefKind.None)
-                throw new System.NotSupportedException(
-                    "Delegate types with ref/out parameters are not supported.");
-    }
-
     /// <summary>True when the convention carries a program-local user-class bundle. Such a signature
     /// may use the convention globals inside one program, but must never take the SPV/SCE cross-program
     /// dispatch arm.</summary>

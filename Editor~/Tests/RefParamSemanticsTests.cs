@@ -60,44 +60,42 @@ public class RecRef3 : UdonSharp.UdonSharpBehaviour {
     }
 
     // ── [Q3] `in` params: declaration-side loud reject ──
-    // RefKind.In was grep-zero in the compiler: an `in` param compiled as plain by-value, losing
-    // both the readonly alias (VM 1 vs CLR 5) and the defensive copy (VM 11 vs CLR 1).
+    // The flat-heap call ABI copies parameters by value. Accepting `in` would lose both the readonly
+    // alias (VM 1 vs CLR 5) and the defensive copy (VM 11 vs CLR 1).
 
     [Fact]
-    public void InParam_OnClassMethod_Compiles()
+    public void InParam_OnClassMethod_Throws()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
 public class InPar1 : UdonSharp.UdonSharpBehaviour {
     public int f; public int sum;
     void Start() { f = 1; M(in f); }
     public void M(in int x) { f = 5; sum = x; }
-}", "InPar1");
-        Assert.NotNull(uasm);
+}", "InPar1"));
+        Assert.Contains("'in' parameter", ex.Message);
     }
 
     [Fact]
-    public void InParam_OnStructMethod_Compiles()
+    public void InParam_OnStructMethod_Throws()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
 public struct InS { public int v; public void M(in int x) { v = x; } }
 public class InPar2 : UdonSharp.UdonSharpBehaviour {
     public int sum;
     void Start() { InS s = new InS(); s.M(in sum); sum = s.v; }
-}", "InPar2");
-        Assert.Contains(
-            "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid",
-            uasm);
+}", "InPar2"));
+        Assert.Contains("'in' parameter", ex.Message);
     }
 
     [Fact]
-    public void InParam_OnLocalFunction_Compiles()
+    public void InParam_OnLocalFunction_Throws()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.ThrowsAny<System.Exception>(() => TestHelper.CompileToUasm(@"
 public class InPar3 : UdonSharp.UdonSharpBehaviour {
     public int sum;
     void Start() { int L(in int x) { return x + 1; } sum = L(in sum); }
-}", "InPar3");
-        Assert.NotNull(uasm);
+}", "InPar3"));
+        Assert.Contains("'in' parameter", ex.Message);
     }
 
     [Fact]

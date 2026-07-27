@@ -108,12 +108,6 @@ public static class TypeClassifier
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
         => ShapeOf(type, ctx).ContainsUserClassPayload;
 
-    public static bool ContainsDelegate(ITypeSymbol type, TypeClassifierContext ctx)
-        => ShapeOf(type, ctx).ContainsDelegate;
-
-    public static bool ContainsOpaqueObject(ITypeSymbol type, TypeClassifierContext ctx)
-        => ShapeOf(type, ctx).ContainsOpaqueObject;
-
     public static bool IsUserClass(ITypeSymbol type)
         => ShapeOf(type, new TypeClassifierContext(null)).Bundle == RuntimeBundleKind.Class;
 

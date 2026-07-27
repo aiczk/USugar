@@ -610,19 +610,6 @@ public static class ClassAbi
                 + "to a field on the UdonSharpBehaviour class, or make it a `const`.");
     }
 
-    /// <summary>Reject static properties on a v1 user class.</summary>
-    public static void RejectStaticProperty(
-        IPropertySymbol property, bool containingTypeIsUserClass)
-    {
-        if (property.IsStatic
-            && property.ContainingType is INamedTypeSymbol classTy
-            && containingTypeIsUserClass)
-            throw new NotSupportedException(
-                $"Static property '{classTy.Name}.{property.Name}' on a v1 user class is not "
-                + "supported (only `const` and static methods are): move it to a static method, or to "
-                + "a field on the UdonSharpBehaviour class.");
-    }
-
     public static bool IsReferenceEquality(
         BinaryOperatorKind kind,
         bool leftIsUserClass,
@@ -658,23 +645,6 @@ public static class ClassAbi
             throw new NotSupportedException(
                 $"typeof(user-defined class '{type.Name}') is not supported: class ABI v1 gives "
                 + "a user class no CLR System.Type token, so the token cannot be resolved.");
-    }
-
-    public static void RejectDelegateBindingToInstanceMethod(
-        IMethodSymbol targetMethod, bool containingTypeIsUserClass)
-    {
-        // A lambda / local function hosted INSIDE a class member reports the class as its
-        // ContainingType too (Roslyn resolves up to the nearest named type), but it is a hoisted
-        // closure dispatched via its own bridge + env — not a receiver-dispatch target. Only a real
-        // named instance method is the unsupported B54-class shape.
-        if (targetMethod.MethodKind is MethodKind.LambdaMethod or MethodKind.LocalFunction) return;
-        if (!targetMethod.IsStatic
-            && targetMethod.ContainingType is INamedTypeSymbol classTy
-            && containingTypeIsUserClass)
-            throw new NotSupportedException(
-                $"A delegate cannot be created from v1 class instance method '{classTy.Name}.{targetMethod.Name}': "
-                + "a user class is not a dispatch target for the delegate ABI. Wrap the call in a lambda instead "
-                + $"('() => {targetMethod.Name}(...)' inside the class, '() => receiver.{targetMethod.Name}(...)' outside).");
     }
 
     /// <summary>Run instance field / auto-property initializers on an already allocated class bundle.</summary>
