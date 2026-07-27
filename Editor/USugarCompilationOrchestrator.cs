@@ -41,16 +41,35 @@ static class USugarCompilationOrchestrator
     internal sealed class CompilationUnit
     {
         public UnityCompilationAssembly UnityAssembly { get; }
+        public IReadOnlyList<UnityCompilationAssembly>
+            LinkedAssemblies { get; }
+        public IReadOnlyList<string> RootSourcePaths { get; }
         public IReadOnlyList<string> SourcePaths { get; }
+        public IReadOnlyDictionary<string, UnityCompilationAssembly>
+            SourceOwners { get; }
         public CSharpCompilation Compilation { get; set; }
         public CompilationSession Session { get; set; }
         public FrozenLayoutPlan Planner { get; set; }
         public IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)> Behaviours { get; set; }
 
-        public CompilationUnit(UnityCompilationAssembly unityAssembly, IReadOnlyList<string> sourcePaths)
+        public CompilationUnit(
+            UnityCompilationAssembly unityAssembly,
+            IReadOnlyList<UnityCompilationAssembly> linkedAssemblies,
+            IReadOnlyDictionary<string, UnityCompilationAssembly>
+                sourceOwners)
         {
             UnityAssembly = unityAssembly;
-            SourcePaths = sourcePaths;
+            LinkedAssemblies = linkedAssemblies;
+            SourceOwners = sourceOwners;
+            RootSourcePaths = unityAssembly.sourceFiles
+                .Where(USugarEditorIntegrationPolicy.IsCSharpSource)
+                .Select(NormalizeUnitySourcePath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            SourcePaths = sourceOwners.Keys
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
         }
     }
 
@@ -228,7 +247,8 @@ static class USugarCompilationOrchestrator
             {
                 unit.Compilation = BuildCompilation(unit);
                 unit.Session = new CompilationSession(unit.Compilation, externRegistry);
-                unit.Behaviours = CollectBehaviourDeclarations(unit.Compilation);
+                unit.Behaviours = CollectBehaviourDeclarations(
+                    unit.Compilation, unit.RootSourcePaths);
             }
             PruneTreeCache(compilationUnits.SelectMany(unit => unit.SourcePaths));
 
@@ -251,45 +271,6 @@ static class USugarCompilationOrchestrator
                     var message = diag.GetMessage();
                     USugarLog.Error($"{file}({line},{character}): {message}");
                     collectedDiagnostics.Add((file, line, character, message, "Error"));
-                }
-                LastCompileHadErrors = true;
-                return;
-            }
-
-            // A referenced project asmdef is metadata in this compilation. Its symbols have no
-            // usable source body/layout here, and treating them like SDK externs can silently drop
-            // inherited Udon members. Fail closed until cross-assembly source bodies are represented
-            // in one symbol/semantic-model universe.
-            var projectSourceAssemblyNames = new HashSet<string>(
-                CompilationPipeline.GetAssemblies(AssembliesType.Player)
-                    .Where(assembly => assembly.sourceFiles.Any(
-                        USugarEditorIntegrationPolicy.IsCSharpSource))
-                    .Select(assembly => assembly.name),
-                StringComparer.OrdinalIgnoreCase);
-            var crossAssemblyIssues = compilationUnits
-                .SelectMany(unit => CrossAssemblySourceGuard.FindIssues(
-                    unit.Compilation, projectSourceAssemblyNames,
-                    unit.Behaviours.Select(item => item.symbol))
-                    .Where(issue => RequiresCrossAssemblySource(issue.Symbol))
-                    .Select(issue => (unit, issue)))
-                .GroupBy(item => item.unit.UnityAssembly.name + "|" + item.issue.FilePath
-                    + "|" + item.issue.ReferencedAssembly, StringComparer.Ordinal)
-                .Select(group => group.First())
-                .ToArray();
-            if (crossAssemblyIssues.Length > 0)
-            {
-                foreach (var (unit, issue) in crossAssemblyIssues)
-                {
-                    var message =
-                        $"Runtime user symbol '{issue.SymbolName}' comes from Unity assembly "
-                        + $"'{issue.ReferencedAssembly}', but behaviour assembly "
-                        + $"'{unit.UnityAssembly.name}' cannot inline source bodies/layouts across asmdefs. "
-                        + "Keep each Udon behaviour, its user base classes, and runtime helper types "
-                        + "in the same asmdef.";
-                    USugarLog.Error(
-                        $"{issue.FilePath}({issue.Line},{issue.Character}): {message}");
-                    collectedDiagnostics.Add((
-                        issue.FilePath, issue.Line, issue.Character, message, "Error"));
                 }
                 LastCompileHadErrors = true;
                 return;
@@ -1033,12 +1014,20 @@ static class USugarCompilationOrchestrator
     }
 
     static IReadOnlyList<(INamedTypeSymbol symbol, SyntaxTree tree)>
-        CollectBehaviourDeclarations(CSharpCompilation compilation)
+        CollectBehaviourDeclarations(
+            CSharpCompilation compilation,
+            IEnumerable<string> rootSourcePaths)
     {
         var declarations = new List<(INamedTypeSymbol symbol, SyntaxTree tree)>();
         var seen = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
+        var roots = new HashSet<string>(
+            rootSourcePaths.Select(NormalizeUnitySourcePath),
+            StringComparer.OrdinalIgnoreCase);
         foreach (var tree in compilation.SyntaxTrees)
         {
+            if (!roots.Contains(
+                    NormalizeUnitySourcePath(tree.FilePath)))
+                continue;
             var model = compilation.GetSemanticModel(tree);
             foreach (var declaration in tree.GetRoot().DescendantNodes()
                 .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.ClassDeclarationSyntax>())
@@ -1051,15 +1040,6 @@ static class USugarCompilationOrchestrator
             }
         }
         return declarations;
-    }
-
-    static bool RequiresCrossAssemblySource(ISymbol symbol)
-    {
-        var type = symbol as INamedTypeSymbol ?? symbol?.ContainingType;
-        if (type == null || type.TypeKind == TypeKind.Enum) return false;
-        if (USugarCompilerHelper.IsFrameworkNamespace(type.ContainingNamespace))
-            return false;
-        return true;
     }
 
     internal static List<CompilationUnit> CollectCompilationUnits(
@@ -1093,15 +1073,64 @@ static class USugarCompilationOrchestrator
 
         return playerAssemblies
             .Where(assembly => behaviourAssemblyNames.Contains(assembly.name))
-            .Select(assembly => new CompilationUnit(assembly, assembly.sourceFiles
-                .Where(USugarEditorIntegrationPolicy.IsCSharpSource)
-                .Select(NormalizeUnitySourcePath)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .OrderBy(path => path, StringComparer.Ordinal)
-                .ToArray()))
+            .Select(CreateCompilationUnit)
             .Where(unit => unit.SourcePaths.Count > 0)
             .OrderBy(unit => unit.UnityAssembly.name, StringComparer.Ordinal)
             .ToList();
+    }
+
+    static CompilationUnit CreateCompilationUnit(
+        UnityCompilationAssembly root)
+    {
+        var linked = new List<UnityCompilationAssembly>();
+        var seen = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+
+        void Visit(UnityCompilationAssembly assembly)
+        {
+            if (assembly == null || !seen.Add(assembly.name))
+                return;
+            linked.Add(assembly);
+            foreach (var reference in assembly.assemblyReferences
+                         .OrderBy(
+                             item => item.name,
+                             StringComparer.Ordinal))
+                if (reference.sourceFiles.Any(
+                        USugarEditorIntegrationPolicy.IsCSharpSource))
+                    Visit(reference);
+        }
+
+        Visit(root);
+        var sourceOwners =
+            new Dictionary<string, UnityCompilationAssembly>(
+                StringComparer.OrdinalIgnoreCase);
+        foreach (var assembly in linked)
+            foreach (var path in assembly.sourceFiles
+                         .Where(
+                             USugarEditorIntegrationPolicy
+                                 .IsCSharpSource)
+                         .Select(NormalizeUnitySourcePath)
+                         .OrderBy(
+                             item => item,
+                             StringComparer.Ordinal))
+            {
+                if (sourceOwners.TryGetValue(
+                        path, out var owner)
+                    && !string.Equals(
+                        owner.name, assembly.name,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"Source '{path}' belongs to both "
+                        + $"'{owner.name}' and '{assembly.name}'.");
+                sourceOwners[path] = assembly;
+            }
+        return new CompilationUnit(
+            root,
+            linked.OrderBy(
+                    assembly => assembly.name,
+                    StringComparer.Ordinal)
+                .ToArray(),
+            sourceOwners);
     }
 
     static readonly Dictionary<string, (string sourceText, string defineKey, SyntaxTree tree)> _treeCache = new();
@@ -1124,16 +1153,18 @@ static class USugarCompilationOrchestrator
 
     internal static CSharpCompilation BuildCompilation(CompilationUnit unit)
     {
-        var defines = BuildPreprocessorDefines(unit.UnityAssembly);
-        var defineKey = unit.UnityAssembly.name + "\n"
-            + string.Join("\n", defines.OrderBy(d => d, StringComparer.Ordinal));
-        var parseOptions = new CSharpParseOptions(LanguageVersion.Latest)
-            .WithPreprocessorSymbols(defines);
-
         var trees = new SyntaxTree[unit.SourcePaths.Count];
         for (int i = 0; i < unit.SourcePaths.Count; i++)
         {
             var path = unit.SourcePaths[i];
+            var owner = unit.SourceOwners[path];
+            var defines = BuildPreprocessorDefines(owner);
+            var defineKey = owner.name + "\n"
+                + string.Join("\n", defines.OrderBy(
+                    define => define, StringComparer.Ordinal));
+            var parseOptions =
+                new CSharpParseOptions(LanguageVersion.Latest)
+                    .WithPreprocessorSymbols(defines);
             var sourceText = File.ReadAllText(path);
             if (_treeCache.TryGetValue(path, out var cached)
                 && cached.defineKey == defineKey
@@ -1148,7 +1179,19 @@ static class USugarCompilationOrchestrator
             }
         }
 
-        var referencePaths = GetMetadataReferencePaths(unit.UnityAssembly);
+        var linkedOutputs = new HashSet<string>(
+            unit.LinkedAssemblies
+                .Select(assembly => assembly.outputPath)
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Select(Path.GetFullPath),
+            StringComparer.OrdinalIgnoreCase);
+        var referencePaths = unit.LinkedAssemblies
+            .SelectMany(GetMetadataReferencePaths)
+            .Where(path => !linkedOutputs.Contains(
+                Path.GetFullPath(path)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
         var metadataReferences = referencePaths
             .Select(path => MetadataReference.CreateFromFile(path))
             .Cast<MetadataReference>()
