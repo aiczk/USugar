@@ -1,127 +1,408 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
 
 /// <summary>
-/// Finds runtime references from one Unity source assembly into another project-owned source
-/// assembly. Referenced DLL symbols do not carry bodies/layout syntax in the consuming Roslyn
-/// compilation, so treating them like SDK metadata can silently omit inherited Udon members.
+/// Reflection bridge between Inspector-side CLR data and compiler-owned object[] bundles. The codec
+/// preserves reference identity and cycles by allocating each destination before visiting its fields.
+/// Native/SDK leaves are supplied by the editor integration layer and pass through unchanged.
 /// </summary>
-public static class CrossAssemblySourceGuard
+internal static class BundleDataCodec
 {
-    public sealed class Issue
+    public static bool CanSerializeType(
+        Type type, Func<Type, bool> isNativeLeaf,
+        out string error)
     {
-        public string FilePath { get; }
-        public int Line { get; }
-        public int Character { get; }
-        public string ReferencedAssembly { get; }
-        public string SymbolName { get; }
-        public ISymbol Symbol { get; }
-
-        public Issue(string filePath, int line, int character,
-            string referencedAssembly, string symbolName, ISymbol symbol)
+        if (type == null)
+            throw new ArgumentNullException(nameof(type));
+        if (isNativeLeaf == null)
+            throw new ArgumentNullException(nameof(isNativeLeaf));
+        try
         {
-            FilePath = filePath ?? "";
-            Line = line;
-            Character = character;
-            ReferencedAssembly = referencedAssembly ?? "";
-            SymbolName = symbolName ?? "";
-            Symbol = symbol;
+            RequireSerializableType(
+                type, isNativeLeaf, new HashSet<Type>());
+            error = null;
+            return true;
+        }
+        catch (NotSupportedException ex)
+        {
+            error = ex.Message;
+            return false;
         }
     }
 
-    public static IReadOnlyList<Issue> FindIssues(
-        Compilation compilation,
-        ISet<string> projectSourceAssemblyNames,
-        IEnumerable<INamedTypeSymbol> rootTypes = null)
+    public static bool TryEncode(
+        object value, Type declaredType,
+        Func<Type, bool> isNativeLeaf,
+        out object encoded, out string error)
     {
-        if (compilation == null) throw new ArgumentNullException(nameof(compilation));
-        if (projectSourceAssemblyNames == null)
-            throw new ArgumentNullException(nameof(projectSourceAssemblyNames));
-
-        var currentAssembly = compilation.AssemblyName ?? "";
-        var issues = new List<Issue>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var pendingTypes = new Queue<INamedTypeSymbol>();
-        var seenTypes = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
-
-        if (rootTypes == null)
+        try
         {
-            foreach (var tree in compilation.SyntaxTrees)
-                ScanNode(tree.GetRoot());
+            encoded = Encode(
+                value, declaredType, isNativeLeaf,
+                new Dictionary<object, object[]>(
+                    ReferenceComparer.Instance));
+            error = null;
+            return true;
         }
-        else
+        catch (NotSupportedException ex)
         {
-            foreach (var type in rootTypes)
-                Enqueue(type);
-            while (pendingTypes.Count > 0)
+            encoded = null;
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    public static bool TryDecode(
+        object encoded, Type declaredType,
+        Func<Type, bool> isNativeLeaf,
+        out object value, out string error)
+    {
+        try
+        {
+            value = Decode(
+                encoded, declaredType, isNativeLeaf,
+                new Dictionary<object[], object>(
+                    ReferenceComparer.Instance));
+            error = null;
+            return true;
+        }
+        catch (NotSupportedException ex)
+        {
+            value = null;
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    static object Encode(
+        object value, Type declaredType,
+        Func<Type, bool> isNativeLeaf,
+        Dictionary<object, object[]> seen)
+    {
+        if (value == null) return null;
+        var runtimeType = value.GetType();
+        if (IsNative(runtimeType, isNativeLeaf))
+            return value;
+        if (typeof(Delegate).IsAssignableFrom(runtimeType))
+            throw Unsupported(runtimeType, "delegates carry executable state");
+
+        if (runtimeType.IsArray)
+            return EncodeArray(
+                (Array)value, runtimeType, isNativeLeaf, seen);
+        if (!IsDataBundle(runtimeType))
+            throw Unsupported(
+                runtimeType, "it is neither a native leaf nor serializable data");
+
+        if (!runtimeType.IsValueType
+            && seen.TryGetValue(value, out var prior))
+            return prior;
+
+        var fields = InstanceFields(runtimeType);
+        var bundle = new object[BundleAbi.HeaderSize + fields.Count];
+        bundle[BundleAbi.Type] = BundleAbi.RuntimeTypeId(
+            runtimeType, runtimeType.IsValueType
+                ? RuntimeBundleKind.Aggregate
+                : RuntimeBundleKind.Class);
+        if (!runtimeType.IsValueType) seen.Add(value, bundle);
+        for (var i = 0; i < fields.Count; i++)
+            bundle[BundleAbi.HeaderSize + i] = Encode(
+                fields[i].GetValue(value), fields[i].FieldType,
+                isNativeLeaf, seen);
+        return bundle;
+    }
+
+    static object EncodeArray(
+        Array source, Type arrayType,
+        Func<Type, bool> isNativeLeaf,
+        Dictionary<object, object[]> seen)
+    {
+        var elementType = arrayType.GetElementType();
+        if (arrayType.GetArrayRank() == 1)
+        {
+            if (IsNative(elementType, isNativeLeaf))
+                return source;
+            if (seen.TryGetValue(source, out var prior))
+                return prior;
+            var encoded = new object[source.Length];
+            seen.Add(source, encoded);
+            for (var i = 0; i < source.Length; i++)
+                encoded[i] = Encode(
+                    source.GetValue(i), elementType,
+                    isNativeLeaf, seen);
+            return encoded;
+        }
+
+        if (seen.TryGetValue(source, out var existing))
+            return existing;
+        var rank = source.Rank;
+        var bundle = new object[
+            BundleAbi.HeaderSize + 1 + rank];
+        seen.Add(source, bundle);
+        bundle[BundleAbi.Type] = BundleAbi.RuntimeTypeId(
+            arrayType, RuntimeBundleKind.MultiDimensionalArray);
+        var backing = IsNative(elementType, isNativeLeaf)
+            ? Array.CreateInstance(elementType, source.Length)
+            : (Array)new object[source.Length];
+        bundle[BundleAbi.HeaderSize] = backing;
+        for (var dimension = 0; dimension < rank; dimension++)
+            bundle[BundleAbi.HeaderSize + 1 + dimension] =
+                source.GetLength(dimension);
+        var flat = 0;
+        foreach (var element in source)
+            backing.SetValue(
+                Encode(element, elementType, isNativeLeaf, seen),
+                flat++);
+        return bundle;
+    }
+
+    static object Decode(
+        object encoded, Type declaredType,
+        Func<Type, bool> isNativeLeaf,
+        Dictionary<object[], object> seen)
+    {
+        if (encoded == null) return null;
+        if (IsNative(declaredType, isNativeLeaf))
+            return encoded;
+        if (declaredType.IsArray
+            && declaredType.GetArrayRank() == 1
+            && IsNative(
+                declaredType.GetElementType(), isNativeLeaf))
+            return encoded;
+        if (encoded is not object[] bundle)
+            throw Unsupported(
+                declaredType, "the stored value has no USugar bundle header");
+        if (seen.TryGetValue(bundle, out var prior))
+            return prior;
+
+        var runtimeType = ResolveRuntimeType(
+            bundle, declaredType, isNativeLeaf);
+        if (runtimeType.IsArray)
+            return DecodeArray(
+                bundle, runtimeType, isNativeLeaf, seen);
+        if (!IsDataBundle(runtimeType))
+            throw Unsupported(
+                runtimeType, "the runtime identity is not data-only");
+
+        var value = runtimeType.IsValueType
+            ? Activator.CreateInstance(runtimeType)
+#pragma warning disable SYSLIB0050
+            : FormatterServices.GetUninitializedObject(runtimeType);
+#pragma warning restore SYSLIB0050
+        seen.Add(bundle, value);
+        var fields = InstanceFields(runtimeType);
+        if (bundle.Length != BundleAbi.HeaderSize + fields.Count)
+            throw Unsupported(
+                runtimeType,
+                $"stored slot count {bundle.Length} does not match "
+                + $"layout {BundleAbi.HeaderSize + fields.Count}");
+        for (var i = 0; i < fields.Count; i++)
+            fields[i].SetValue(
+                value,
+                Decode(
+                    bundle[BundleAbi.HeaderSize + i],
+                    fields[i].FieldType,
+                    isNativeLeaf, seen));
+        return value;
+    }
+
+    static object DecodeArray(
+        object[] encoded, Type runtimeType,
+        Func<Type, bool> isNativeLeaf,
+        Dictionary<object[], object> seen)
+    {
+        var elementType = runtimeType.GetElementType();
+        if (runtimeType.GetArrayRank() == 1)
+        {
+            var result = Array.CreateInstance(
+                elementType, encoded.Length);
+            seen.Add(encoded, result);
+            for (var i = 0; i < encoded.Length; i++)
+                result.SetValue(
+                    Decode(
+                        encoded[i], elementType,
+                        isNativeLeaf, seen),
+                    i);
+            return result;
+        }
+
+        var rank = runtimeType.GetArrayRank();
+        if (encoded.Length != BundleAbi.HeaderSize + 1 + rank
+            || encoded[BundleAbi.HeaderSize] is not Array backing)
+            throw Unsupported(
+                runtimeType, "the multidimensional array header is malformed");
+        var dimensions = new int[rank];
+        for (var i = 0; i < rank; i++)
+            dimensions[i] = Convert.ToInt32(
+                encoded[BundleAbi.HeaderSize + 1 + i]);
+        var resultArray = Array.CreateInstance(
+            elementType, dimensions);
+        seen.Add(encoded, resultArray);
+        var indices = new int[rank];
+        for (var flat = 0; flat < backing.Length; flat++)
+        {
+            var remainder = flat;
+            for (var d = rank - 1; d >= 0; d--)
             {
-                var type = pendingTypes.Dequeue();
-                Enqueue(type.BaseType);
-                foreach (var iface in type.Interfaces)
-                    Enqueue(iface);
-                foreach (var syntax in type.DeclaringSyntaxReferences)
-                    ScanNode(syntax.GetSyntax());
+                indices[d] = remainder % dimensions[d];
+                remainder /= dimensions[d];
+            }
+            resultArray.SetValue(
+                Decode(
+                    backing.GetValue(flat), elementType,
+                    isNativeLeaf, seen),
+                indices);
+        }
+        return resultArray;
+    }
+
+    static Type ResolveRuntimeType(
+        object[] bundle, Type declaredType,
+        Func<Type, bool> isNativeLeaf)
+    {
+        if (bundle.Length <= BundleAbi.Type
+            || bundle[BundleAbi.Type] is not string runtimeTypeId)
+            throw Unsupported(
+                declaredType, "the stored bundle has no runtime identity");
+        if (!declaredType.IsAbstract
+            && !declaredType.IsInterface
+            && declaredType != typeof(object))
+        {
+            var declaredKind = declaredType.IsArray
+                && declaredType.GetArrayRank() > 1
+                    ? RuntimeBundleKind.MultiDimensionalArray
+                    : declaredType.IsValueType
+                        ? RuntimeBundleKind.Aggregate
+                        : RuntimeBundleKind.Class;
+            if (BundleAbi.RuntimeTypeId(
+                    declaredType, declaredKind)
+                == runtimeTypeId)
+                return declaredType;
+        }
+        foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            foreach (var candidate in LoadableTypes(assembly))
+            {
+                if (candidate == null
+                    || IsNative(candidate, isNativeLeaf)
+                    || typeof(Delegate).IsAssignableFrom(candidate)
+                    || !declaredType.IsAssignableFrom(candidate))
+                    continue;
+                var kind = candidate.IsArray
+                    && candidate.GetArrayRank() > 1
+                        ? RuntimeBundleKind.MultiDimensionalArray
+                        : candidate.IsValueType
+                            ? RuntimeBundleKind.Aggregate
+                            : RuntimeBundleKind.Class;
+                if (BundleAbi.RuntimeTypeId(candidate, kind)
+                    == runtimeTypeId)
+                    return candidate;
             }
         }
+        throw Unsupported(
+            declaredType,
+            $"runtime identity '{runtimeTypeId}' is not loadable");
+    }
 
-        return issues
-            .OrderBy(issue => issue.FilePath, StringComparer.Ordinal)
-            .ThenBy(issue => issue.Line)
-            .ThenBy(issue => issue.Character)
-            .ToArray();
+    static IReadOnlyList<FieldInfo> InstanceFields(Type type)
+    {
+        var chain = new Stack<Type>();
+        for (var current = type;
+             current != null && current != typeof(object);
+             current = current.BaseType)
+            chain.Push(current);
+        var fields = new List<FieldInfo>();
+        while (chain.Count > 0)
+            fields.AddRange(
+                chain.Pop()
+                    .GetFields(
+                        BindingFlags.Instance
+                        | BindingFlags.Public
+                        | BindingFlags.NonPublic
+                        | BindingFlags.DeclaredOnly)
+                    .Where(field => !field.IsStatic
+                                    && !field.IsLiteral)
+                    .OrderBy(field => field.MetadataToken));
+        return fields;
+    }
 
-        void Enqueue(INamedTypeSymbol type)
+    static bool IsDataBundle(Type type)
+        => type.IsValueType
+           || type.IsClass
+              && type != typeof(string)
+              && !typeof(Delegate).IsAssignableFrom(type);
+
+    static void RequireSerializableType(
+        Type type, Func<Type, bool> isNativeLeaf,
+        HashSet<Type> seen)
+    {
+        if (IsNative(type, isNativeLeaf)) return;
+        if (type.IsPointer || type.IsByRef
+            || type.ContainsGenericParameters)
+            throw Unsupported(type, "the declared type is open or unmanaged");
+        if (typeof(Delegate).IsAssignableFrom(type))
+            throw Unsupported(type, "delegates carry executable state");
+        if (type == typeof(object)
+            || type.IsInterface || type.IsAbstract)
+            return;
+        if (type.IsArray)
         {
-            type = type?.OriginalDefinition;
-            if (type == null
-                || !string.Equals(type.ContainingAssembly?.Identity.Name, currentAssembly,
-                    StringComparison.OrdinalIgnoreCase)
-                || type.DeclaringSyntaxReferences.Length == 0
-                || !seenTypes.Add(type))
-                return;
-            pendingTypes.Enqueue(type);
+            RequireSerializableType(
+                type.GetElementType(), isNativeLeaf, seen);
+            return;
         }
+        if (!IsDataBundle(type))
+            throw Unsupported(
+                type, "it is neither a native leaf nor serializable data");
+        if (!seen.Add(type)) return;
+        foreach (var field in InstanceFields(type))
+            RequireSerializableType(
+                field.FieldType, isNativeLeaf, seen);
+    }
 
-        void ScanNode(SyntaxNode root)
+    static bool IsNative(
+        Type type, Func<Type, bool> isNativeLeaf)
+        => type.IsPrimitive || type.IsEnum
+           || type == typeof(string)
+           || type == typeof(decimal)
+           || isNativeLeaf(type);
+
+    static IEnumerable<Type> LoadableTypes(Assembly assembly)
+    {
+        try
         {
-            var model = compilation.GetSemanticModel(root.SyntaxTree);
-            foreach (var name in root.DescendantNodesAndSelf()
-                .Where(node => node is IdentifierNameSyntax or GenericNameSyntax))
-            {
-                // Attributes are metadata-only consumers; their implementation body is never emitted
-                // into the Udon program. Namespace imports likewise carry no runtime implementation.
-                if (name.AncestorsAndSelf().Any(node =>
-                    node is AttributeSyntax or UsingDirectiveSyntax))
-                    continue;
-
-                var info = model.GetSymbolInfo(name);
-                var symbol = info.Symbol ?? info.CandidateSymbols.FirstOrDefault();
-                if (symbol is IAliasSymbol alias) symbol = alias.Target;
-                var referencedAssembly = symbol?.ContainingAssembly?.Identity.Name;
-                if (string.IsNullOrEmpty(referencedAssembly)) continue;
-                if (string.Equals(referencedAssembly, currentAssembly,
-                    StringComparison.OrdinalIgnoreCase))
-                {
-                    Enqueue(symbol as INamedTypeSymbol ?? symbol.ContainingType);
-                    continue;
-                }
-                if (!projectSourceAssemblyNames.Contains(referencedAssembly)) continue;
-
-                var span = name.GetLocation().GetLineSpan();
-                var key = span.Path + "|" + span.StartLinePosition.Line + "|"
-                    + span.StartLinePosition.Character + "|" + referencedAssembly;
-                if (!seen.Add(key)) continue;
-                issues.Add(new Issue(
-                    span.Path,
-                    span.StartLinePosition.Line + 1,
-                    span.StartLinePosition.Character + 1,
-                    referencedAssembly,
-                    symbol.ToDisplayString(SymbolDisplayFormat.CSharpErrorMessageFormat),
-                    symbol));
-            }
+            return assembly.GetTypes();
         }
+        catch (ReflectionTypeLoadException ex)
+        {
+            return ex.Types.Where(type => type != null);
+        }
+    }
+
+    static NotSupportedException Unsupported(
+        Type type, string reason)
+        => new NotSupportedException(
+            $"'{type?.FullName ?? "<unknown>"}' cannot be serialized "
+            + $"as a USugar data bundle: {reason}.");
+
+    sealed class ReferenceComparer
+        : IEqualityComparer<object>, IEqualityComparer<object[]>
+    {
+        public static readonly ReferenceComparer Instance = new();
+
+        bool IEqualityComparer<object>.Equals(
+            object x, object y) => ReferenceEquals(x, y);
+
+        int IEqualityComparer<object>.GetHashCode(object obj)
+            => RuntimeHelpers.GetHashCode(obj);
+
+        bool IEqualityComparer<object[]>.Equals(
+            object[] x, object[] y) => ReferenceEquals(x, y);
+
+        int IEqualityComparer<object[]>.GetHashCode(object[] obj)
+            => RuntimeHelpers.GetHashCode(obj);
     }
 }

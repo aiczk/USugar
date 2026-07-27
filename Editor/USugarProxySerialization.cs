@@ -19,7 +19,12 @@ static class USugarProxySerialization
         var behaviour = RequireBinding(
             USugarReflectionTargets.HeapStorageBehaviour,
             nameof(USugarReflectionTargets.HeapStorageBehaviour)).GetValue(heapStorage) as UdonBehaviour;
-        return TryCreateStorage(behaviour, fieldName, out storage);
+        return TryCreateStorage(
+            behaviour, fieldName,
+            () => heapStorage.GetElementValueWeak(fieldName),
+            value => heapStorage.SetElementValueWeak(
+                fieldName, value),
+            out storage);
     }
 
     internal static bool TryCreateStorage(
@@ -30,12 +35,19 @@ static class USugarProxySerialization
         var behaviour = RequireBinding(
             USugarReflectionTargets.VariableStorageBehaviour,
             nameof(USugarReflectionTargets.VariableStorageBehaviour)).GetValue(variableStorage) as UdonBehaviour;
-        return TryCreateStorage(behaviour, fieldName, out storage);
+        return TryCreateStorage(
+            behaviour, fieldName,
+            () => variableStorage.GetElementValueWeak(fieldName),
+            value => variableStorage.SetElementValueWeak(
+                fieldName, value),
+            out storage);
     }
 
     static bool TryCreateStorage(
         UdonBehaviour behaviour,
         string fieldName,
+        Func<object> read,
+        Action<object> write,
         out IValueStorage storage)
     {
         storage = null;
@@ -50,6 +62,17 @@ static class USugarProxySerialization
                 + "Refusing to pass an object[] ABI field to the stock UdonSharp serializer.");
         if (!RequiresOpaqueStorage(proxyType, definition.SystemType))
             return false;
+        if (BundleDataCodec.CanSerializeType(
+                proxyType, IsNativeLeaf, out _))
+        {
+            storage = (IValueStorage)Activator.CreateInstance(
+                typeof(BundleProxyStorage<>).MakeGenericType(proxyType),
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                args: new object[] { read, write },
+                culture: null);
+            return true;
+        }
         storage = (IValueStorage)Activator.CreateInstance(
             typeof(OpaqueProxyStorage<>).MakeGenericType(proxyType),
             nonPublic: true);
@@ -61,23 +84,34 @@ static class USugarProxySerialization
         return USugarEditorIntegrationPolicy.RequiresOpaqueObjectArrayStorage(
             proxyType,
             systemType,
-            type =>
-            {
-                try
-                {
-                    return RequireBinding(
+            IsExternType,
+            type => typeof(UdonSharpBehaviour).IsAssignableFrom(type));
+    }
+
+    internal static bool CanSerializeDataBundle(
+        Type proxyType, out string error)
+        => BundleDataCodec.CanSerializeType(
+            proxyType, IsNativeLeaf, out error);
+
+    static bool IsNativeLeaf(Type type)
+        => type.IsEnum
+           || typeof(UdonSharpBehaviour)
+               .IsAssignableFrom(type)
+           || IsExternType(type);
+
+    static bool IsExternType(Type type)
+    {
+        try
+        {
+            return RequireBinding(
                     USugarReflectionTargets.IsExternTypeMethod,
                     nameof(USugarReflectionTargets.IsExternTypeMethod))
-                        .Invoke(null, new object[] { type }) as bool? == true;
-                }
-                catch
-                {
-                    // A failed SDK probe is handled conservatively: isolate the field instead of
-                    // letting UdonSharp write CLR objects into a USugar ABI bundle.
-                    return false;
-                }
-            },
-            type => typeof(UdonSharpBehaviour).IsAssignableFrom(type));
+                .Invoke(null, new object[] { type }) as bool? == true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     static bool TryGetProxyFieldType(
@@ -120,6 +154,41 @@ static class USugarProxySerialization
         {
             get => default;
             set { }
+        }
+    }
+
+    sealed class BundleProxyStorage<T> : ValueStorage<T>
+    {
+        readonly Func<object> _read;
+        readonly Action<object> _write;
+
+        BundleProxyStorage(
+            Func<object> read, Action<object> write)
+        {
+            _read = read
+                ?? throw new ArgumentNullException(nameof(read));
+            _write = write
+                ?? throw new ArgumentNullException(nameof(write));
+        }
+
+        public override T Value
+        {
+            get
+            {
+                if (!BundleDataCodec.TryDecode(
+                        _read(), typeof(T), IsNativeLeaf,
+                        out var value, out var error))
+                    throw new InvalidOperationException(error);
+                return value == null ? default : (T)value;
+            }
+            set
+            {
+                if (!BundleDataCodec.TryEncode(
+                        value, typeof(T), IsNativeLeaf,
+                        out var encoded, out var error))
+                    throw new InvalidOperationException(error);
+                _write(encoded);
+            }
         }
     }
 }

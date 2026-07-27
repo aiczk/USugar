@@ -201,10 +201,13 @@ static class USugarTypeCacheManager
         if (!isSerialized
             || !USugarProxySerialization.RequiresOpaqueStorage(userType, systemType))
             return;
+        if (USugarProxySerialization.CanSerializeDataBundle(
+                userType, out var codecError))
+            return;
         throw new InvalidOperationException(
-            $"Serialized field '{fieldName}' uses USugar's opaque object[] ABI and cannot "
-            + "round-trip through the standard UdonSharp proxy/Inspector. Mark it "
-            + "[NonSerialized] and initialize it at runtime.");
+            $"Serialized field '{fieldName}' cannot round-trip through USugar's tagged "
+            + $"bundle serializer. {codecError} Mark it [NonSerialized] and initialize "
+            + "it at runtime.");
     }
 
     static List<Attribute> GetRuntimeAttributes(ISymbol symbol)
