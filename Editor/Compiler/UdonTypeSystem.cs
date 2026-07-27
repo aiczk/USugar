@@ -223,8 +223,6 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         }
         if (type is INamedTypeSymbol { DelegateInvokeMethod: not null })
             return UdonRepresentationKind.ObjectArrayBundle;
-        if (TypeClassifier.IsIteratorProtocol(type))
-            return UdonRepresentationKind.ObjectArrayBundle;
         if (type is INamedTypeSymbol nullable
             && nullable.OriginalDefinition.SpecialType
             == SpecialType.System_Nullable_T)

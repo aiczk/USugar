@@ -67,8 +67,8 @@ public class LanguageSurfaceTests
     // Designed non-VM rejects (documented boundary, loud message exists).
     static readonly OperationKind[] DocumentedReject =
     {
-        // Empty: `with` and iterator yield nodes are first-class handled
-        // operations; remaining rejects are sub-kind semantic boundaries.
+        OperationKind.YieldReturn,
+        OperationKind.YieldBreak,
     };
 
     // Out of scope: VB-only, CFG-lowered-only (never in a semantic-model tree), above C# 9,

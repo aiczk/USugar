@@ -92,6 +92,11 @@ internal sealed class CallableRegistrar
         if (plan?.Method == null || plan.FunctionName == null)
             throw new ArgumentException("A callable layout requires a method and function name.");
         EmitPolicy.RejectInParameters(plan.Method);
+        if (ContainsYield(plan.Method))
+            throw new NotSupportedException(
+                $"Iterator method '{plan.Method.Name}' is not supported: "
+                + "Udon has no resumable call frame with C# iterator semantics. "
+                + "Return a materialized collection and enumerate it normally.");
         var slot = _context.Methods.Reserve(plan.SlotPrefix);
         var index = slot.Index;
         var name = plan.FunctionName(index);
@@ -142,12 +147,6 @@ internal sealed class CallableRegistrar
                 returns, plan.Receiver, plan.Layout,
                 deferredBody);
 
-        if (ContainsYield(plan.Method))
-            _context.Methods.AddIteratorPlan(
-                callable,
-                $"__iter_{index}_{Sanitize(plan.Method.Name)}",
-                $"__iter_bundle_{index}",
-                $"__iter_result_{index}");
         return callable;
     }
 
@@ -164,9 +163,6 @@ internal sealed class CallableRegistrar
                             or AccessorDeclarationSyntax
                             or AnonymousFunctionExpressionSyntax),
                     declaration)));
-
-    static string Sanitize(string value)
-        => NameAllocator.Sanitize(value);
 
     public void Materialize(BoundProgram program)
     {
@@ -216,33 +212,5 @@ internal sealed class CallableRegistrar
                 callable, function);
         }
 
-        foreach (var iterator in program.IteratorPlans)
-        {
-            var function = _context.Module.AddFunction(
-                iterator.ResumeName);
-            _context.Storage.DeclareVar(
-                iterator.BundleParamId,
-                StorageTypes.ObjectArray);
-            function.ParamFieldNames.Add(
-                iterator.BundleParamId);
-            _context.Storage.DeclareVar(
-                iterator.ReturnId,
-                StorageTypes.Boolean);
-            function.ReturnSlots.Add(
-                new ReturnSlot(
-                    iterator.ReturnId,
-                    StorageTypes.Boolean));
-            function.ReturnType = StorageTypes.Boolean;
-            for (var i = 0;
-                 i < iterator.FrameParamIds.Length;
-                 i++)
-                _context.Storage.DeclareVar(
-                    iterator.FrameParamIds[i],
-                    iterator.FrameParamTypes[i]);
-            if (iterator.FrameReceiverId != null)
-                _context.Storage.DeclareVar(
-                    iterator.FrameReceiverId,
-                    StorageTypes.ObjectArray);
-        }
     }
 }

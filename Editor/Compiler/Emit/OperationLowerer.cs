@@ -178,8 +178,6 @@ internal sealed class OperationLowerer
                 or OperationKind.VariableDeclarationGroup
                 or OperationKind.Conditional
                 or OperationKind.Return
-                or OperationKind.YieldReturn
-                or OperationKind.YieldBreak
                 or OperationKind.Branch
                 or OperationKind.Labeled
                 or OperationKind.LocalFunction

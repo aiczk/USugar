@@ -80,69 +80,6 @@ public sealed class MethodContext
         }
     }
 
-    public sealed class IteratorPlan
-    {
-        public readonly RegisteredCallable Factory;
-        public readonly string ResumeName;
-        public readonly string BundleParamId;
-        public readonly string ReturnId;
-        public readonly ImmutableArray<string> FrameParamIds;
-        public readonly ImmutableArray<StorageType> FrameParamTypes;
-        public readonly string FrameReceiverId;
-        public readonly string RuntimeTypeId;
-        public readonly ITypeSymbol ElementType;
-        public readonly bool IsEnumerable;
-
-        internal IteratorPlan(
-            RegisteredCallable factory,
-            string resumeName,
-            string bundleParamId,
-            string returnId)
-        {
-            Factory = factory
-                ?? throw new ArgumentNullException(nameof(factory));
-            ResumeName = resumeName
-                ?? throw new ArgumentNullException(nameof(resumeName));
-            BundleParamId = bundleParamId
-                ?? throw new ArgumentNullException(nameof(bundleParamId));
-            ReturnId = returnId
-                ?? throw new ArgumentNullException(nameof(returnId));
-            FrameParamIds = factory.ParamStorageTypes
-                .Select((_, ordinal) =>
-                    $"__iter_arg_{factory.Slot.Index}_{ordinal}")
-                .ToImmutableArray();
-            FrameParamTypes = factory.ParamStorageTypes;
-            FrameReceiverId = factory.ReceiverFieldId == null
-                ? null
-                : $"__iter_this_{factory.Slot.Index}";
-
-            var method = factory.Definition;
-            var returnType = method.ReturnType as INamedTypeSymbol
-                ?? throw new ArgumentException(
-                    $"Iterator '{method}' has a non-named return type.");
-            IsEnumerable = returnType.Name == "IEnumerable";
-            ElementType = returnType.IsGenericType
-                ? returnType.TypeArguments[0]
-                : returnType.ContainingAssembly
-                    .GetTypeByMetadataName("System.Object")
-                  ?? throw new ArgumentException(
-                      "The iterator protocol assembly has no System.Object type.");
-            RuntimeTypeId = "usugar-iterator:"
-                + ClassTypeObjectContext.SpecKey(method.ContainingType)
-                + "::" + method.MetadataName
-                + "(" + string.Join(",",
-                    method.Parameters.Select(parameter =>
-                        ClassTypeObjectContext.SpecKey(parameter.Type)))
-                + ")";
-        }
-
-        public string EnvironmentFrameParamId
-            => Factory is ClosureSpec
-               && FrameParamIds.Length > Factory.Definition.Parameters.Length
-                ? FrameParamIds[FrameParamIds.Length - 1]
-                : null;
-    }
-
     readonly Dictionary<IMethodSymbol, RegisteredCallable> _callables =
         new(SymbolEqualityComparer.Default);
     readonly Dictionary<IMethodSymbol, FlatFunction> _functions =
@@ -151,14 +88,11 @@ public sealed class MethodContext
         _functionsByCallable = new();
     readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
     readonly List<RegisteredCallableBody> _registeredBodies = new();
-    readonly List<IteratorPlan> _iteratorPlans = new();
     bool _callableRegistryFrozen;
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
     public IReadOnlyDictionary<IMethodSymbol, FlatFunction> Functions
         => _functions;
-    public IReadOnlyList<IteratorPlan> IteratorPlans
-        => _iteratorPlans;
     public IReadOnlyDictionary<IMethodSymbol, MethodSlot> Slots { get; }
     public IReadOnlyDictionary<IMethodSymbol, ReturnSlot[]> Returns { get; }
     public IReadOnlyDictionary<IMethodSymbol, string[]> ParamVarIds { get; }
@@ -213,22 +147,6 @@ public sealed class MethodContext
         _registeredBodies.Add(
             new RegisteredCallableBody(callable, null));
         return callable;
-    }
-
-    public void AddIteratorPlan(
-        RegisteredCallable factory,
-        string resumeName,
-        string bundleParamId,
-        string returnId)
-    {
-        RequireMutableRegistry();
-        if (!TypeClassifier.IsIteratorProtocol(
-                factory?.Definition?.ReturnType))
-            throw new ArgumentException(
-                "Only iterator-protocol methods can own iterator plans.",
-                nameof(factory));
-        _iteratorPlans.Add(new IteratorPlan(
-            factory, resumeName, bundleParamId, returnId));
     }
 
     sealed class CallableProjection<T> : IReadOnlyDictionary<IMethodSymbol, T>

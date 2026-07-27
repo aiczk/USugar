@@ -1110,7 +1110,6 @@ public sealed class UasmEmitter
         var program = new BoundProgram(
             callables,
             callableBodies,
-            _state.Methods.IteratorPlans,
             fields,
             closureIdentities,
             captures,
@@ -1725,8 +1724,6 @@ public sealed class UasmEmitter
             if (body.Callable.IsDeferredBody)
                 EmitMethod(body);
 
-        EmitIteratorResumes(plan);
-
         _state.VerifySyntheticEmissionComplete();
 
         // Emit pending delegate bridges for hoisted lambdas/local functions
@@ -1757,136 +1754,6 @@ public sealed class UasmEmitter
 
         // §5.5 (graft #2): now that every capturing bridge is registered, assert each has a graph node.
         RecursionAnalysis.VerifyBridgeTargetsAreNodes();
-    }
-
-    void EmitIteratorResumes(BoundProgram program)
-    {
-        foreach (var iterator in program.IteratorPlans)
-        {
-            var body = program.CallableBodies.First(candidate =>
-                ReferenceEquals(
-                    candidate.Callable,
-                    iterator.Factory));
-            var method = body.Method;
-            var boundBody = program.MethodBodies.Require(
-                method.OriginalDefinition);
-            var function = _module.RequireFunction(
-                iterator.ResumeName);
-            _builder.SetFunction(function);
-
-            using var methodScope =
-                _state.Methods.EnterCallableScope(
-                    method,
-                    body.Closure,
-                    iterator.FrameReceiverId,
-                    body.OwnerSpecs);
-            using var bindingScope =
-                _state.EnterBindingScope(
-                    body.BindingScope);
-            using var typeScope =
-                body.TypeParameterMap != null
-                    ? _state.EnterTypeParamScope(
-                        body.TypeParameterMap)
-                    : null;
-
-            var states = boundBody.Root
-                .DescendantsAndSelf()
-                .OfType<IReturnOperation>()
-                .Where(operation =>
-                    operation.Kind
-                    == OperationKind.YieldReturn)
-                .Select((operation, index) =>
-                    (operation.Syntax, State: index + 1))
-                .ToDictionary(
-                    pair => pair.Syntax,
-                    pair => pair.State);
-
-            if (_state.CurrentIteratorPlan != null)
-                throw new InvalidOperationException(
-                    "Iterator resume emission was nested.");
-            _state.CurrentIteratorPlan = iterator;
-            _state.CurrentIteratorStates = states;
-            _state.CurrentIteratorBundle = _bridge.Load(
-                iterator.BundleParamId,
-                StorageTypes.ObjectArray);
-            try
-            {
-                _lowering.EmitIteratorEntryDispatch(
-                    iterator, states);
-
-                CaptureScope entryScope = null;
-                if (_state.Captures != null)
-                {
-                    if (IsHoistedClosureMethod(method))
-                        _state.Captures.ClosureScopes.TryGetValue(
-                            method.OriginalDefinition,
-                            out entryScope);
-                    else
-                        entryScope = _state.Captures.ScopeFor(
-                            boundBody.Root,
-                            CaptureScopeKind.MethodEntry);
-                }
-                EnvEmit.Alloc(
-                    _builder, _state, entryScope);
-
-                if (_state.Captures != null)
-                    foreach (var parameter in method.Parameters)
-                        if (parameter.Ordinal
-                                < iterator.FrameParamIds.Length
-                            && _state.TryGetEnvBinding(
-                                parameter, out _))
-                            EnvEmit.Write(
-                                _builder, _state, parameter,
-                                _bridge.Load(
-                                    iterator.FrameParamIds[
-                                        parameter.Ordinal],
-                                    GetStorageType(
-                                        parameter.Type)));
-
-                if (_state.Captures != null
-                    && iterator.FrameReceiverId != null
-                    && LambdaCaptureAnalyzer
-                        .ReceiverCaptureKey(method)
-                        is { } receiverKey
-                    && _state.TryGetEnvBinding(
-                        receiverKey, out _))
-                    EnvEmit.Write(
-                        _builder, _state, receiverKey,
-                        _bridge.Load(
-                            iterator.FrameReceiverId,
-                            StorageTypes.ObjectArray));
-
-                if (boundBody.Root
-                    is IMethodBodyOperation methodBody)
-                {
-                    if (methodBody.BlockBody != null)
-                        _operations.VisitOperation(
-                            methodBody.BlockBody);
-                    else if (methodBody.ExpressionBody != null)
-                        _operations.VisitOperation(
-                            methodBody.ExpressionBody);
-                }
-                else if (boundBody.Root
-                         is ILocalFunctionOperation localFunction)
-                {
-                    if (localFunction.Body != null)
-                        _operations.VisitOperation(
-                            localFunction.Body);
-                }
-                else
-                    throw new NotSupportedException(
-                        $"Iterator body '{boundBody.Root.Kind}' "
-                        + "is not a method or local function.");
-
-                _lowering.EmitIteratorComplete();
-            }
-            finally
-            {
-                _state.CurrentIteratorBundle = null;
-                _state.CurrentIteratorStates = null;
-                _state.CurrentIteratorPlan = null;
-            }
-        }
     }
 
     static string SanitizeId(string name) => NameAllocator.Sanitize(name);
@@ -1948,20 +1815,6 @@ public sealed class UasmEmitter
 
         // Registration owns the complete specialization environment. Emission only installs it.
         var typeMap = body.TypeParameterMap;
-
-        var iteratorFactory = _state.Program.IteratorPlans
-            .FirstOrDefault(plan =>
-                ReferenceEquals(plan.Factory, callable));
-        if (iteratorFactory != null)
-        {
-            using var iteratorTypeScope = typeMap != null
-                ? _state.EnterTypeParamScope(typeMap)
-                : null;
-            _builder.EmitReturn(
-                _lowering.EmitIteratorFactory(
-                    iteratorFactory));
-            return;
-        }
 
         // Get method body IOperation
         var boundBody = _state.Program.MethodBodies.Require(

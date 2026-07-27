@@ -19,14 +19,6 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitPropertyReference(IPropertyReferenceOperation op)
     {
-        if (op.Instance != null
-            && op.Property.Name == "Current"
-            && _lowering.IsIteratorProtocol(
-                _lowering.ResolveType(op.Instance.Type)))
-            return _lowering.EmitIteratorCurrent(
-                _lowering.VisitExpression(op.Instance),
-                op.Property.Type);
-
         var boundGetterSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.PropertyGet);
         var boundGetter = boundGetterSite.Callable.Site.Target;

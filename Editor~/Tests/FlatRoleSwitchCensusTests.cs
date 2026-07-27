@@ -24,7 +24,7 @@ public class FlatRoleSwitchCensusTests
     static readonly Dictionary<int, int> EmptyMap = new();
     static readonly HashSet<string> NoNames = new();
 
-    // One probe per hardened switch; iterator-backed functions are forced so a deferred throw fires.
+    // One probe per hardened switch; lazy sequences force deferred switch execution.
     public static IEnumerable<object[]> StmtSwitches()
     {
         yield return Probe("GetWrittenSlot", s => CoreFlatOptimizer.GetWrittenSlot(s));

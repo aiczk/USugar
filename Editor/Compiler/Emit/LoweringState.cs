@@ -65,10 +65,6 @@ internal sealed class LoweringState
     public readonly List<EmitDiagnostic> Diagnostics = new();
     public readonly HashSet<string> ReportedExterns = new();
     public readonly MethodContext Methods = new MethodContext();
-    internal MethodContext.IteratorPlan CurrentIteratorPlan;
-    internal CLeaf CurrentIteratorBundle;
-    internal IReadOnlyDictionary<SyntaxNode, int>
-        CurrentIteratorStates;
 
     internal void SetOperationLowerer(OperationLowerer operations)
     {

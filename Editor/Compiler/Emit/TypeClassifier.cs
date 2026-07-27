@@ -21,7 +21,6 @@ public enum RuntimeBundleKind
     Aggregate,
     Delegate,
     MultiDimensionalArray,
-    Iterator,
 }
 
 [System.Flags]
@@ -79,8 +78,6 @@ public static class TypeClassifier
             ? RuntimeBundleKind.Class
             : NdimArrayAbi.IsNdimArray(type)
                 ? RuntimeBundleKind.MultiDimensionalArray
-                : IsIteratorProtocol(type)
-                    ? RuntimeBundleKind.Iterator
                 : type is INamedTypeSymbol { DelegateInvokeMethod: not null }
                     ? RuntimeBundleKind.Delegate
                     : IsAggregateValueLeaf(type)
@@ -92,7 +89,6 @@ public static class TypeClassifier
             RuntimeBundleKind.Class
                 or RuntimeBundleKind.Aggregate
                 or RuntimeBundleKind.MultiDimensionalArray
-                or RuntimeBundleKind.Iterator
                 => TransportCapabilities.TypedProgramChannel,
             RuntimeBundleKind.Delegate
                 => containsUserClass
@@ -146,19 +142,6 @@ public static class TypeClassifier
     {
         var bundle = ShapeOf(type, new TypeClassifierContext(null)).Bundle;
         return bundle is RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class;
-    }
-
-    public static bool IsIteratorProtocol(ITypeSymbol type)
-    {
-        if (type is not INamedTypeSymbol named)
-            return false;
-        var definition = named.OriginalDefinition;
-        var ns = definition.ContainingNamespace?.ToDisplayString();
-        return ns == "System.Collections"
-                   && definition.Name is "IEnumerable" or "IEnumerator"
-               || ns == "System.Collections.Generic"
-                   && definition.Name is "IEnumerable" or "IEnumerator"
-                   && definition.Arity == 1;
     }
 
     static ITypeSymbol Resolve(ITypeSymbol type, TypeClassifierContext ctx)

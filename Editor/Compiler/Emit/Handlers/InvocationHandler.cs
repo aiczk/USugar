@@ -60,35 +60,6 @@ internal sealed class InvocationHandler
 
     CLeaf VisitInvocation(IInvocationOperation op)
     {
-        if (op.Instance != null
-            && _lowering.IsIteratorProtocol(
-                _lowering.ResolveType(op.Instance.Type)))
-        {
-            var iterator = _lowering.VisitExpression(
-                op.Instance);
-            switch (op.TargetMethod.Name)
-            {
-                case "MoveNext"
-                    when op.Arguments.Length == 0:
-                    return _lowering.EmitIteratorMoveNext(
-                        iterator);
-                case "GetEnumerator"
-                    when op.Arguments.Length == 0:
-                    return _lowering.EmitIteratorGetEnumerator(
-                        iterator);
-                case "Dispose"
-                    when op.Arguments.Length == 0:
-                    _lowering.EmitIteratorDispose(iterator);
-                    return null;
-                case "Reset"
-                    when op.Arguments.Length == 0:
-                    throw new System.NotSupportedException(
-                        "Iterator Reset() is not supported. "
-                        + "Request a fresh enumerator with "
-                        + "GetEnumerator().");
-            }
-        }
-
         // Wave-9 round-5 [X8]: the delegate-Equals arms run BEFORE the erasing-channel argument
         // guard — the operands are consumed HERE by the value comparison, never laundered through
         // Equals' erasing System.Object parameter, but the guard saw that parameter first and

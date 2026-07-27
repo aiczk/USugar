@@ -8,7 +8,6 @@ internal sealed class StatementHandler
     readonly LoweringServices _lowering;
     public StatementHandler(LoweringServices lowering) => _lowering = lowering;
 
-    // IReturnOperation spans Return/YieldReturn/YieldBreak; all three route here as under `is IReturnOperation`.
     public void Handle(IOperation operation)
     {
         switch (operation)
@@ -136,23 +135,6 @@ internal sealed class StatementHandler
 
     void VisitReturn(IReturnOperation op)
     {
-        if (_lowering.State.CurrentIteratorPlan != null)
-        {
-            if (op.Kind == OperationKind.YieldReturn)
-            {
-                _lowering.EmitIteratorYield(op);
-                return;
-            }
-            if (op.Kind == OperationKind.YieldBreak)
-            {
-                _lowering.EmitIteratorComplete();
-                return;
-            }
-            throw new System.InvalidOperationException(
-                $"Iterator '{_lowering.CurrentMethod?.Name}' contains "
-                + $"an unexpected '{op.Kind}' return.");
-        }
-
         var tailCall = op.ReturnedValue as IInvocationOperation;
         var tailTarget = tailCall == null
             ? null

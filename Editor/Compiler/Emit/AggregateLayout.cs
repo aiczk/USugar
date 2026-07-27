@@ -178,11 +178,6 @@ public static class BundleAbi
     public const string Prefix = "usugar-";
     public const int Type = 0;
     public const int HeaderSize = 1;
-    public const int IteratorState = 1;
-    public const int IteratorCurrent = 2;
-    public const int IteratorFrame = 3;
-    public const int IteratorInitialFrame = 4;
-    public const int IteratorSize = 5;
 
     public static string RuntimeTypeId(ITypeSymbol type)
     {
@@ -216,7 +211,6 @@ public static class BundleAbi
         RuntimeBundleKind.Aggregate => "aggregate",
         RuntimeBundleKind.Delegate => "delegate",
         RuntimeBundleKind.MultiDimensionalArray => "ndim",
-        RuntimeBundleKind.Iterator => "iterator",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
 }

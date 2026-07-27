@@ -327,11 +327,10 @@ internal sealed class BoundaryChecker
         var valueInfo = ClassifyValue(value);
         if (!valueInfo.MayContainCompilerBundle)
             return;
-        if (allowClassReferenceIdentity
-            && valueInfo.CompilerBundle is
-                RuntimeBundleKind.Class
-                or RuntimeBundleKind.MultiDimensionalArray
-                or RuntimeBundleKind.Iterator)
+            if (allowClassReferenceIdentity
+                && valueInfo.CompilerBundle is
+                    RuntimeBundleKind.Class
+                or RuntimeBundleKind.MultiDimensionalArray)
             return;
         throw new NotSupportedException(
             $"The extern {name} cannot receive a value that may carry a compiler bundle erased "
