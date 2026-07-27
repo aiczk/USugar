@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Xunit;
 
 namespace USugar.Tests;
@@ -200,5 +200,20 @@ public class HashHost : UdonSharpBehaviour {
         Assert.Contains(
             "SystemObject.__GetHashCode__SystemInt32",
             uasm);
+    }
+
+    [Fact]
+    public void DelegateReturn_RejectsAtExternBoundary()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+using UnityEngine;
+public class DelegateReturnNode { }
+public class DelegateReturnHost : UdonSharpBehaviour {
+    void Start() { Func<object> make = () => new DelegateReturnNode(); Debug.Log(make()); }
+}", "DelegateReturnHost"));
+        Assert.Contains("may carry a compiler bundle", ex.Message);
     }
 }

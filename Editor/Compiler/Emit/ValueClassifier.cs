@@ -313,11 +313,13 @@ public static class ValueClassifier
                 return property.Property.DeclaringSyntaxReferences
                     .Length != 0;
             case IInvocationOperation invocation:
-                return invocation.TargetMethod
-                           .DeclaringSyntaxReferences.Length != 0
-                       && !ExternResolver.IsSdkNamespace(
-                           invocation.TargetMethod
-                               .ContainingNamespace);
+                return invocation.TargetMethod.MethodKind
+                           == MethodKind.DelegateInvoke
+                       || (invocation.TargetMethod
+                               .DeclaringSyntaxReferences.Length != 0
+                           && !ExternResolver.IsSdkNamespace(
+                               invocation.TargetMethod
+                                   .ContainingNamespace));
             case ILocalReferenceOperation:
             case IParameterReferenceOperation:
             case IArrayElementReferenceOperation:
