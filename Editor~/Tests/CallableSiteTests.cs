@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -34,8 +34,11 @@ class C
         c.E -= null;
         var sum = c + c;
         int converted = c;
+        Action group = c.M;
+        if (c is Deconstructable(var da, var db)) { }
     }
-}");
+}
+class Deconstructable { public void Deconstruct(out int a, out int b) { a = 0; b = 0; } }");
         var compilation = CSharpCompilation.Create("CallableSites", new[] { tree },
             TestHelper.StandardRefs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
@@ -71,5 +74,17 @@ class C
             CallableSites.FromOperation(compound).Select(s => s.Kind));
         Assert.Equal(new[] { CallableSiteKind.PropertyGet, CallableSiteKind.PropertySet },
             CallableSites.FromOperation(increment).Select(s => s.Kind));
+
+        // A Method site is NOT always an invocation: a method-group reference and a recursive
+        // pattern's Deconstruct produce one too, and a resolver arm keyed on IInvocationOperation
+        // alone drops their call edge.
+        var methodGroup = operation.DescendantsAndSelf().OfType<IMethodReferenceOperation>().Single();
+        var deconstruct = operation.DescendantsAndSelf().OfType<IRecursivePatternOperation>().Single();
+        Assert.Equal(new[] { CallableSiteKind.Method },
+            CallableSites.FromOperation(methodGroup).Select(s => s.Kind));
+        Assert.Equal(new[] { CallableSiteKind.Method },
+            CallableSites.FromOperation(deconstruct).Select(s => s.Kind));
+        Assert.False(methodGroup is IInvocationOperation);
+        Assert.False(deconstruct is IInvocationOperation);
     }
 }

@@ -484,6 +484,11 @@ public sealed class ResolvedEdgeResolver
             case CallableSiteKind.Method when site.Operation is IInvocationOperation invocation:
                 foreach (var target in ResolveInvocationTargets(invocation, site)) yield return target;
                 yield break;
+            // A Method site also comes from a method-group reference and from a recursive pattern's
+            // Deconstruct — neither is an invocation, and dropping them loses the call edge.
+            case CallableSiteKind.Method:
+                yield return site.Target.OriginalDefinition;
+                yield break;
             case CallableSiteKind.Constructor:
             case CallableSiteKind.Operator:
             case CallableSiteKind.Conversion:
@@ -498,6 +503,11 @@ public sealed class ResolvedEdgeResolver
             case CallableSiteKind.EventRemove:
                 foreach (var target in ResolveEventTargets(site)) yield return target;
                 yield break;
+            default:
+                throw new System.ArgumentOutOfRangeException(
+                    nameof(site), site.Kind,
+                    "No target resolution for this callable-site kind; an unresolved site drops "
+                    + "its call edge from reach, recursion and spill analysis.");
         }
     }
 
