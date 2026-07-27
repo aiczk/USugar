@@ -102,7 +102,8 @@ public sealed class ClassTypeObjectContext
         return b.ToString();
     }
 
-    public static string RuntimeTypeId(INamedTypeSymbol type) => "usugar-class:" + SpecKey(type);
+    public static string RuntimeTypeId(INamedTypeSymbol type)
+        => BundleAbi.KindTag(RuntimeBundleKind.Class) + SpecKey(type);
 
     static string LegacyName(INamedTypeSymbol type)
     {

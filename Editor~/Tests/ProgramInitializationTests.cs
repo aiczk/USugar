@@ -71,9 +71,8 @@ public class TypeObjectHost : UdonSharpBehaviour
 
         var typeObject = Assert.Single(emitter.Module.Fields
             .Where(field => field.Name.StartsWith("__typeobj_", StringComparison.Ordinal)));
-        var payloadType = emitter.Compilation.GetTypeByMetadataName("Payload");
         Assert.Equal(StorageTypes.String, typeObject.Type);
-        Assert.Equal(ClassTypeObjectContext.RuntimeTypeId(payloadType), typeObject.DefaultValue);
+        Assert.Equal("usugar-class:N9_543a5061796c6f6164_0_", typeObject.DefaultValue);
         Assert.DoesNotContain(emitter.Module.Functions,
             function => function.Name == ProgramInitializationEmitter.FunctionName);
     }
