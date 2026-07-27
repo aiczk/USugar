@@ -75,6 +75,20 @@ public class RecursionFacetEquivalenceTests
     }
 
     [Fact]
+    public void FacetCensusDir_HasNoOrphanFixtures()
+    {
+        var live = AllCases().Select(c => c.Name).ToHashSet(StringComparer.Ordinal);
+        var orphans = Directory.EnumerateFiles(TestPaths.FacetCensusDir, "*.facets")
+            .Select(Path.GetFileNameWithoutExtension)
+            .Where(name => !live.Contains(name))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+        Assert.True(orphans.Count == 0,
+            "Fixtures with no battery case (delete them, or restore the case):\n  "
+            + string.Join("\n  ", orphans));
+    }
+
+    [Fact]
     public void FacetCensus_IsLineEndingInvariant()
     {
         foreach (var c in AllCases())
