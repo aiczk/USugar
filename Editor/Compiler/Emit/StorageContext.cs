@@ -11,121 +11,6 @@ public readonly struct LocalBinding
 }
 
 /// <summary>
-/// Runtime-selectable prepared storage locations for one ref local. The selector is a flat slot,
-/// so a ref reassignment emitted inside a branch changes the alias only when that branch executes.
-/// </summary>
-public sealed class RefLocalBinding
-{
-    readonly struct Candidate
-    {
-        public readonly Func<CLeaf> Read;
-        public readonly Action<CLeaf> Write;
-
-        public Candidate(Func<CLeaf> read, Action<CLeaf> write)
-        {
-            Read = read ?? throw new ArgumentNullException(nameof(read));
-            Write = write ?? throw new ArgumentNullException(nameof(write));
-        }
-    }
-
-    readonly CoreBuilder _builder;
-    readonly StorageType _type;
-    readonly List<Candidate> _candidates;
-    readonly int _selectorSlot;
-
-    public RefLocalBinding(CoreBuilder builder, StorageType type,
-        Func<CLeaf> read, Action<CLeaf> write)
-    {
-        _builder = builder ?? throw new ArgumentNullException(nameof(builder));
-        _type = type;
-        _candidates = new List<Candidate> { new Candidate(read, write) };
-        _selectorSlot = _builder.AllocFrame(StorageTypes.Int32);
-        _builder.EmitAssign(_selectorSlot,
-            _builder.Const(0, StorageTypes.Int32));
-    }
-
-    RefLocalBinding(RefLocalBinding source)
-    {
-        _builder = source._builder;
-        _type = source._type;
-        _candidates = new List<Candidate>(source._candidates);
-        _selectorSlot = _builder.AllocFrame(StorageTypes.Int32);
-        _builder.EmitAssign(_selectorSlot,
-            _builder.SlotRef(source._selectorSlot));
-    }
-
-    public RefLocalBinding Clone() => new RefLocalBinding(this);
-
-    public void Reassign(RefLocalBinding source)
-    {
-        if (source == null) throw new ArgumentNullException(nameof(source));
-        if (ReferenceEquals(this, source)) return;
-        if (_type != source._type)
-            throw new InvalidOperationException(
-                $"Cannot reassign ref local of '{_type}' from '{source._type}'.");
-
-        var offset = _candidates.Count;
-        _candidates.AddRange(source._candidates);
-        CLeaf selector = _builder.SlotRef(source._selectorSlot);
-        if (offset != 0)
-            selector = _builder.ExternCall(
-                UdonAbi.Int32Add,
-                new List<CLeaf>
-                {
-                    selector,
-                    _builder.Const(offset, StorageTypes.Int32)
-                },
-                StorageTypes.Int32);
-        _builder.EmitAssign(_selectorSlot, selector);
-    }
-
-    public CLeaf Read()
-    {
-        if (_candidates.Count == 1)
-            return _candidates[0].Read();
-
-        var result = _builder.AllocScratch(_type);
-        EmitSelected(0, candidate =>
-            _builder.EmitAssign(result, candidate.Read()));
-        return _builder.SlotRef(result);
-    }
-
-    public void Write(CLeaf value)
-    {
-        if (value == null) throw new ArgumentNullException(nameof(value));
-        if (value.Type != _type)
-            throw new InvalidOperationException(
-                $"Cannot write '{value.Type}' through ref local of '{_type}'.");
-        if (_candidates.Count == 1)
-        {
-            _candidates[0].Write(value);
-            return;
-        }
-        EmitSelected(0, candidate => candidate.Write(value));
-    }
-
-    void EmitSelected(int index, Action<Candidate> emit)
-    {
-        if (index == _candidates.Count - 1)
-        {
-            emit(_candidates[index]);
-            return;
-        }
-        var selected = _builder.ExternCall(
-            UdonAbi.Int32Equality,
-            new List<CLeaf>
-            {
-                _builder.SlotRef(_selectorSlot),
-                _builder.Const(index, StorageTypes.Int32)
-            },
-            StorageTypes.Boolean);
-        _builder.EmitIf(selected,
-            _ => emit(_candidates[index]),
-            _ => EmitSelected(index + 1, emit));
-    }
-}
-
-/// <summary>
 /// Owns emitted field declarations, generated storage names, and flat local bindings.
 /// </summary>
 public sealed class StorageContext
@@ -138,8 +23,6 @@ public sealed class StorageContext
     bool _recurStackDeclared;
 
     public readonly Dictionary<ILocalSymbol, LocalBinding> LocalBindings = new(SymbolEqualityComparer.Default);
-    public readonly Dictionary<ILocalSymbol, RefLocalBinding>
-        RefLocalBindings = new(SymbolEqualityComparer.Default);
 
     public StorageContext(FlatModule module) => _module = module;
 

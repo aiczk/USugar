@@ -472,25 +472,11 @@ internal sealed class StatementHandler
         {
             var local = declarator.Symbol;
 
-            // ref locals (round 7, §8-3 loud): the flat-heap VM has no variable aliases, so
-            // `ref int r = ref x` can only emit as a VALUE copy — every flavor silently decouples
-            // (VM-proven: write-through 1 vs CLR 5, read-through 1 vs 5, array element 0 vs 7,
-            // struct member 0 vs 9, delegate 2 vs 11). ref/out PARAMS stay legal (caller-side
-            // copy-back convention, struct_ref_param-pinned).
             if (local.IsRef)
-            {
-                if (_lowering.State.TryGetEnvBinding(local, out _))
-                    throw new System.NotSupportedException(
-                        $"ref local '{local.Name}' cannot be captured: "
-                        + "its alias is valid only in the declaring frame.");
-                if (declarator.Initializer == null)
-                    throw new System.InvalidOperationException(
-                        $"ref local '{local.Name}' has no initializer.");
-                _lowering.RefLocalBindings[local] =
-                    _lowering.PrepareRefLocalBinding(
-                        declarator.Initializer.Value);
-                continue;
-            }
+                throw new System.NotSupportedException(
+                    $"ref local '{local.Name}' is not supported: "
+                    + "Udon has no variable aliases. Use a normal local and "
+                    + "assign the value back explicitly.");
 
             // Stage 2 §4.1: a CAPTURED local has no flat storage — its cell lives in the owning
             // scope's env record. The initializer value routes into the cell (VisitExpression

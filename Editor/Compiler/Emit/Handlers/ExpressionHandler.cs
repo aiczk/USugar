@@ -11,10 +11,6 @@ internal sealed class ExpressionHandler
     public CLeaf Handle(IOperation expression) => expression switch
     {
         ILiteralOperation op => VisitLiteral(op),
-        ILocalReferenceOperation localRef
-            when _lowering.RefLocalBindings.TryGetValue(
-                localRef.Local, out var refBinding)
-            => refBinding.Read(),
         // Stage 2 §4.1: a captured local/param has NO flat storage — reads route through the owning
         // scope's env record (aggregate captures keep clone-on-read value semantics on the way out).
         ILocalReferenceOperation localRef when _lowering.State.TryGetEnvBinding(localRef.Local, out _)
