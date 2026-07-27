@@ -211,7 +211,7 @@ internal sealed class CompoundAssignmentHandler
                     new List<CLeaf> { _lowering.SlotRef(recvSlot), _lowering.SlotRef(handlerSlot) }, op.Syntax));
                 return null;
             }
-            var typeObj = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), 0, StorageTypes.String);
+            var typeObj = AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), BundleAbi.Type, StorageTypes.String);
             foreach (var target in targets)
             {
                 var match = _lowering.ExternCall(

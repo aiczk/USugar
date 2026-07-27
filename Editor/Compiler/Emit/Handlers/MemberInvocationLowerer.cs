@@ -673,7 +673,7 @@ internal sealed class MemberInvocationLowerer
                 $"'{classTy.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is minted here but is not in the compile-time minted-class census "
                 + "even though the closed-specialization census must contain every live mint. This is a compiler bug; report the "
                 + "instantiation chain and source location. Emission stopped before producing a class bundle without runtime type identity.");
-        return inst => AggregateAbi.WriteSlot(_lowering.Builder, inst, 0, _lowering.LoadField(tv, StorageTypes.String));
+        return inst => AggregateAbi.WriteSlot(_lowering.Builder, inst, BundleAbi.Type, _lowering.LoadField(tv, StorageTypes.String));
     }
 
     /// <summary>`new T()` (kind-level census gap, 2026-07-11): monomorphization has substituted T to a

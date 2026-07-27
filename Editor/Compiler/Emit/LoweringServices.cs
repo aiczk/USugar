@@ -308,7 +308,7 @@ internal sealed class LoweringServices
             EmitAssign(guarded, Const(false, StorageTypes.Boolean));
             _builder.EmitIf(isBundle, _ =>
             {
-                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, 0, StorageTypes.String);
+                var typeSlot = AggregateAbi.ReadSlot(_builder, valueVal, BundleAbi.Type, StorageTypes.String);
                 CLeaf test = null;
                 foreach (var typeId in acceptedTypeIds)
                 {
@@ -2682,7 +2682,7 @@ internal sealed class LoweringServices
             return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
 
         var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
-        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, 0, StorageTypes.String));
+        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, BundleAbi.Type, StorageTypes.String));
         int destSlot = isSet ? -1 : _state.Builder.AllocScratch(GetStorageType(prop.Type));
 
         // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
@@ -3457,7 +3457,7 @@ internal sealed class LoweringServices
             }
 
             var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
-            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), 0, StorageTypes.String));
+            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), BundleAbi.Type, StorageTypes.String));
             var matched = _state.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(matched, Const(false, StorageTypes.Boolean));
 

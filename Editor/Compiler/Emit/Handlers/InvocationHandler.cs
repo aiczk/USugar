@@ -608,7 +608,7 @@ internal sealed class InvocationHandler
         });
 
         var typeObjSlot = _lowering.State.Builder.AllocScratch(StorageTypes.String);
-        _lowering.EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), 0, StorageTypes.String));
+        _lowering.EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_lowering.Builder, _lowering.SlotRef(recvSlot), BundleAbi.Type, StorageTypes.String));
 
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         int destSlot = isVoid ? -1 : _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(op.Type));

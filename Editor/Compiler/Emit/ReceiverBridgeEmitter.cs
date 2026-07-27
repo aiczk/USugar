@@ -63,7 +63,7 @@ public sealed class ReceiverBridgeEmitter
                     member.ContainingType, member).RuntimeTargets;
             var matched = builder.AllocScratch(StorageTypes.Boolean);
             builder.EmitAssign(matched, builder.Const(false, StorageTypes.Boolean));
-            var typeObj = AggregateAbi.ReadSlot(builder, receiver, 0, StorageTypes.String);
+            var typeObj = AggregateAbi.ReadSlot(builder, receiver, BundleAbi.Type, StorageTypes.String);
             foreach (var target in targets)
             {
                 var isTarget = _bridge.CallExtern(StorageTypes.Boolean,
