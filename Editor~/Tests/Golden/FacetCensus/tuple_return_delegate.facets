@@ -1,10 +1,10 @@
 [nodes]
-TupleReturnDelegate.Callee(int, int) @121..181
-TupleReturnDelegate.Start() @185..293
+TupleReturnDelegate.Callee(int, int) @119..179
+TupleReturnDelegate.Start() @182..286
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-TupleReturnDelegate.Start() @185..293 -> TupleReturnDelegate.x
-TupleReturnDelegate.Start() @185..293 -> TupleReturnDelegate.y
+TupleReturnDelegate.Start() @182..286 -> TupleReturnDelegate.x
+TupleReturnDelegate.Start() @182..286 -> TupleReturnDelegate.y
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

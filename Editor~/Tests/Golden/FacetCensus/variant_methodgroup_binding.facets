@@ -1,9 +1,9 @@
 [nodes]
-VariantMethodGroupBinding.MakeTag() @121..147
-VariantMethodGroupBinding.Start() @151..219
+VariantMethodGroupBinding.MakeTag() @119..145
+VariantMethodGroupBinding.Start() @148..213
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-VariantMethodGroupBinding.Start() @151..219 -> VariantMethodGroupBinding.result
+VariantMethodGroupBinding.Start() @148..213 -> VariantMethodGroupBinding.result
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

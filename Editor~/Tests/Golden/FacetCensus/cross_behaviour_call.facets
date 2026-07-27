@@ -1,9 +1,9 @@
 [nodes]
-CrossBehaviour.Start() @123..179
+CrossBehaviour.Start() @121..177
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-CrossBehaviour.Start() @123..179 -> CrossBehaviour.enemy
-CrossBehaviour.Start() @123..179 -> CrossBehaviour.hp
+CrossBehaviour.Start() @121..177 -> CrossBehaviour.enemy
+CrossBehaviour.Start() @121..177 -> CrossBehaviour.hp
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

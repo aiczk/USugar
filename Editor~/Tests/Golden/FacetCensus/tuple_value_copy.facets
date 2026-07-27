@@ -1,8 +1,8 @@
 [nodes]
-TupleValueCopy.Start() @91..165
+TupleValueCopy.Start() @89..163
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-TupleValueCopy.Start() @91..165 -> TupleValueCopy.outa
+TupleValueCopy.Start() @89..163 -> TupleValueCopy.outa
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

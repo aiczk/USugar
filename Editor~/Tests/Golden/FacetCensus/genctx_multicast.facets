@@ -1,12 +1,12 @@
 [nodes]
-LatticeGenMulticast.Run<T>(T, T) @133..212
-LatticeGenMulticast.Start() @216..266
-lambda expression @176..183
-lambda expression @190..197
+LatticeGenMulticast.Run<T>(T, T) @129..208
+LatticeGenMulticast.Start() @211..261
+lambda expression @172..179
+lambda expression @186..193
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-LatticeGenMulticast.Start() @216..266 -> LatticeGenMulticast.result
-LatticeGenMulticast.Start() @216..266 -> LatticeGenMulticast.seed
+LatticeGenMulticast.Start() @211..261 -> LatticeGenMulticast.result
+LatticeGenMulticast.Start() @211..261 -> LatticeGenMulticast.seed
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

@@ -462,12 +462,15 @@ namespace VRC.TestStubs
 }
 ";
 
+    static Microsoft.CodeAnalysis.SyntaxTree Parse(string text, string path = "")
+        => CSharpSyntaxTree.ParseText(text.Replace("\r\n", "\n").Replace("\r", "\n"), path: path);
+
     public static string CompileToUasm(string source)
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
-            CSharpSyntaxTree.ParseText(Stubs),
-            CSharpSyntaxTree.ParseText(source),
+            Parse(Stubs),
+            Parse(source),
         };
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
@@ -496,8 +499,8 @@ namespace VRC.TestStubs
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
-            CSharpSyntaxTree.ParseText(Stubs),
-            CSharpSyntaxTree.ParseText(source),
+            Parse(Stubs),
+            Parse(source),
         };
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
@@ -529,8 +532,8 @@ namespace VRC.TestStubs
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
-            CSharpSyntaxTree.ParseText(Stubs),
-            CSharpSyntaxTree.ParseText(source),
+            Parse(Stubs),
+            Parse(source),
         };
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
@@ -648,8 +651,8 @@ namespace VRC.TestStubs
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
-            CSharpSyntaxTree.ParseText(Stubs),
-            CSharpSyntaxTree.ParseText(source),
+            Parse(Stubs),
+            Parse(source),
         };
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
@@ -677,11 +680,9 @@ namespace VRC.TestStubs
 
     public static string CompileToUasm(string[] sources, string className)
     {
-        var trees = new List<Microsoft.CodeAnalysis.SyntaxTree> { CSharpSyntaxTree.ParseText(Stubs) };
+        var trees = new List<Microsoft.CodeAnalysis.SyntaxTree> { Parse(Stubs) };
         for (var index = 0; index < sources.Length; index++)
-            trees.Add(CSharpSyntaxTree.ParseText(
-                sources[index],
-                path: $"TestSource{index}.cs"));
+            trees.Add(Parse(sources[index], path: $"TestSource{index}.cs"));
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,
             new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
@@ -722,8 +723,8 @@ namespace VRC.TestStubs
     {
         var trees = new Microsoft.CodeAnalysis.SyntaxTree[]
         {
-            CSharpSyntaxTree.ParseText(Stubs),
-            CSharpSyntaxTree.ParseText(source),
+            Parse(Stubs),
+            Parse(source),
         };
 
         var compilation = CSharpCompilation.Create("TestAssembly", trees, _standardRefs,

@@ -1,8 +1,8 @@
 [nodes]
-StructValueCopy.Start() @158..275
+StructValueCopy.Start() @154..271
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-StructValueCopy.Start() @158..275 -> StructValueCopy.outx
+StructValueCopy.Start() @154..271 -> StructValueCopy.outx
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

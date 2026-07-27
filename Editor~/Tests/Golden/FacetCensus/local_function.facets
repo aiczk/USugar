@@ -1,9 +1,9 @@
 [nodes]
-LocalFunction.Start() @87..145
-Square(int) @101..128
+LocalFunction.Start() @85..143
+Square(int) @99..126
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-LocalFunction.Start() @87..145 -> LocalFunction.r
+LocalFunction.Start() @85..143 -> LocalFunction.r
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

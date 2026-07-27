@@ -1,9 +1,9 @@
 [nodes]
-Ternary.Start() @95..130
+Ternary.Start() @93..128
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-Ternary.Start() @95..130 -> Ternary.x
-Ternary.Start() @95..130 -> Ternary.y
+Ternary.Start() @93..128 -> Ternary.x
+Ternary.Start() @93..128 -> Ternary.y
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

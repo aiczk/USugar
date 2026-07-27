@@ -1,7 +1,7 @@
 [nodes]
-CoalesceAutoProp.Name.get @94..98
-CoalesceAutoProp.Name.set @99..103
-CoalesceAutoProp.Start() @109..138
+CoalesceAutoProp.Name.get @93..97
+CoalesceAutoProp.Name.set @98..102
+CoalesceAutoProp.Start() @107..136
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]

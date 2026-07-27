@@ -1,8 +1,8 @@
 [nodes]
-TernaryInLoopBody.Start() @93..166
+TernaryInLoopBody.Start() @91..164
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-TernaryInLoopBody.Start() @93..166 -> TernaryInLoopBody.acc
+TernaryInLoopBody.Start() @91..164 -> TernaryInLoopBody.acc
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

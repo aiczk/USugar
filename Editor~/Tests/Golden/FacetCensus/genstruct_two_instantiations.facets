@@ -1,16 +1,16 @@
 [nodes]
-Box<T>.Get(int) @65..105
-Box<T>.this[int].get @132..156
-Box<T>.this[int].set @157..182
-GenStructTwoInstantiations.Start() @302..544
+Box<T>.Get(int) @62..102
+Box<T>.this[int].get @128..152
+Box<T>.this[int].set @153..178
+GenStructTwoInstantiations.Start() @293..525
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-Box<T>.Get(int) @65..105 -> Box<T>.items
-Box<T>.this[int].get @132..156 -> Box<T>.items
-Box<T>.this[int].set @157..182 -> Box<T>.items
-GenStructTwoInstantiations.Start() @302..544 -> Box<T>.items
-GenStructTwoInstantiations.Start() @302..544 -> GenStructTwoInstantiations.outInt
-GenStructTwoInstantiations.Start() @302..544 -> GenStructTwoInstantiations.outStrLen
+Box<T>.Get(int) @62..102 -> Box<T>.items
+Box<T>.this[int].get @128..152 -> Box<T>.items
+Box<T>.this[int].set @153..178 -> Box<T>.items
+GenStructTwoInstantiations.Start() @293..525 -> Box<T>.items
+GenStructTwoInstantiations.Start() @293..525 -> GenStructTwoInstantiations.outInt
+GenStructTwoInstantiations.Start() @293..525 -> GenStructTwoInstantiations.outStrLen
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

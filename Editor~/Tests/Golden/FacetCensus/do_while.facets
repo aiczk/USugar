@@ -1,9 +1,9 @@
 [nodes]
-DoWhile.Start() @95..150
+DoWhile.Start() @93..148
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-DoWhile.Start() @95..150 -> DoWhile.i
-DoWhile.Start() @95..150 -> DoWhile.n
+DoWhile.Start() @93..148 -> DoWhile.i
+DoWhile.Start() @93..148 -> DoWhile.n
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

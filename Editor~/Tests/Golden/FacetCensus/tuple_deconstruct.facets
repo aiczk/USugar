@@ -1,10 +1,10 @@
 [nodes]
-TupleDeconstruct.Start() @104..137
-TupleDeconstruct.Stats() @141..170
+TupleDeconstruct.Start() @102..135
+TupleDeconstruct.Stats() @138..167
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-TupleDeconstruct.Start() @104..137 -> TupleDeconstruct.a
-TupleDeconstruct.Start() @104..137 -> TupleDeconstruct.b
+TupleDeconstruct.Start() @102..135 -> TupleDeconstruct.a
+TupleDeconstruct.Start() @102..135 -> TupleDeconstruct.b
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

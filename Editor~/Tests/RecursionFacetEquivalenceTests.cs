@@ -74,6 +74,20 @@ public class RecursionFacetEquivalenceTests
         Assert.Equal(names.Count, names.Distinct().Count());
     }
 
+    [Fact]
+    public void FacetCensus_IsLineEndingInvariant()
+    {
+        foreach (var c in AllCases())
+        {
+            var lf = c.Source.Replace("\r\n", "\n");
+            TestHelper.CompileToUasm(lf, c.ClassName, out var lfEmitter);
+            TestHelper.CompileToUasm(lf.Replace("\n", "\r\n"), c.ClassName, out var crlfEmitter);
+            Assert.True(Facets(lfEmitter) == Facets(crlfEmitter),
+                $"Facet census for '{c.Name}' depends on the source's line endings: the fixtures "
+                + "would only match a checkout with one specific core.autocrlf setting.");
+        }
+    }
+
     // ── canonical serialization (facet → sorted lines; equality of the text IS set-equality) ──
 
     static string Serialize(RecursionInfo info)

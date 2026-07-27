@@ -1,11 +1,11 @@
 [nodes]
-NonTailRecursion.Fact(int) @132..196
-NonTailRecursion.Start() @95..128
+NonTailRecursion.Fact(int) @129..193
+NonTailRecursion.Start() @93..126
 [recursive-edges]
-NonTailRecursion.Fact(int) @132..196 -> NonTailRecursion.Fact(int) @132..196
+NonTailRecursion.Fact(int) @129..193 -> NonTailRecursion.Fact(int) @129..193
 [cycle-edges]
-NonTailRecursion.Fact(int) @132..196 -> NonTailRecursion.Fact(int) @132..196
+NonTailRecursion.Fact(int) @129..193 -> NonTailRecursion.Fact(int) @129..193
 [this-field-touches]
-NonTailRecursion.Start() @95..128 -> NonTailRecursion.result
+NonTailRecursion.Start() @93..126 -> NonTailRecursion.result
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

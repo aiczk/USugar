@@ -1,10 +1,10 @@
 [nodes]
-LatticeGenWrapper.M<T>(System.Func<T>) @139..231
-LatticeGenWrapper.Make() @111..135
-LatticeGenWrapper.Start() @235..296
+LatticeGenWrapper.M<T>(System.Func<T>) @135..227
+LatticeGenWrapper.Make() @108..132
+LatticeGenWrapper.Start() @230..291
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-LatticeGenWrapper.Start() @235..296 -> LatticeGenWrapper.result
+LatticeGenWrapper.Start() @230..291 -> LatticeGenWrapper.result
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

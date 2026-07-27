@@ -1,9 +1,9 @@
 [nodes]
-StructRefParam.Bump(ref StructRefBox) @228..275
-StructRefParam.Start() @138..224
+StructRefParam.Bump(ref StructRefBox) @223..270
+StructRefParam.Start() @134..220
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-StructRefParam.Start() @138..224 -> StructRefParam.outv
+StructRefParam.Start() @134..220 -> StructRefParam.outv
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

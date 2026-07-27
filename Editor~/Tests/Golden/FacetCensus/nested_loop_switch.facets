@@ -1,8 +1,8 @@
 [nodes]
-NestedLoopSwitch.Start() @92..233
+NestedLoopSwitch.Start() @90..231
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-NestedLoopSwitch.Start() @92..233 -> NestedLoopSwitch.acc
+NestedLoopSwitch.Start() @90..231 -> NestedLoopSwitch.acc
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]

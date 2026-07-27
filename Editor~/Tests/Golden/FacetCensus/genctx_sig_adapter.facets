@@ -1,10 +1,10 @@
 [nodes]
-LatticeGenAdapter.M<T>() @141..240
-LatticeGenAdapter.MakeTag() @111..137
-LatticeGenAdapter.Start() @244..278
+LatticeGenAdapter.M<T>() @137..236
+LatticeGenAdapter.MakeTag() @108..134
+LatticeGenAdapter.Start() @239..273
 [recursive-edges]
 [cycle-edges]
 [this-field-touches]
-LatticeGenAdapter.Start() @244..278 -> LatticeGenAdapter.result
+LatticeGenAdapter.Start() @239..273 -> LatticeGenAdapter.result
 [reentrant-dispatch-sites]
 [tail-spared-direct-call-sites]
