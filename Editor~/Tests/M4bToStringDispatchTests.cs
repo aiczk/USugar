@@ -244,16 +244,18 @@ public class M4bOpenGen : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void GetHashCode_And_GetType_StayRejected()
+    public void GetHashCode_UsesReferenceHash_And_GetTypeStaysRejected()
     {
-        var ex1 = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var hashUasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class GhC { public int v; }
 public class M4bGh : UdonSharpBehaviour {
     public int r;
     void Start(){ GhC g = new GhC(); r = g.GetHashCode(); }
-}", "M4bGh"));
-        Assert.Contains("GetHashCode", ex1.Message);
+}", "M4bGh");
+        Assert.Contains(
+            "SystemObject.__GetHashCode__SystemInt32",
+            hashUasm);
 
         var ex2 = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using UdonSharp;
