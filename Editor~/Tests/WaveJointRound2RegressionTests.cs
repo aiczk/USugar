@@ -76,21 +76,17 @@ public class Wj2TupleBox : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void StructObjectRoundtrip_UsesRuntimeTypeIdentity()
+    public void StructObjectRoundtrip_RejectsHardUnbox()
     {
-        // Category flip (triage t07/t10, was Match): the pure box-and-cast-back roundtrip is contained
-        // at the erasure choke like its ndim/class twins — a laundered bundle cannot be told from a
-        // real object[] downstream, so the conversion itself is the only sound reject point.
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct Wj2S3 { public int v; }
 public class Wj2Round : UdonSharpBehaviour {
     public int seed; public int r;
     void Start(){ Wj2S3 t; t.v = seed; object o = t; Wj2S3 u = (Wj2S3)o; r = u.v; }
-}", "Wj2Round");
-        Assert.Contains(
-            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-            uasm);
+}", "Wj2Round"));
+        Assert.Contains("InvalidCastException", ex.Message);
     }
 
     [Fact]
@@ -119,7 +115,7 @@ using UdonSharp;
 public struct Wj2S5 { public int v; }
 public class Wj2Nul : UdonSharpBehaviour {
     public int seed; public int r;
-    void Start(){ Wj2S5 t; t.v = seed; Wj2S5? n = t; r = n.HasValue ? n.Value.v : -1; }
+    void Start(){ Wj2S5 t; t.v = seed; Wj2S5? n = t; r = n.HasValue ? n.GetValueOrDefault().v : -1; }
 }", "Wj2Nul");
         Assert.NotNull(uasm);
     }

@@ -185,7 +185,7 @@ public class GtoMixed : UdonSharpBehaviour {
   GtoBase Make<T>() { return new GtoLeaf<T>(); }
   void Start() {
     GtoBase a = Make<int>(); GtoBase b = Make<string>();
-    if (a is GtoLeaf<int>) result += ((GtoLeaf<int>)a).Read();
+    if (a is GtoLeaf<int> leaf) result += leaf.Read();
     if (b is GtoLeaf<string>) result += b.Read();
   }
 }", "GtoMixed");

@@ -319,7 +319,7 @@ internal sealed class InvocationHandler
         // M4b: a direct .ToString() rooted at the System.Object slot on a v1 class receiver — the third
         // lifted surface (with the interpolation hole and the concat operand), one shared lowering
         // (EmitClassToStringDispatch): override arms direct-call, no-override arms print the runtime
-        // type-name constant, null is the LogError + "" deviation (C# would NRE). A base.ToString()
+        // type-name constant, and null reaches the ordinary class-carrier read and VM fault. A base.ToString()
         // bound DIRECTLY to object.ToString is non-virtual in C# yet still prints the RUNTIME type name
         // (Object.ToString reads GetType()), so it takes the same chain with the override arms disabled;
         // a base.ToString() bound to a USER override falls through to the ordinary direct-call path.
@@ -367,9 +367,9 @@ internal sealed class InvocationHandler
                 if (targets.Count >= 1)
                     target = targets[0].Impl; // devirt: singleton/sealed → direct call to the one impl
                 else
-                    // Closed-world: no minted class implements the slot, so no instance can exist and the
-                    // receiver must be null (CLR: NRE). Falling through to a direct base-impl call would
-                    // silently EXECUTE code on the null bundle — LogError + default instead (§2.6 polarity).
+                    // Closed-world: no minted class implements the slot, so no source-level non-null
+                    // instance can exist. Preserve argument evaluation, then consume the receiver
+                    // representation so null follows the stock wrapper/VM fault path.
                     return EmitUnreachableVirtualCall(op, recvTy, target);
             }
 
@@ -396,6 +396,8 @@ internal sealed class InvocationHandler
             {
                 var lhs = _lowering.VisitExpression(op.Instance);
                 var rhs = _lowering.VisitExpression(op.Arguments[0].Value);
+                // callvirt observes a null receiver only after evaluating the argument.
+                _lowering.ReadClassTypeHeader(lhs);
                 return ClassAbi.EmitObjectEquals(_lowering.Builder, lhs, rhs);
             }
             if (target.Name == "GetHashCode"
@@ -613,8 +615,8 @@ internal sealed class InvocationHandler
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         int destSlot = isVoid ? -1 : _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(op.Type));
 
-        // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm. is/cast guards
-        // that case to `false`; the chain must be equally loud — LogError + default, never silent.
+        // Null has already faulted at the header read. A non-null laundered bundle that matches no
+        // closed-world class arm remains a protocol diagnostic.
         var matched = _lowering.State.Builder.AllocScratch(StorageTypes.Boolean);
         _lowering.EmitAssign(matched, _lowering.Const(false, StorageTypes.Boolean));
 
@@ -640,7 +642,7 @@ internal sealed class InvocationHandler
         _lowering.Builder.EmitIf(noMatch, _ =>
             _lowering.EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { _lowering.Const(
-                    $"USugar: NullReferenceException — virtual call '{op.TargetMethod.ContainingType.Name}.{op.TargetMethod.Name}' on a null or non-class receiver ({_lowering.ClassSymbol.Name}). Returning default.",
+                    $"USugar: virtual call '{op.TargetMethod.ContainingType.Name}.{op.TargetMethod.Name}' matched no compiler class ({_lowering.ClassSymbol.Name}). Returning default.",
                     StorageTypes.String) }), null);
 
         return isVoid ? _lowering.Const(null, StorageTypes.Object) : _lowering.SlotRef(destSlot);
@@ -649,8 +651,9 @@ internal sealed class InvocationHandler
     // AssertClosedVirtualDispatch lives in LoweringServices (CW1 lift: the accessor dispatch arms in
     // PreparePropertySet / CaptureLValue / the pattern lowering share the same open-family armor).
 
-    /// <summary>Phase-A armor: the empty-target lowering — evaluate receiver and args for side-effect
-    /// parity (CLR evaluates them before the NRE), then LogError + default (§2.6 null-invoke polarity).</summary>
+    /// <summary>Empty-target lowering: evaluate receiver and args in C# order, then use the class
+    /// representation. The object[] header read naturally faults for the only source-level value
+    /// possible here (null); any continuation is unreachable protocol armor.</summary>
     CLeaf EmitUnreachableVirtualCall(IInvocationOperation op, INamedTypeSymbol recvTy, IMethodSymbol target)
     {
         var recvSlot = _lowering.State.Builder.AllocScratch(new StorageType(AggregateAbi.ArrayType));
@@ -660,9 +663,10 @@ internal sealed class InvocationHandler
             var s = _lowering.State.Builder.AllocScratch(_lowering.GetStorageType(a.Value.Type));
             _lowering.EmitAssign(s, _lowering.VisitExpression(a.Value));
         }
+        _lowering.ReadClassTypeHeader(_lowering.SlotRef(recvSlot));
         _lowering.EmitExternVoid(UdonAbi.DebugLogError,
             new List<CLeaf> { _lowering.Const(
-                $"USugar: NullReferenceException — virtual call '{recvTy.Name}.{target.Name}' has no minted implementor, so the receiver must be null ({_lowering.ClassSymbol.Name}). Returning default.",
+                $"USugar: virtual call '{recvTy.Name}.{target.Name}' has no minted implementor after a valid class-carrier read ({_lowering.ClassSymbol.Name}). Returning default.",
                 StorageTypes.String) });
         bool isVoid = op.Type == null || op.Type.SpecialType == SpecialType.System_Void;
         if (isVoid) return _lowering.Const(null, StorageTypes.Object);
@@ -687,6 +691,10 @@ internal sealed class InvocationHandler
             recv = AggregateAbi.DeepClone(_lowering.Builder, recv, recvAgg, _lowering.State.Aggregates.GetLayout);
         var args = new List<CLeaf> { recv };
         var structPrepared = _externs.MarshalArguments(op, args);
+        // A class callvirt observes null only after all arguments have been evaluated. Struct receivers
+        // retain their value-type path and need no reference check.
+        if (_lowering.IsUserClass(target.ContainingType))
+            _lowering.ReadClassTypeHeader(recv);
         var result = _lowering.EmitCallToMethod(target, args);
         // Round-8 [R5]: this path used to drop the ref/out copy-back entirely (DiffFuzz: ref-arg
         // ref=136 vs VM 106, out-arg ref=10 vs 0). Param ids are ordinal-indexed (receiver separate).

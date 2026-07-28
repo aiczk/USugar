@@ -27,18 +27,21 @@ internal sealed class MemberInvocationLowerer
         if (op.Property.IsIndexer)
             return VisitIndexerGet(op, boundGetterSite);
 
-        // Nullable<T> (boxed-object emulation): HasValue → null check; Value → the boxed value itself
-        // (Udon unboxes transparently when the result is used as the underlying type).
+        // Nullable<T> is boxed-object emulation. HasValue is total; Value is
+        // not, and Udon cannot implement its InvalidOperationException path.
         if (op.Instance != null && EmitPolicy.IsNullableT(op.Property.ContainingType, out var nblUnder))
         {
-            var nv = _lowering.VisitExpression(op.Instance);
-            if (op.Property.Name == "HasValue") return NullableAbi.HasValue(_lowering.Builder, nv);
-            // Value of a nullable AGGREGATE (e.g. (int,int)? / V?) copies the struct out (value semantics).
-            // A small-underlying box is re-tagged tolerantly (CW18 — see RetagSmallNullablePresent).
+            if (op.Property.Name == "HasValue")
+                return NullableAbi.HasValue(
+                    _lowering.Builder,
+                    _lowering.VisitExpression(op.Instance));
             if (op.Property.Name == "Value")
-                return nblUnder is INamedTypeSymbol nblAgg && _lowering.IsAggregateValue(nblAgg)
-                    ? AggregateAbi.DeepClone(_lowering.Builder, nv, nblAgg, _lowering.State.Aggregates.GetLayout)
-                    : _lowering.RetagSmallNullablePresent(nv, nblUnder);
+                throw new NotSupportedException(
+                    $"Nullable<{nblUnder.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}>.Value "
+                    + "is not supported: reading Value while null requires "
+                    + "InvalidOperationException, but Udon has no exception "
+                    + "semantics. Use pattern matching, `??`, or "
+                    + "GetValueOrDefault() to define the null case.");
         }
 
         // CW1 lift: a runtime-polymorphic property READ on a v1-class receiver dispatches through the
@@ -74,10 +77,13 @@ internal sealed class MemberInvocationLowerer
         if (op.Instance != null && op.Instance.Type is INamedTypeSymbol aggGet && _lowering.IsObjectArrayEmulated(aggGet)
             && op.Property.GetMethod is { } aggGetterRaw)
         {
+            var receiver = _lowering.LoadInstanceRaw(op.Instance);
+            if (_lowering.IsUserClass(aggGet))
+                _lowering.ReadClassTypeHeader(receiver);
             var ret = _lowering.EmitCallToMethod(
                 _lowering.RequireBoundCallable(
                     op, CallableSiteKind.PropertyGet),
-                new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) });
+                new List<CLeaf> { receiver });
             return op.Property.Type is INamedTypeSymbol getRetAgg && _lowering.IsAggregateValue(getRetAgg)
                 ? AggregateAbi.DeepClone(_lowering.Builder, ret, getRetAgg, _lowering.State.Aggregates.GetLayout) : ret;
         }
@@ -276,6 +282,8 @@ internal sealed class MemberInvocationLowerer
         {
             var sargs = new List<CLeaf> { _lowering.LoadInstanceRaw(op.Instance) };
             sargs.AddRange(_lowering.EvaluateIndexerArgs(op)); // wave-9 round-4: named index args bind by ordinal
+            if (_lowering.IsUserClass(aggIdx))
+                _lowering.ReadClassTypeHeader(sargs[0]);
             var ret = _lowering.EmitCallToMethod(
                 _lowering.RequireBoundCallable(
                     op, CallableSiteKind.PropertyGet),

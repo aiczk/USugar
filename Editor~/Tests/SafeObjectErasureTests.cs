@@ -16,7 +16,7 @@ public class SafeErasureHost : UdonSharpBehaviour {
     void Start() {
         var node = new ErasedNode { Value = 7 };
         object erased = node;
-        if (erased is ErasedNode) Result = ((ErasedNode)erased).Value;
+        if (erased is ErasedNode restored) Result = restored.Value;
     }
 }
 ", "SafeErasureHost");

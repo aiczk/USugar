@@ -283,15 +283,6 @@ internal static class DelegateAbi
         => builder.ExternCall(UdonAbiKey.Method("SystemUInt32", "op_Inequality", new[] { "SystemUInt32", "SystemUInt32" }, "SystemBoolean"),
             new List<CLeaf> { address, builder.Const(0u, StorageTypes.UInt32) }, StorageTypes.Boolean);
 
-    public static void EmitNullInvokeLog(CoreBuilder builder, string className, string receiverDescription)
-        => builder.EmitExternVoid(UdonAbi.DebugLogError,
-            new List<CLeaf>
-            {
-                builder.Const(
-                    $"USugar: NullReferenceException — invoked a null delegate ({className}.{receiverDescription})",
-                    StorageTypes.String)
-            });
-
     public static void EmitInvalidBundleLog(CoreBuilder builder, string className, string receiverDescription)
         => builder.EmitExternVoid(UdonAbi.DebugLogError,
             new List<CLeaf>

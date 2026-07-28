@@ -46,7 +46,8 @@ internal sealed class DelegateDispatchEmitter
     {
         var localSignature = DelegateAbi.IsProgramLocalSignature(
             invoke, _ctx.Types, typeParamMap);
-        // retSlot pre-initialized to default(T): every guard-failure arm falls through with it (§2.6).
+        // Protocol-failure arms retain default(T). A plain null invocation never observes it:
+        // the delegate carrier read in the null arm faults the VM, matching an ordinary Udon extern.
         int retSlot = -1;
         if (retType != null)
         {
@@ -54,10 +55,12 @@ internal sealed class DelegateDispatchEmitter
             EmitAssign(retSlot, InvocationHandler.DefaultConst(_builder, retType.Value));
         }
 
-        // Guard-failure arm: LogError (NRE deviation, exact message per §2.6) — or silent for ?.Invoke.
-        System.Action<CoreBuilder> failArm = null;
+        // A non-null bundle with a missing target/method is malformed compiler ABI, not a source-level
+        // null delegate. Conditional invocation preserves its existing silent protocol-failure behavior.
+        System.Action<CoreBuilder> protocolFailureArm = null;
         if (!isConditional)
-            failArm = _ => DelegateAbi.EmitNullInvokeLog(_builder, _ctx.ClassSymbol.Name, receiverDescription);
+            protocolFailureArm = _ => DelegateAbi.EmitInvalidBundleLog(
+                _builder, _ctx.ClassSymbol.Name, receiverDescription);
         System.Action<CoreBuilder> invalidBundleArm = null;
         if (!isConditional)
             invalidBundleArm = _ => DelegateAbi.EmitInvalidBundleLog(_builder, _ctx.ClassSymbol.Name, receiverDescription);
@@ -165,9 +168,9 @@ internal sealed class DelegateDispatchEmitter
                                     EmitStoreField(convArgs[i], updated);
                                 }
                                 copyBack?.Invoke();
-                            }, failArm);
+                            }, protocolFailureArm);
                         });
-                }, failArm);
+                }, protocolFailureArm);
             }, invalidBundleArm);
         }
 
@@ -179,7 +182,13 @@ internal sealed class DelegateDispatchEmitter
         else
         {
             var nb = DelegateAbi.CompareToNull(_builder, bundle, isNotEquals: true);
-            _builder.EmitIf(nb, _ => EmitGuardedDispatch(), failArm);
+            _builder.EmitIf(nb, _ => EmitGuardedDispatch(), _ =>
+            {
+                // Reading the compiler-owned carrier is the first real operation required to invoke
+                // it. The stock object[] getter faults on null, so Udon VM owns the halt/error policy.
+                DelegateAbi.ReadSlot(
+                    _builder, bundle, DelegateAbi.Type, StorageTypes.Object.Name);
+            });
         }
 
         return retSlot >= 0 ? SlotRef(retSlot) : null;

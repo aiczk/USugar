@@ -209,7 +209,7 @@ public class CwVThisBase : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void VirtualAccessor_NoMintedImplementor_EmitsRuntimeGuards()
+    public void VirtualAccessor_NoMintedImplementor_ReadsReceiverBeforeProtocolGuard()
     {
         // With no local mint or public class surface, the receiver can only be null.
         var (uasm, consts) = TestHelper.CompileWithConsts(@"
@@ -221,6 +221,7 @@ public class CwVEmpty : UdonSharpBehaviour {
     void Start() { if (f != null) { f.Q = 3; r = f.Q; } }
 }", "CwVEmpty");
         Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.Contains(consts, c => c.Value is string m && m.Contains("Skipping the write."));
         Assert.Contains(consts, c => c.Value is string m && m.Contains("Returning default."));
     }

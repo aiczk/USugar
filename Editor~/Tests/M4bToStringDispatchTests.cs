@@ -9,8 +9,8 @@ namespace USugar.Tests;
 // v2b-2 machinery as method/accessor dispatch): the interpolation hole, the string-concat operand, and
 // the direct .ToString() call. An arm with a user override direct-calls the most-derived impl; an arm
 // without one prints the C#-parity runtime type-name CONSTANT (CLR Type.ToString format). Null parity:
-// implicit surfaces yield "" silently (C# Format/Concat semantics); a direct null.ToString() is the
-// established null-invoke deviation (LogError + ""). These pin the lowered STRUCTURE; runtime values
+// implicit surfaces yield "" silently (C# Format/Concat semantics); a direct null.ToString() reads the
+// class carrier and follows the stock Udon VM fault path. These pin the lowered STRUCTURE; runtime values
 // are pinned by the local DiffFuzz harness (CLR-oracle probes incl. namespace-qualified names).
 public class M4bToStringDispatchTests
 {
@@ -194,10 +194,10 @@ public class M4bSealed : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void ImplicitNull_IsSilent_DirectNull_IsLoudDeviation()
+    public void ImplicitNull_IsSilent_DirectCall_UsesCarrierFaultPath()
     {
-        // C# parity: a null hole/operand yields "" with no error surface — the implicit lowering carries
-        // no NRE LogError. A direct null.ToString() would NRE in C#: the deviation arm logs and yields "".
+        // C# parity: a null hole/operand yields "" with no error surface. A direct call uses the class
+        // object[] header; null therefore faults through the stock Udon wrapper/VM path.
         var (_, interpConsts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public sealed class TnS { public int v; public override string ToString(){ return ""n""; } }
@@ -207,14 +207,15 @@ public class M4bNullSilent : UdonSharpBehaviour {
 }", "M4bNullSilent");
         Assert.DoesNotContain(interpConsts, c => c.Value is string m && m.Contains("NullReferenceException"));
 
-        var (_, directConsts) = TestHelper.CompileWithConsts(@"
+        var (directUasm, directConsts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public sealed class TnD { public int v; public override string ToString(){ return ""n""; } }
 public class M4bNullLoud : UdonSharpBehaviour {
     public int r;
     void Start(){ TnD t = new TnD(); r = t.ToString().Length; }
 }", "M4bNullLoud");
-        Assert.Contains(directConsts, c => c.Value is string m
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", directUasm);
+        Assert.DoesNotContain(directConsts, c => c.Value is string m
             && m.Contains("NullReferenceException") && m.Contains("ToString()"));
     }
 

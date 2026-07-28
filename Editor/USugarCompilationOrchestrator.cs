@@ -318,8 +318,7 @@ static class USugarCompilationOrchestrator
             // declaration tree of each behaviour misses errors in helper files and in the other parts
             // of a partial class. Reject the whole run before layout planning or asset mutation.
             var compilationErrors = compilationUnits
-                .SelectMany(unit => unit.Compilation.GetDiagnostics())
-                .Where(d => d.Severity == DiagnosticSeverity.Error)
+                .SelectMany(unit => unit.Session.BlockingDiagnostics)
                 .ToArray();
             if (compilationErrors.Length > 0)
             {

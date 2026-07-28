@@ -133,6 +133,15 @@ internal sealed class LoweringServices
             or RuntimeBundleKind.Class;
     }
 
+    /// <summary>
+    /// Read the runtime type header required to use a compiler-owned class receiver. This is an
+    /// ordinary object[] operation, so a null receiver follows the stock Udon wrapper/VM fault path.
+    /// Callers place it after receiver/argument staging to preserve C# call-site evaluation order.
+    /// </summary>
+    internal CLeaf ReadClassTypeHeader(CLeaf receiver)
+        => AggregateAbi.ReadSlot(
+            _builder, receiver, BundleAbi.Type, StorageTypes.String);
+
     internal bool ContainsUserClassPayload(ITypeSymbol type)
         => SourceShape(type).ContainsUserClassPayload;
 
@@ -484,11 +493,11 @@ internal sealed class LoweringServices
     /// <summary>CW18: tolerant re-tag of a small-underlying nullable's boxed value. The boxed-object ABI
     /// admits a plain-int tag inside a small-int/char (or small-underlying user-enum) nullable box — the
     /// lifted-operator/pattern consumers tolerate it via <see cref="NullableAbi.PromoteBoxedToInt32"/>, but
-    /// the value accessors (.Value / GetValueOrDefault / ??) copied the raw box into a strict
-    /// underlying-typed slot, and the next strict-typed extern read HeapTypeMismatch-faulted the VM.
-    /// Promote with the same ToInt32(SystemObject) tolerance, then narrow back to the underlying tag (a
-    /// null box keeps the B18 deviation: Convert.ToInt32(null) is 0 → default). Non-small underlyings
-    /// return the box untouched.</summary>
+    /// total value consumers (GetValueOrDefault / ??) copied the raw box into a strict underlying-typed
+    /// slot, and the next strict-typed extern read HeapTypeMismatch-faulted the VM. Promote with the same
+    /// ToInt32(SystemObject) tolerance, then narrow back to the underlying tag. Callers invoke this only
+    /// on the present branch; Nullable.Value and explicit unwrap reject before emission. Non-small
+    /// underlyings return the box untouched.</summary>
     internal CLeaf RetagSmallNullablePresent(CLeaf boxedValue, ITypeSymbol underlying)
     {
         var uType = GetStorageTypeName(underlying);
@@ -1441,8 +1450,13 @@ internal sealed class LoweringServices
             var aggSetter = RequireRegisteredCallable(
                 boundSetter.Callable.Site.Target);
             var aggRecv = LoadInstanceRaw(propRef.Instance);
-            return aggSetVal => EmitExprStmt(
-                EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
+            return aggSetVal =>
+            {
+                if (IsUserClass(aggSetType))
+                    ReadClassTypeHeader(aggRecv);
+                EmitExprStmt(
+                    EmitCallToMethod(aggSetter, new List<CLeaf> { aggRecv, aggSetVal }));
+            };
         }
 
         // User-defined indexer on a user STRUCT instance (`s[i] = v`) → call the setter with the struct
@@ -1458,6 +1472,8 @@ internal sealed class LoweringServices
             return aggIdxVal =>
             {
                 setterArgs.Add(aggIdxVal);
+                if (IsUserClass(aggIdxSetType))
+                    ReadClassTypeHeader(setterArgs[0]);
                 EmitExprStmt(EmitCallToMethod(aggIdxSetter, setterArgs));
             };
         }
@@ -2669,11 +2685,11 @@ internal sealed class LoweringServices
 
     /// <summary>CW1 lift: lower a runtime-polymorphic accessor access through the SAME closed-world
     /// machinery as the v2b-2 method arm — ResolveTargets, closed invariant, then ≥2 targets →
-    /// inline typeobj-ReferenceEquals chain; singleton/sealed → devirtualized direct access; empty →
-    /// LogError + default for a read / LogError + skip for a write (closed-world: no minted implementor
-    /// means the receiver must be null; CLR NREs — §2.6 polarity, legs already evaluated for
-    /// side-effect parity). <paramref name="setValue"/> null ⇒ GET (returns the value leaf); non-null ⇒
-    /// SET (returns null). Legs arrive STAGED (<see cref="StageAccessorDispatchLegs"/>).</summary>
+    /// inline typeobj-ReferenceEquals chain; singleton/sealed → devirtualized direct access. Every path
+    /// reads the staged receiver header after index/RHS evaluation, so null follows the stock Udon VM
+    /// fault path. An empty/no-match continuation is retained only as malformed-carrier protocol armor.
+    /// <paramref name="setValue"/> null ⇒ GET (returns the value leaf); non-null ⇒ SET (returns null).
+    /// Legs arrive STAGED (<see cref="StageAccessorDispatchLegs"/>).</summary>
     internal CLeaf EmitAccessorDispatch(IPropertyReferenceOperation operation, INamedTypeSymbol recvTy,
         IMethodSymbol accessor, CLeaf recv, List<CLeaf> indexArgs, CLeaf setValue,
         BoundCallSite boundSite = null)
@@ -2687,12 +2703,15 @@ internal sealed class LoweringServices
         if (!interfaceDispatch) AssertClosedVirtualDispatch(recvTy, targets, accessor);
         bool isSet = setValue != null;
         string memberKind = prop.IsIndexer ? "indexer" : "property";
+        // Receiver/index legs and, for a setter, the deferred RHS slot have already completed.
+        // Reading the representation header here naturally faults on null in the C# order.
+        var runtimeType = ReadClassTypeHeader(recv);
 
         if (targets.Count == 0)
         {
             EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
-                    $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor, so the receiver must be null ({_classSymbol.Name}). "
+                    $"USugar: virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' has no minted implementor after a valid class-carrier read ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
                     StorageTypes.String) });
             return isSet ? null : SlotRef(_state.Builder.AllocScratch(GetStorageType(prop.Type)));
@@ -2702,11 +2721,11 @@ internal sealed class LoweringServices
             return EmitAccessorImplAccess(targets[0], prop, recv, indexArgs, setValue);
 
         var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
-        EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, recv, BundleAbi.Type, StorageTypes.String));
+        EmitAssign(typeObjSlot, runtimeType);
         int destSlot = isSet ? -1 : _state.Builder.AllocScratch(GetStorageType(prop.Type));
 
-        // Phase-A armor: a null receiver or a laundered non-bundle value matches no arm — LogError +
-        // default(read)/skip(write), never silent (mirrors EmitVirtualChain's matched flag).
+        // Phase-A armor: a non-null laundered carrier that matches no closed-world class arm remains
+        // a protocol diagnostic. Null has already faulted at the header read above.
         var matched = _state.Builder.AllocScratch(StorageTypes.Boolean);
         EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
@@ -2727,7 +2746,7 @@ internal sealed class LoweringServices
         _builder.EmitIf(noMatch, _ =>
             EmitExternVoid(UdonAbi.DebugLogError,
                 new List<CLeaf> { Const(
-                    $"USugar: NullReferenceException — virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' accessed on a null or non-class receiver ({_classSymbol.Name}). "
+                    $"USugar: virtual {memberKind} '{prop.ContainingType.Name}.{prop.Name}' matched no compiler class ({_classSymbol.Name}). "
                     + (isSet ? "Skipping the write." : "Returning default."),
                     StorageTypes.String) }), null);
 
@@ -3333,11 +3352,9 @@ internal sealed class LoweringServices
     /// (<see cref="ClassAbi.RuntimeTypeName"/>). <paramref name="useOverrides"/> false = the
     /// base.ToString()-bound-to-object.ToString form: C# calls Object.ToString non-virtually, which still
     /// prints the RUNTIME type name (it reads GetType()), so every arm is a type-name constant there.
-    /// Null parity: an explicit null guard runs BEFORE the bundle[0] typeobj read — C# yields "" for a
-    /// null interpolation hole / concat operand (silent, <paramref name="nullIsError"/> false), while a
-    /// direct null.ToString() would NRE (the established null-invoke deviation: LogError + "",
-    /// <paramref name="nullIsError"/> true). A NON-null no-match (laundered value) is always
-    /// LogError + "" (the chain-armor polarity).</summary>
+    /// Null parity: interpolation/concat guard null and yield "" silently. A direct call performs the
+    /// ordinary bundle[0] read and therefore follows the stock Udon VM fault path. A NON-null no-match
+    /// (laundered value) is always LogError + "" (the chain-armor polarity).</summary>
     internal CLeaf EmitClassToStringDispatch(INamedTypeSymbol recvTy, CLeaf recv,
         bool nullIsError, bool useOverrides)
     {
@@ -3361,21 +3378,12 @@ internal sealed class LoweringServices
             EmitAssign(destSlot, Const("", StorageTypes.String));
         }
 
-        _builder.EmitIf(NullableAbi.IsNull(_builder, SlotRef(recvSlot)), _ =>
+        void EmitNonNull()
         {
-            if (nullIsError)
-                EmitExternVoid(UdonAbi.DebugLogError,
-                    new List<CLeaf> { Const(
-                        $"USugar: NullReferenceException — ToString() on a null '{recvTy.Name}' receiver "
-                        + $"({_classSymbol.Name}). Returning \"\".",
-                        StorageTypes.String) });
-            EmitAssign(destSlot, Const("", StorageTypes.String));
-        }, _ =>
-        {
+            var runtimeType = ReadClassTypeHeader(SlotRef(recvSlot));
             if (targets.Count == 0)
             {
-                // Closed-world: no minted implementor means the receiver had to be null (handled above) —
-                // a non-null value here is laundered, never a silent fall-through.
+                // A successful header read with no target is a laundered carrier, never null.
                 EmitNoMatch();
                 return;
             }
@@ -3386,7 +3394,7 @@ internal sealed class LoweringServices
             }
 
             var typeObjSlot = _state.Builder.AllocScratch(StorageTypes.String);
-            EmitAssign(typeObjSlot, AggregateAbi.ReadSlot(_builder, SlotRef(recvSlot), BundleAbi.Type, StorageTypes.String));
+            EmitAssign(typeObjSlot, runtimeType);
             var matched = _state.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(matched, Const(false, StorageTypes.Boolean));
 
@@ -3405,7 +3413,15 @@ internal sealed class LoweringServices
             var noMatch = ExternCall(UdonAbi.BooleanNot,
                 new List<CLeaf> { SlotRef(matched) }, StorageTypes.Boolean);
             _builder.EmitIf(noMatch, _ => EmitNoMatch(), null);
-        });
+        }
+
+        if (nullIsError)
+            EmitNonNull();
+        else
+            _builder.EmitIf(
+                NullableAbi.IsNull(_builder, SlotRef(recvSlot)),
+                _ => EmitAssign(destSlot, Const("", StorageTypes.String)),
+                _ => EmitNonNull());
 
         return SlotRef(destSlot);
     }

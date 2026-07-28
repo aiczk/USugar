@@ -468,6 +468,27 @@ internal sealed class ExpressionHandler
 
         LoweringServices.RejectChecked(conv.IsChecked);
 
+        var resolvedConversionSource =
+            _lowering.ResolveType(conv.Operand.Type);
+        var resolvedConversionDestination =
+            _lowering.ResolveType(conv.Type);
+        if (!conv.IsImplicit
+            && operatorMethod == null
+            && EmitPolicy.IsNullableT(
+                resolvedConversionSource, out _)
+            && resolvedConversionDestination is { IsValueType: true }
+            && !EmitPolicy.IsNullableT(
+                resolvedConversionDestination, out _))
+            throw new NotSupportedException(
+                $"Explicit conversion from nullable type "
+                + $"'{resolvedConversionSource.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to non-nullable type "
+                + $"'{resolvedConversionDestination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: a null value requires "
+                + "InvalidOperationException, but Udon has no exception "
+                + "semantics. Use pattern matching, `??`, or "
+                + "GetValueOrDefault() to define the null case.");
+
         // B82 (wave-16, ruling Option A): reject a user-level conversion that ERASES a v1 class to a non-class
         // type (object / object[] / any object-erased type). A class value is a program-local object[] bundle
         // with NO runtime type identity, so once erased to object it launders past every §2-1 boundary check
@@ -627,8 +648,8 @@ internal sealed class ExpressionHandler
                 var stripped = conv.Operand;
                 while (stripped is IConversionOperation strippedConv) stripped = strippedConv.Operand;
                 // A null / default operand carries no delegate and no signature — `(Func<...>)null`
-                // dispatches through the invoke-time target-null guard (LogError+skip), never diverging
-                // a channel. Safe passthrough.
+                // is a safe cast passthrough. If later invoked normally, the real carrier read follows
+                // the stock Udon VM fault path; conditional invocation still short-circuits.
                 var isNull = stripped is IDefaultValueOperation
                     || (stripped?.ConstantValue.HasValue == true && stripped.ConstantValue.Value == null);
                 // A same-signature delegate boxed and unboxed within THIS expression is the trivially
@@ -704,7 +725,8 @@ internal sealed class ExpressionHandler
 
         // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
         // the value is always present, so narrow numerically (C#-unchecked wrap) and let it box into the
-        // nullable's SystemObject slot with the right tag, so a later `.Value`'s strict small-int extern reads it.
+        // nullable's SystemObject slot with the right tag, so total consumers such as
+        // GetValueOrDefault() and `??` read the correct underlying representation.
         if (conv.Conversion.IsNullable
             && conv.Operand.Type != null && NumericFacet(conv.Operand.Type) is { } bareSrcN
             && ExternResolver.IsConvertibleNumericType(bareSrcN)
@@ -720,8 +742,8 @@ internal sealed class ExpressionHandler
         // `as T?` twin loud-rejects through EmitTypeCheck for exactly this shape (a Nullable box is not
         // runtime-distinguishable). The identity passthrough below instead laundered ANY box into the
         // nullable slot: a mismatched box (C#: InvalidCastException) silently minted a drifted-tag
-        // nullable that mis-compares on the tolerant lifted paths and HeapTypeMismatch-faults on the
-        // strict accessors. Mirror the as-form's polarity: loud reject. A statically-null operand stays
+        // nullable that mis-compares on the tolerant lifted paths and HeapTypeMismatch-faults on later
+        // typed consumers. Mirror the as-form's polarity: loud reject. A statically-null operand stays
         // a passthrough (C#: unboxing null into T? is legal and yields null), and a user conversion
         // operator is a real value conversion, not an unbox.
         if (operatorMethod == null
@@ -811,15 +833,12 @@ internal sealed class ExpressionHandler
             return _lowering.SlotRef(tmpSlot);
         }
 
-        // CW2 (CA-v2b-1 design step 4, panel Q1 house deviation): an explicit reference downcast to a v1
-        // user class — (Derived)baseVar, (T)objectVar — runs the same typeobj test as `is`/`as`. C# throws
-        // InvalidCastException; Udon has no exceptions, so a mismatch is LogError + null, never the former
-        // identity passthrough (a sibling-class bundle reinterprets field slots; a shorter base bundle
-        // faults far from the cast). An upcast/identity conversion (destination assignable from the
-        // resolved source) is an object[]-shared no-op and stays passthrough; a statically-null operand
-        // casts to null with no check (C#: casting null never throws).
+        // A potentially-failing hard cast into a compiler-owned bundle needs
+        // InvalidCastException. Udon cannot implement that contract, so keep
+        // only the statically total cases: identity, class upcast, and null
+        // into a class reference. `is`, `as`, and declaration patterns remain
+        // the supported runtime-checked forms.
         var castDestination = _lowering.ResolveType(conv.Type);
-        var castDst = castDestination;
         var castSource = _lowering.ResolveType(conv.Operand.Type);
         var destinationShape = _lowering.State.Types.SourceShape(
             conv.Type, _lowering.State.TypeParamMap);
@@ -840,34 +859,18 @@ internal sealed class ExpressionHandler
             while (castOperand is IConversionOperation innerCast) castOperand = innerCast.Operand;
             var castsNull = castOperand is IDefaultValueOperation
                 || (castOperand?.ConstantValue.HasValue == true && castOperand.ConstantValue.Value == null);
-            if (!castsNull)
-            {
-                var castUdon = _lowering.GetStorageTypeName(conv.Type);
-                var castSlot = _lowering.State.Builder.AllocScratch(new StorageType(castUdon));
-                var castOk = _lowering.EmitTypeCheck(srcVal, conv.Type);
-                _lowering.Builder.EmitIf(castOk,
-                    _ => _lowering.EmitAssign(castSlot, srcVal),
-                    _ =>
-                    {
-                        _lowering.EmitExternVoid(UdonAbi.DebugLogError,
-                            new List<CLeaf> { _lowering.Const(
-                                $"USugar: InvalidCastException — cast to '{castDst.Name}' on a value that is not a '{castDst.Name}' ({_lowering.ClassSymbol.Name}). Returning null.",
-                                StorageTypes.String) });
-                        var fallback =
-                            castDestination is INamedTypeSymbol aggregate
-                            && _lowering.IsAggregateValue(aggregate)
-                                ? AggregateAbi.MintDefault(
-                                    _lowering.Builder,
-                                    _lowering.State.Aggregates
-                                        .GetLayout(aggregate),
-                                    _lowering.State.Aggregates.GetLayout,
-                                    _lowering.GetStorageTypeName)
-                                : _lowering.Const(
-                                    null, new StorageType(castUdon));
-                        _lowering.EmitAssign(castSlot, fallback);
-                    });
-                return _lowering.SlotRef(castSlot);
-            }
+            if (!castsNull
+                || destinationShape.Bundle
+                    != RuntimeBundleKind.Class)
+                throw new NotSupportedException(
+                    $"Cast from "
+                    + $"'{castSource.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + $"to compiler bundle "
+                    + $"'{castDestination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "is not supported: a failed hard cast requires "
+                    + "InvalidCastException, but Udon has no exception "
+                    + "semantics. Use `is`, `as`, or a declaration pattern "
+                    + "to handle the mismatch explicitly.");
         }
 
         // Identity conversion: pass through

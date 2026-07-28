@@ -94,6 +94,7 @@ public sealed class UasmEmitter
         FrozenLayoutPlan planner = null)
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
+        CompilerDiagnosticPolicy.RequireSupported(session);
         _session = session;
         var layouts =
             planner ?? new LayoutPlanBuilder(session).Build();

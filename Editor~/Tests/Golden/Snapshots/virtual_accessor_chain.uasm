@@ -229,7 +229,7 @@
         PUSH, __11_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x00002664
+        JUMP, 0x000026c4
     ___start__callret_0:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_a_SystemObjectArray_0
@@ -262,7 +262,7 @@
         PUSH, __11_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x00002664
+        JUMP, 0x000026c4
     ___start__callret_1:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_b_SystemObjectArray_0
@@ -348,7 +348,7 @@
         PUSH, __5_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_2
-        JUMP, 0x00002314
+        JUMP, 0x00002374
     ___start__callret_2:
         PUSH, __typeobj_VacB
         PUSH, __intnl_SystemString_c0
@@ -373,7 +373,7 @@
         PUSH, __10_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_3
-        JUMP, 0x000025e8
+        JUMP, 0x00002648
     ___start__callret_3:
         PUSH, __intnl_SystemBoolean_c0
         PUSH, __intnl_SystemBoolean_c1
@@ -423,7 +423,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_4
-        JUMP, 0x0000216c
+        JUMP, 0x000021cc
     ___start__callret_4:
         PUSH, __2_get_Score__ret
         PUSH, __intnl_SystemInt32_c0
@@ -452,7 +452,7 @@
         PUSH, __8_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_5
-        JUMP, 0x000024bc
+        JUMP, 0x0000251c
     ___start__callret_5:
         PUSH, __8_get_Score__ret
         PUSH, __intnl_SystemInt32_c0
@@ -531,7 +531,7 @@
         PUSH, __4_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_6
-        JUMP, 0x00002264
+        JUMP, 0x000022c4
     ___start__callret_6:
         PUSH, __typeobj_VacB
         PUSH, __intnl_SystemString_c0
@@ -559,7 +559,7 @@
         PUSH, __9_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_7
-        JUMP, 0x00002538
+        JUMP, 0x00002598
     ___start__callret_7:
         PUSH, __intnl_SystemBoolean_c0
         PUSH, __intnl_SystemBoolean_c1
@@ -628,7 +628,7 @@
         PUSH, __4_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_8
-        JUMP, 0x00002264
+        JUMP, 0x000022c4
     ___start__callret_8:
         PUSH, __typeobj_VacB
         PUSH, __intnl_SystemString_c0
@@ -656,7 +656,7 @@
         PUSH, __9_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_9
-        JUMP, 0x00002538
+        JUMP, 0x00002598
     ___start__callret_9:
         PUSH, __intnl_SystemBoolean_c0
         PUSH, __intnl_SystemBoolean_c1
@@ -712,7 +712,7 @@
         PUSH, __1_i__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_10
-        JUMP, 0x000020bc
+        JUMP, 0x0000211c
     ___start__callret_10:
         PUSH, __1_get_Item__ret
         PUSH, __intnl_SystemInt32_c0
@@ -744,7 +744,7 @@
         PUSH, __7_i__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_11
-        JUMP, 0x0000240c
+        JUMP, 0x0000246c
     ___start__callret_11:
         PUSH, __7_get_Item__ret
         PUSH, __intnl_SystemInt32_c0
@@ -807,7 +807,7 @@
         PUSH, __1_i__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_12
-        JUMP, 0x000020bc
+        JUMP, 0x0000211c
     ___start__callret_12:
         PUSH, __1_get_Item__ret
         PUSH, __intnl_SystemInt32_c0
@@ -839,7 +839,7 @@
         PUSH, __7_i__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_13
-        JUMP, 0x0000240c
+        JUMP, 0x0000246c
     ___start__callret_13:
         PUSH, __7_get_Item__ret
         PUSH, __intnl_SystemInt32_c0
@@ -916,7 +916,7 @@
         PUSH, __6_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_14
-        JUMP, 0x00002390
+        JUMP, 0x000023f0
     ___start__callret_14:
         PUSH, __typeobj_VacB
         PUSH, __intnl_SystemString_c0
@@ -987,7 +987,7 @@
         PUSH, __3_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_15
-        JUMP, 0x000021e8
+        JUMP, 0x00002248
     ___start__callret_15:
         PUSH, __3_get_Tag__ret
         PUSH, __intnl_SystemInt32_c2
@@ -1068,7 +1068,7 @@
         PUSH, __3_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_16
-        JUMP, 0x000021e8
+        JUMP, 0x00002248
     ___start__callret_16:
         PUSH, __3_get_Tag__ret
         PUSH, __intnl_SystemInt32_c2
@@ -1156,7 +1156,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_17
-        JUMP, 0x0000216c
+        JUMP, 0x000021cc
     ___start__callret_17:
         PUSH, __2_get_Score__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1185,7 +1185,7 @@
         PUSH, __8_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_18
-        JUMP, 0x000024bc
+        JUMP, 0x0000251c
     ___start__callret_18:
         PUSH, __8_get_Score__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1246,7 +1246,7 @@
         PUSH, __5_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_19
-        JUMP, 0x00002314
+        JUMP, 0x00002374
     ___start__callret_19:
         PUSH, __typeobj_VacB
         PUSH, __intnl_SystemString_c0
@@ -1271,7 +1271,7 @@
         PUSH, __10_value__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_20
-        JUMP, 0x000025e8
+        JUMP, 0x00002648
     ___start__callret_20:
         PUSH, __intnl_SystemBoolean_c0
         PUSH, __intnl_SystemBoolean_c1
@@ -1289,10 +1289,14 @@
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __12_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_21
-        JUMP, 0x000026d8
+        JUMP, 0x00002738
     ___start__callret_21:
         PUSH, __12_Snap__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1301,10 +1305,14 @@
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __12_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_22
-        JUMP, 0x000026d8
+        JUMP, 0x00002738
     ___start__callret_22:
         PUSH, __12_Snap__ret
         PUSH, __intnl_SystemInt32_c7
@@ -1342,10 +1350,14 @@
         PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c1
         PUSH, __13_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_23
-        JUMP, 0x00002940
+        JUMP, 0x000029a0
     ___start__callret_23:
         PUSH, __13_get_K__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1408,10 +1420,10 @@
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00001efc
-        JUMP, 0x00001f04
-    ___start_bb105:
+        JUMP_IF_FALSE, 0x00001f5c
         JUMP, 0x00001f64
+    ___start_bb105:
+        JUMP, 0x00001fc4
     ___start_bb104:
         PUSH, __const_SystemBoolean_47
         PUSH, __intnl_SystemBoolean_c0
@@ -1420,7 +1432,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_24
-        JUMP, 0x0000216c
+        JUMP, 0x000021cc
     ___start__callret_24:
         PUSH, __2_get_Score__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1437,10 +1449,10 @@
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00001fb0
-        JUMP, 0x00001fb8
-    ___start_bb108:
+        JUMP_IF_FALSE, 0x00002010
         JUMP, 0x00002018
+    ___start_bb108:
+        JUMP, 0x00002078
     ___start_bb107:
         PUSH, __const_SystemBoolean_48
         PUSH, __intnl_SystemBoolean_c0
@@ -1449,7 +1461,7 @@
         PUSH, __8_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_25
-        JUMP, 0x000024bc
+        JUMP, 0x0000251c
     ___start__callret_25:
         PUSH, __8_get_Score__ret
         PUSH, __intnl_SystemInt32_c5
@@ -1462,10 +1474,10 @@
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x00002048
-        JUMP, 0x00002050
+        JUMP_IF_FALSE, 0x000020a8
+        JUMP, 0x000020b0
     ___start_bb111:
-        JUMP, 0x00002060
+        JUMP, 0x000020c0
     ___start_bb110:
         PUSH, __const_SystemString_11
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
@@ -1733,10 +1745,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00002794
-        JUMP, 0x0000279c
-    ____12_Snap_bb3:
+        JUMP_IF_FALSE, 0x000027f4
         JUMP, 0x000027fc
+    ____12_Snap_bb3:
+        JUMP, 0x0000285c
     ____12_Snap_bb2:
         PUSH, __const_SystemBoolean_53
         PUSH, __intnl_SystemBoolean_c2
@@ -1745,7 +1757,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_26
-        JUMP, 0x0000216c
+        JUMP, 0x000021cc
     ____12_Snap__callret_26:
         PUSH, __2_get_Score__ret
         PUSH, __intnl_SystemInt32_c28
@@ -1762,10 +1774,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00002848
-        JUMP, 0x00002850
-    ____12_Snap_bb6:
+        JUMP_IF_FALSE, 0x000028a8
         JUMP, 0x000028b0
+    ____12_Snap_bb6:
+        JUMP, 0x00002910
     ____12_Snap_bb5:
         PUSH, __const_SystemBoolean_54
         PUSH, __intnl_SystemBoolean_c2
@@ -1774,7 +1786,7 @@
         PUSH, __8_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_27
-        JUMP, 0x000024bc
+        JUMP, 0x0000251c
     ____12_Snap__callret_27:
         PUSH, __8_get_Score__ret
         PUSH, __intnl_SystemInt32_c28
@@ -1787,10 +1799,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x000028e0
-        JUMP, 0x000028e8
+        JUMP_IF_FALSE, 0x00002940
+        JUMP, 0x00002948
     ____12_Snap_bb9:
-        JUMP, 0x000028f8
+        JUMP, 0x00002958
     ____12_Snap_bb8:
         PUSH, __const_SystemString_11
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
@@ -1828,16 +1840,16 @@
 #   __const_SystemBoolean_4: %SystemBoolean = false
 #   __const_SystemBoolean_5: %SystemBoolean = true
 #   __const_SystemBoolean_6: %SystemBoolean = true
-#   __const_SystemString_7: %SystemString = "USugar: NullReferenceException — virtual property 'VacBase.Score' accessed on a null or non-class receiver (VirtualAccessorChain). Skipping the write."
+#   __const_SystemString_7: %SystemString = "USugar: virtual property 'VacBase.Score' matched no compiler class (VirtualAccessorChain). Skipping the write."
 #   __const_SystemBoolean_8: %SystemBoolean = false
 #   __const_SystemBoolean_9: %SystemBoolean = true
 #   __const_SystemBoolean_10: %SystemBoolean = true
-#   __const_SystemString_11: %SystemString = "USugar: NullReferenceException — virtual property 'VacBase.Score' accessed on a null or non-class receiver (VirtualAccessorChain). Returning default."
+#   __const_SystemString_11: %SystemString = "USugar: virtual property 'VacBase.Score' matched no compiler class (VirtualAccessorChain). Returning default."
 #   __const_SystemInt32_12: %SystemInt32 = 5
 #   __const_SystemBoolean_13: %SystemBoolean = false
 #   __const_SystemBoolean_14: %SystemBoolean = true
 #   __const_SystemBoolean_15: %SystemBoolean = true
-#   __const_SystemString_16: %SystemString = "USugar: NullReferenceException — virtual indexer 'VacBase.this[]' accessed on a null or non-class receiver (VirtualAccessorChain). Skipping the write."
+#   __const_SystemString_16: %SystemString = "USugar: virtual indexer 'VacBase.this[]' matched no compiler class (VirtualAccessorChain). Skipping the write."
 #   __const_SystemInt32_17: %SystemInt32 = 2
 #   __const_SystemInt32_18: %SystemInt32 = 6
 #   __const_SystemBoolean_19: %SystemBoolean = false
@@ -1846,18 +1858,18 @@
 #   __const_SystemBoolean_22: %SystemBoolean = false
 #   __const_SystemBoolean_23: %SystemBoolean = true
 #   __const_SystemBoolean_24: %SystemBoolean = true
-#   __const_SystemString_25: %SystemString = "USugar: NullReferenceException — virtual indexer 'VacBase.this[]' accessed on a null or non-class receiver (VirtualAccessorChain). Returning default."
+#   __const_SystemString_25: %SystemString = "USugar: virtual indexer 'VacBase.this[]' matched no compiler class (VirtualAccessorChain). Returning default."
 #   __const_SystemBoolean_26: %SystemBoolean = false
 #   __const_SystemBoolean_27: %SystemBoolean = true
 #   __const_SystemBoolean_28: %SystemBoolean = true
 #   __const_SystemBoolean_29: %SystemBoolean = false
 #   __const_SystemBoolean_30: %SystemBoolean = true
 #   __const_SystemBoolean_31: %SystemBoolean = true
-#   __const_SystemString_32: %SystemString = "USugar: NullReferenceException — virtual property 'VacBase.Tag' accessed on a null or non-class receiver (VirtualAccessorChain). Skipping the write."
+#   __const_SystemString_32: %SystemString = "USugar: virtual property 'VacBase.Tag' matched no compiler class (VirtualAccessorChain). Skipping the write."
 #   __const_SystemBoolean_33: %SystemBoolean = false
 #   __const_SystemBoolean_34: %SystemBoolean = true
 #   __const_SystemBoolean_35: %SystemBoolean = true
-#   __const_SystemString_36: %SystemString = "USugar: NullReferenceException — virtual property 'VacBase.Tag' accessed on a null or non-class receiver (VirtualAccessorChain). Returning default."
+#   __const_SystemString_36: %SystemString = "USugar: virtual property 'VacBase.Tag' matched no compiler class (VirtualAccessorChain). Returning default."
 #   __const_SystemBoolean_37: %SystemBoolean = false
 #   __const_SystemBoolean_38: %SystemBoolean = true
 #   __const_SystemBoolean_39: %SystemBoolean = true
@@ -1897,10 +1909,10 @@
 #   __const_retaddr_SystemUInt32_18: %SystemUInt32 = 6432
 #   __const_retaddr_SystemUInt32_19: %SystemUInt32 = 6828
 #   __const_retaddr_SystemUInt32_20: %SystemUInt32 = 6988
-#   __const_retaddr_SystemUInt32_21: %SystemUInt32 = 7116
-#   __const_retaddr_SystemUInt32_22: %SystemUInt32 = 7192
-#   __const_retaddr_SystemUInt32_23: %SystemUInt32 = 7476
-#   __const_retaddr_SystemUInt32_24: %SystemUInt32 = 7996
-#   __const_retaddr_SystemUInt32_25: %SystemUInt32 = 8176
-#   __const_retaddr_SystemUInt32_26: %SystemUInt32 = 10196
-#   __const_retaddr_SystemUInt32_27: %SystemUInt32 = 10376
+#   __const_retaddr_SystemUInt32_21: %SystemUInt32 = 7148
+#   __const_retaddr_SystemUInt32_22: %SystemUInt32 = 7256
+#   __const_retaddr_SystemUInt32_23: %SystemUInt32 = 7572
+#   __const_retaddr_SystemUInt32_24: %SystemUInt32 = 8092
+#   __const_retaddr_SystemUInt32_25: %SystemUInt32 = 8272
+#   __const_retaddr_SystemUInt32_26: %SystemUInt32 = 10292
+#   __const_retaddr_SystemUInt32_27: %SystemUInt32 = 10472

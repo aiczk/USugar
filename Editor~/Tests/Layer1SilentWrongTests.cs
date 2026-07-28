@@ -10,8 +10,8 @@ namespace USugar.Tests;
 ///     ContainsDelegateType now recurses aggregate fields.
 ///  2. `checked` was a silent no-op (overflow wraps where C# throws OverflowException) → loud reject
 ///     on IsChecked==true; `unchecked`/default wrapping (the C#-correct default) still compiles.
-///  3. Non-exhaustive switch EXPRESSION silently returned default(T) → runtime LogError (matches the
-///     §8-8 null-invoke deviation) then default(T).
+///  3. Non-exhaustive switch EXPRESSION silently returned default(T) → compile reject because Udon
+///     cannot implement SwitchExpressionException.
 /// </summary>
 public class Layer1SilentWrongTests
 {
@@ -142,16 +142,16 @@ public class L1C5 : UdonSharpBehaviour {
     // ── 3. Non-exhaustive switch expression ──
 
     [Fact]
-    public void NonExhaustiveSwitchExpr_EmitsRuntimeLogError()
+    public void NonExhaustiveSwitchExpr_RejectsAtCompileTime()
     {
-        // No arm matches at runtime → LogError (loud), then the default(T) the slot was seeded with.
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class L1S1 : UdonSharpBehaviour {
     public int x, r;
     public void M() { r = x switch { 1 => 10, 2 => 20 }; }
-}", "L1S1");
-        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+}", "L1S1"));
+        Assert.Contains("CS8509", ex.Message);
     }
 
     [Fact]

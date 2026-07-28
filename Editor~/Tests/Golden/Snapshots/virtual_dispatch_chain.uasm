@@ -124,7 +124,7 @@
         PUSH, __5_side__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x00000d14
+        JUMP, 0x00000d54
     ___start__callret_0:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_a_SystemObjectArray_0
@@ -167,7 +167,7 @@
         PUSH, __1_h0__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x000008b0
+        JUMP, 0x000008f0
     ___start__callret_1:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_b_SystemObjectArray_0
@@ -240,7 +240,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_2
-        JUMP, 0x000009a0
+        JUMP, 0x000009e0
     ___start__callret_2:
         PUSH, __2_Area__ret
         PUSH, __intnl_SystemInt32_c0
@@ -269,7 +269,7 @@
         PUSH, __6_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_3
-        JUMP, 0x00000dbc
+        JUMP, 0x00000dfc
     ___start__callret_3:
         PUSH, __6_Area__ret
         PUSH, __intnl_SystemInt32_c0
@@ -324,7 +324,7 @@
         PUSH, __5_side__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_4
-        JUMP, 0x00000d14
+        JUMP, 0x00000d54
     ___start__callret_4:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_d_SystemObjectArray_0
@@ -333,10 +333,14 @@
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __6_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_5
-        JUMP, 0x00000dbc
+        JUMP, 0x00000dfc
     ___start__callret_5:
         PUSH, __6_Area__ret
         PUSH, __intnl_SystemInt32_c1
@@ -348,10 +352,14 @@
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __4_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_6
-        JUMP, 0x00000aac
+        JUMP, 0x00000aec
     ___start__callret_6:
         PUSH, __4_Doubled__ret
         PUSH, __intnl_SystemInt32_c1
@@ -429,7 +437,7 @@
         PUSH, __3_t__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_7
-        JUMP, 0x00000a50
+        JUMP, 0x00000a90
     ____1_VdRc__ctor__callret_7:
         PUSH, __1_this__param
         PUSH, __intnl_SystemObjectArray_c2
@@ -518,10 +526,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00000b68
-        JUMP, 0x00000b70
+        JUMP_IF_FALSE, 0x00000ba8
+        JUMP, 0x00000bb0
     ____4_Doubled_bb3:
-        JUMP, 0x00000bd0
+        JUMP, 0x00000c10
     ____4_Doubled_bb2:
         PUSH, __const_SystemBoolean_12
         PUSH, __intnl_SystemBoolean_c2
@@ -530,7 +538,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_8
-        JUMP, 0x000009a0
+        JUMP, 0x000009e0
     ____4_Doubled__callret_8:
         PUSH, __2_Area__ret
         PUSH, __intnl_SystemInt32_c6
@@ -547,10 +555,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00000c1c
-        JUMP, 0x00000c24
+        JUMP_IF_FALSE, 0x00000c5c
+        JUMP, 0x00000c64
     ____4_Doubled_bb6:
-        JUMP, 0x00000c84
+        JUMP, 0x00000cc4
     ____4_Doubled_bb5:
         PUSH, __const_SystemBoolean_13
         PUSH, __intnl_SystemBoolean_c2
@@ -559,7 +567,7 @@
         PUSH, __6_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_9
-        JUMP, 0x00000dbc
+        JUMP, 0x00000dfc
     ____4_Doubled__callret_9:
         PUSH, __6_Area__ret
         PUSH, __intnl_SystemInt32_c6
@@ -572,10 +580,10 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemBoolean.__op_UnaryNegation__SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00000cb4
-        JUMP, 0x00000cbc
+        JUMP_IF_FALSE, 0x00000cf4
+        JUMP, 0x00000cfc
     ____4_Doubled_bb9:
-        JUMP, 0x00000ccc
+        JUMP, 0x00000d0c
     ____4_Doubled_bb8:
         PUSH, __const_SystemString_9
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
@@ -601,7 +609,7 @@
         PUSH, __3_t__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_10
-        JUMP, 0x00000a50
+        JUMP, 0x00000a90
     ____5_VdSq__ctor__callret_10:
         PUSH, __5_this__param
         PUSH, __intnl_SystemObjectArray_c7
@@ -658,7 +666,7 @@
 #   __const_SystemBoolean_6: %SystemBoolean = false
 #   __const_SystemBoolean_7: %SystemBoolean = true
 #   __const_SystemBoolean_8: %SystemBoolean = true
-#   __const_SystemString_9: %SystemString = "USugar: NullReferenceException — virtual call 'VdShape.Area' on a null or non-class receiver (VirtualDispatchChain). Returning default."
+#   __const_SystemString_9: %SystemString = "USugar: virtual call 'VdShape.Area' matched no compiler class (VirtualDispatchChain). Returning default."
 #   __const_SystemInt32_10: %SystemInt32 = 6
 #   __const_SystemBoolean_11: %SystemBoolean = false
 #   __const_SystemBoolean_12: %SystemBoolean = true
@@ -668,9 +676,9 @@
 #   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1028
 #   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1208
 #   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 1576
-#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 1652
-#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 1748
-#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 2300
-#   __const_retaddr_SystemUInt32_8: %SystemUInt32 = 2984
-#   __const_retaddr_SystemUInt32_9: %SystemUInt32 = 3164
-#   __const_retaddr_SystemUInt32_10: %SystemUInt32 = 3424
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 1684
+#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 1812
+#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 2364
+#   __const_retaddr_SystemUInt32_8: %SystemUInt32 = 3048
+#   __const_retaddr_SystemUInt32_9: %SystemUInt32 = 3228
+#   __const_retaddr_SystemUInt32_10: %SystemUInt32 = 3488

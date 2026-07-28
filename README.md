@@ -78,6 +78,8 @@ Disable **USugar > Override Compiler** to return to the standard compiler.
 USugar reports a compile error when the Udon VM cannot preserve the source program's C# semantics.
 
 - Exceptions, `async` and `await`, iterator `yield`, `lock`, unsafe code, function pointers, C# `dynamic`, and checked overflow are unsupported.
+- A value-dependent failure exposed by a real Udon extern or compiler-owned representation access follows the normal Udon VM halt path. USugar does not synthesize exception handlers or trap operations.
+- Exception-dependent constructs that cannot be represented honestly are compile errors. This includes non-exhaustive switch expressions, potentially failing hard casts into compiler-owned bundles, `Nullable<T>.Value`, and explicit nullable-to-non-nullable unwraps. Use exhaustive arms, `is`/`as`/patterns, `??`, or `GetValueOrDefault()` instead.
 - `ref` and `out` parameters are supported, but ref locals and `in` parameters are not.
 - `foreach` supports arrays, not `IEnumerable` or `List<T>`.
 - Multidimensional arrays are unsupported; use one-dimensional or jagged arrays.

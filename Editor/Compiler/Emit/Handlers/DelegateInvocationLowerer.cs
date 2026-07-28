@@ -97,10 +97,11 @@ internal sealed class DelegateInvocationLowerer
     /// <summary>
     /// §2.6 unified delegate dispatch: full guard ladder (bundle-null / target-null / target-identity +
     /// addr≠0 self-vs-cross / method-null) around the self JUMP_INDIRECT and cross SendCustomEvent arms.
-    /// Null-invoke deviation (§2.6/§8-8): LogError + skip + default(T) result — never a VM halt, never
-    /// P5d's silent jump-to-0. ?.Invoke is C#-strict instead: silent skip, no LogError.
+    /// A plain null invocation reaches a real object[] carrier read after argument evaluation, so the
+    /// stock Udon wrapper/VM fault path halts execution. ?.Invoke is C#-strict instead: silent skip,
+    /// with arguments unevaluated.
     /// Clobber-window invariants (§3.3, pinned): (1) all argument expressions are fully evaluated to ANF
-    /// scratch slots BEFORE the first conv store; (2) between the conv stores and the JUMP/SendCustomEvent
+    /// scratch slots BEFORE the receiver carrier read/first conv store; (2) between the conv stores and the JUMP/SendCustomEvent
     /// only pure guard externs run; (4) the conv ret is materialized to a fresh slot immediately after
     /// dispatch — never returned as a raw LoadField leaf (fcd11/12).
     /// </summary>
@@ -239,8 +240,9 @@ internal sealed class DelegateInvocationLowerer
         => DelegateAbi.CompareDelegates(_lowering.Builder, a, b, isNotEquals: false);
 
     /// <summary>default(T) constant for the dispatch retSlot pre-init (§2.6). Non-primitive Udon types
-    /// (objects, arrays, bundles, SDK structs) approximate with null — only observable on the
-    /// null-invoke deviation path, which is already a documented deviation (§8-8).</summary>
+    /// (objects, arrays, bundles, SDK structs) approximate with null. This is observable only after a
+    /// malformed non-null ABI carrier survives far enough to reach a protocol-failure arm; plain null
+    /// invocation halts at the carrier read.</summary>
     CConst DefaultConst(string udonType) => DefaultConst(_lowering.Builder, new StorageType(udonType));
 
     /// <summary>Shared default(T) const builder (dispatch retSlot pre-init + Stage 2 §5.1 bridge
@@ -263,7 +265,7 @@ internal sealed class DelegateInvocationLowerer
         _ => b.Const(null, type),
     };
 
-    /// <summary>Best-effort member name for the null-invoke LogError message ({Class}.{member}).</summary>
+    /// <summary>Best-effort member name for malformed delegate-carrier diagnostics.</summary>
     static string DescribeDelegateReceiver(IOperation instance)
     {
         var i = instance != null ? LoweringServices.UnwrapConversions(instance) : null;

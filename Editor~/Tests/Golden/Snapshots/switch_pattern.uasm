@@ -8,55 +8,50 @@
     __refl_typeid: %SystemInt64, null
     __refl_typename: %SystemString, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
-    __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemInt32_c0: %SystemInt32, null
-    __intnl_SystemInt32_c1: %SystemInt32, null
-    __const_SystemInt32_1: %SystemInt32, null
+    __const_SystemInt32_0: %SystemInt32, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
+    __const_SystemInt32_1: %SystemInt32, null
     __const_SystemInt32_2: %SystemInt32, null
     __const_SystemInt32_3: %SystemInt32, null
     __const_SystemInt32_4: %SystemInt32, null
-    __const_SystemInt32_5: %SystemInt32, null
 .data_end
 .code_start
     .export _start
     _start:
         PUSH, __const_SystemUInt32_sentinel
     _start__body:
-        PUSH, __const_SystemInt32_0
+        PUSH, score
         PUSH, __intnl_SystemInt32_c0
         COPY
-        PUSH, score
-        PUSH, __intnl_SystemInt32_c1
-        COPY
-        PUSH, __intnl_SystemInt32_c1
+        PUSH, __intnl_SystemInt32_c0
+        PUSH, __const_SystemInt32_0
+        PUSH, __intnl_SystemBoolean_c0
+        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c0
+        JUMP_IF_FALSE, 0x00000054
+        JUMP, 0x000000c4
+    ___start_bb3:
+        PUSH, __intnl_SystemInt32_c0
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x00000068
-        JUMP, 0x000000d8
-    ___start_bb3:
-        PUSH, __intnl_SystemInt32_c1
-        PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemBoolean_c0
-        EXTERN, "SystemInt32.__op_GreaterThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000000a0
-        JUMP, 0x000000bc
+        JUMP_IF_FALSE, 0x0000008c
+        JUMP, 0x000000a8
     ___start_bb6:
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemInt32_c0
+        COPY
+        JUMP, 0x000000bc
+    ___start_bb5:
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemInt32_c0
         COPY
-        JUMP, 0x000000d0
-    ___start_bb5:
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c0
-        COPY
     ___start_bb7:
-        JUMP, 0x000000ec
+        JUMP, 0x000000d8
     ___start_bb2:
-        PUSH, __const_SystemInt32_5
+        PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c0
         COPY
     ___start_bb4:
@@ -75,9 +70,8 @@
 #   __refl_typeid: %SystemInt64 = 3160890876020312103
 #   __refl_typename: %SystemString = "SwitchPattern"
 #   __const_SystemUInt32_sentinel: %SystemUInt32 = 4294967295
-#   __const_SystemInt32_0: %SystemInt32 = 0
-#   __const_SystemInt32_1: %SystemInt32 = 90
-#   __const_SystemInt32_2: %SystemInt32 = 70
-#   __const_SystemInt32_3: %SystemInt32 = 3
-#   __const_SystemInt32_4: %SystemInt32 = 2
-#   __const_SystemInt32_5: %SystemInt32 = 1
+#   __const_SystemInt32_0: %SystemInt32 = 90
+#   __const_SystemInt32_1: %SystemInt32 = 70
+#   __const_SystemInt32_2: %SystemInt32 = 3
+#   __const_SystemInt32_3: %SystemInt32 = 2
+#   __const_SystemInt32_4: %SystemInt32 = 1

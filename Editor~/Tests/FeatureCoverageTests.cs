@@ -1169,12 +1169,13 @@ public class EnumSpecialTypeTest : UdonSharpBehaviour {
         Assert.NotNull(uasm);
     }
 
-    // ── Switch expression without default arm (no false-positive warning) ──
+    // ── Switch-expression exhaustiveness ──
 
     [Fact]
-    public void SwitchExpression_WithoutDefaultArm_NoWarning()
+    public void SwitchExpression_WithoutDefaultArm_Rejects()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class SwitchNoDefaultTest : UdonSharpBehaviour {
     string Describe(int n) => n switch {
@@ -1182,11 +1183,22 @@ public class SwitchNoDefaultTest : UdonSharpBehaviour {
         2 => ""two"",
     };
     void Start() { }
-}", "SwitchNoDefaultTest", out var emitter);
-        Assert.NotNull(uasm);
-        // Roslyn CS8509 covers exhaustiveness; USugar should not emit redundant warnings
-        Assert.DoesNotContain(emitter.Diagnostics, d =>
-            d.Severity == "Warning" && d.Message.Contains("default"));
+}", "SwitchNoDefaultTest"));
+        Assert.Contains("CS8509", ex.Message);
+        Assert.Contains("SwitchExpressionException", ex.Message);
+    }
+
+    [Fact]
+    public void SwitchExpression_ExhaustivenessCannotBeSuppressed()
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+#pragma warning disable CS8509
+using UdonSharp;
+public class SuppressedSwitchTest : UdonSharpBehaviour {
+    int Describe(int value) => value switch { 1 => 1 };
+}", "SuppressedSwitchTest"));
+        Assert.Contains("CS8509", ex.Message);
     }
 
     [Fact]
@@ -1203,6 +1215,23 @@ public class SwitchWithDefaultTest : UdonSharpBehaviour {
 }", "SwitchWithDefaultTest", out var emitter);
         Assert.NotNull(uasm);
         Assert.DoesNotContain(emitter.Diagnostics, d => d.Severity == "Warning");
+    }
+
+    [Fact]
+    public void SwitchExpression_ProvenExhaustiveWithoutDiscard_Compiles()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ExhaustiveBoolSwitchTest : UdonSharpBehaviour {
+    string Describe(bool value) => value switch {
+        true => ""yes"",
+        false => ""no"",
+    };
+    void Start() { }
+}", "ExhaustiveBoolSwitchTest");
+        Assert.NotNull(uasm);
+        Assert.DoesNotContain(
+            "SwitchExpressionException", uasm);
     }
 
     // ── Switch-internal loop break (B-R2) ──
@@ -1515,7 +1544,7 @@ public class NullCheckDlg : UdonSharpBehaviour {
     public void DelegateField_NullSafeInvoke_Compiles()
     {
         // ?.Invoke null-guards the bundle leaf itself and is C#-strict on null: silent skip,
-        // no LogError arm (design §2.6 — only the plain-invoke deviation logs).
+        // no LogError arm and no argument evaluation on the null branch.
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
@@ -1558,15 +1587,15 @@ public class DlgCmp : UdonSharpBehaviour {
         Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
     }
 
-    // ── Null-invoke deviation pin (design §2.6/§8-8) ──
+    // ── Null invocation follows the stock carrier fault path ──
 
     [Fact]
-    public void DelegateField_NullInvoke_LogsErrorAndGuardsJumpIndirect()
+    public void DelegateField_NullInvoke_ReadsCarrierAndGuardsJumpIndirect()
     {
-        // Plain d() on a null delegate deviates from C#: LogError + skip + default(T) result —
-        // never a VM halt, never P5d's silent jump-to-0. The dispatch JUMP_INDIRECT must be
-        // dominated by the guard ladder (a JUMP_IF_FALSE precedes it).
-        var uasm = TestHelper.CompileToUasm(@"
+        // Plain d() evaluates its arguments, then uses the delegate object[] representation. A null
+        // carrier therefore faults through the stock Udon extern/VM path; no synthetic NRE log exists.
+        // The non-null dispatch JUMP_INDIRECT remains protected from address 0.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 using System;
 public class NullInvokeDlg : UdonSharpBehaviour {
@@ -1574,12 +1603,36 @@ public class NullInvokeDlg : UdonSharpBehaviour {
     public int result;
     void Start() { result = getter(); }
 }", "NullInvokeDlg");
-        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+        Assert.DoesNotContain(consts, c => c.Value is string m
+            && m.Contains("invoked a null delegate"));
         var lines = uasm.Split('\n');
         var jiIdx = Array.FindIndex(lines, l => l.Contains("JUMP_INDIRECT, __intnl_dlgptr"));
         Assert.True(jiIdx > 0, "expected the dispatch JUMP_INDIRECT (dlgptr temp)");
         Assert.True(Array.FindIndex(lines, 0, jiIdx, l => l.Contains("JUMP_IF_FALSE")) >= 0,
             "the dispatch JUMP_INDIRECT must be guard-dominated");
+    }
+
+    [Fact]
+    public void DelegateField_NullInvoke_ReadsCarrierAfterArguments()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public class NullInvokeOrder : UdonSharpBehaviour {
+    public Func<int, int> callback;
+    public int seed;
+    void Start() { seed = callback(Math.Abs(seed)); }
+}", "NullInvokeOrder");
+        var argument = uasm.IndexOf(
+            "SystemMath.__Abs__SystemInt32__SystemInt32",
+            StringComparison.Ordinal);
+        var carrier = uasm.IndexOf(
+            "SystemObjectArray.__Get__SystemInt32__SystemObject",
+            argument + 1,
+            StringComparison.Ordinal);
+        Assert.True(argument >= 0 && carrier > argument,
+            "delegate arguments must be evaluated before the receiver carrier read");
     }
 
     // ── += lowers to the multicast combine helper (design 2026-07-03 §1.4, A-M1) ──

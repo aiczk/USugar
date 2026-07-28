@@ -53,7 +53,7 @@ public class VdOpenClosedRecv : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void VirtualDispatch_NoMintedImplementor_EmitsRuntimeGuard()
+    public void VirtualDispatch_NoMintedImplementor_ReadsReceiverBeforeRuntimeGuard()
     {
         // BaseNoMint is never minted or exposed on a public class surface.
         var uasm = TestHelper.CompileToUasm(@"
@@ -64,7 +64,63 @@ public class VdEmpty : UdonSharpBehaviour {
     public int r;
     void Start() { if (f != null) r = f.M(); }
 }", "VdEmpty");
+        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
         Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
+    }
+
+    [Fact]
+    public void SealedClassReceivers_ReadTypeHeaderForCallsAccessorsEqualsAndToString()
+    {
+        // Each surface can otherwise execute a constant-returning body on null without touching the
+        // receiver. The call site must consume the class representation first.
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public sealed class NativeFaultReceiver {
+    public int M(int value) { return value; }
+    public int P { get { return 1; } set { } }
+    public override string ToString() { return ""receiver""; }
+}
+public class NativeFaultSurfaces : UdonSharpBehaviour {
+    NativeFaultReceiver f;
+    public int r;
+    void Start() {
+        r = f.M(1);
+        r += f.P;
+        f.P = r;
+        if (f.Equals(null)) r++;
+        r += f.ToString().Length;
+    }
+}", "NativeFaultSurfaces");
+        Assert.True(
+            Regex.Matches(
+                uasm,
+                "SystemObjectArray.__Get__SystemInt32__SystemObject").Count >= 5,
+            "method, getter, setter, Equals, and direct ToString must each read the class carrier");
+    }
+
+    [Fact]
+    public void SealedClassCall_ReadsTypeHeaderAfterArguments()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+using System;
+public sealed class NativeFaultOrderReceiver {
+    public int M(int value) { return value; }
+}
+public class NativeFaultOrder : UdonSharpBehaviour {
+    NativeFaultOrderReceiver receiver;
+    public int seed;
+    void Start() { seed = receiver.M(Math.Abs(seed)); }
+}", "NativeFaultOrder");
+        var argument = uasm.IndexOf(
+            "SystemMath.__Abs__SystemInt32__SystemInt32",
+            StringComparison.Ordinal);
+        var header = uasm.IndexOf(
+            "SystemObjectArray.__Get__SystemInt32__SystemObject",
+            argument + 1,
+            StringComparison.Ordinal);
+        Assert.True(argument >= 0 && header > argument,
+            "class arguments must be evaluated before the receiver header read");
     }
 
     [Fact]
@@ -106,7 +162,7 @@ public class CwVProp : UdonSharpBehaviour {
         Assert.Contains(consts, c => c.UdonType == "SystemInt32" && Equals(c.Value, 1));  // base arm
         Assert.True(Regex.Matches(uasm, @"__\d+_get_Area").Count >= 2,
             "both slot impls' getters must be emitted and dispatched");
-        // The chain carries the no-match armor (null/laundered receiver → LogError, never silent).
+        // Null faults at the header read; the chain retains no-match armor for a malformed non-null carrier.
         Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
     }
 
@@ -129,22 +185,20 @@ public class CwVIdx : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void ClassDowncast_SiblingReinterpret_EmitsTypeObjGuard()  // CW2
+    public void ClassDowncast_SiblingReinterpret_Rejects()  // CW2
     {
-        // A direct `(T)o` cast was an identity passthrough while `is`/`as` ran the typeobj check, so a
-        // base-held sibling value reinterpreted the bundle (b.bx read PA's ax slot, silently 42). Design
-        // step-4 (Q1 house deviation): is-test ? passthrough : LogError + null.
-        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 public class PBase { public int p; }
 public class PA : PBase { public int ax; }
 public class PB : PBase { public int bx; }
 public class CwCast : UdonSharpBehaviour {
     public int result;
-    void Start() { PBase o = new PA(); ((PA)o).ax = 42; PB b = (PB)o; result = b != null ? b.bx : -1; }
-}", "CwCast");
-        Assert.Contains("UnityEngineDebug.__LogError__SystemObject__SystemVoid", uasm);
-        Assert.Contains(consts, c => c.Value is string s && s.Contains("InvalidCastException"));
+    void Start() { PBase o = new PA(); PB b = (PB)o; result = b.bx; }
+}", "CwCast"));
+        Assert.Contains("InvalidCastException", ex.Message);
+        Assert.Contains("declaration pattern", ex.Message);
     }
 
     [Fact]
@@ -735,11 +789,11 @@ public class CwNblEnumCv : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void NullableEnumAccessors_TolerateDriftedBoxTag()  // CW18
+    public void NullableEnumTotalAccessors_TolerateDriftedBoxTag()  // CW18
     {
-        // .Value / GetValueOrDefault / ?? copied the raw box into a strict underlying-typed slot, so
+        // GetValueOrDefault / ?? copied the raw box into a strict underlying-typed slot, so
         // the small-underlying-enum tag drift the lifted-operator/pattern consumers already tolerate
-        // (PromoteBoxedToInt32) faulted at exactly these three accessors while `e == Ec.B` on the
+        // (PromoteBoxedToInt32) faulted at these total accessors while `e == Ec.B` on the
         // SAME box passed. Mirror the tolerance: promote via ToInt32(SystemObject), then narrow back
         // to the underlying tag.
         var uasm = TestHelper.CompileToUasm(@"
@@ -750,14 +804,28 @@ public class CwNblEnumAcc : UdonSharpBehaviour {
     public int r;
     void Start() {
         EcAc? e = (EcAc?)seed;
-        int a = (int)e.Value;
         EcAc k = e ?? EcAc.A;
         int c = (int)e.GetValueOrDefault();
-        r = a + (int)k + c;
+        r = (int)k + c;
     }
 }", "CwNblEnumAcc");
-        Assert.True(Regex.Matches(uasm, @"SystemConvert\.__ToInt32__SystemObject__SystemInt32").Count >= 3,
+        Assert.True(Regex.Matches(uasm, @"SystemConvert\.__ToInt32__SystemObject__SystemInt32").Count >= 2,
             "value accessors copy the raw box without the sibling consumers' tag tolerance");
+    }
+
+    [Fact]
+    public void NullableValue_Rejects()  // CW18 exception boundary
+    {
+        var ex = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class CwNblValue : UdonSharpBehaviour {
+    public int? value;
+    public int result;
+    void Start() { result = value.Value; }
+}", "CwNblValue"));
+        Assert.Contains("InvalidOperationException", ex.Message);
+        Assert.Contains("GetValueOrDefault", ex.Message);
     }
 
     [Fact]

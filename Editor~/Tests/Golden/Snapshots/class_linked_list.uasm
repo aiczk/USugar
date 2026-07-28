@@ -35,6 +35,7 @@
     __const_SystemObject_4: %SystemObject, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __intnl_SystemInt32_c3: %SystemInt32, null
+    __intnl_SystemString_c1: %SystemString, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
     __intnl_SystemObjectArray_c5: %SystemObjectArray, null
     __intnl_SystemInt32_c4: %SystemInt32, null
@@ -122,7 +123,7 @@
         PUSH, __1_v__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
-        JUMP, 0x000002e0
+        JUMP, 0x00000300
     ___start__callret_0:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_a_SystemObjectArray_0
@@ -161,7 +162,7 @@
         PUSH, __1_v__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x000002e0
+        JUMP, 0x00000300
     ___start__callret_1:
         PUSH, __intnl_SystemObjectArray_c1
         PUSH, __lcl_b_SystemObjectArray_0
@@ -180,10 +181,14 @@
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_2
-        JUMP, 0x0000033c
+        JUMP, 0x0000035c
     ___start__callret_2:
         PUSH, __2_Sum__ret
         PUSH, __intnl_SystemInt32_c0
@@ -234,10 +239,10 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000003f0
-        JUMP, 0x000003f8
+        JUMP_IF_FALSE, 0x00000410
+        JUMP, 0x00000418
     ____2_Sum_bb3:
-        JUMP, 0x00000894
+        JUMP, 0x000008d4
     ____2_Sum_bb2:
         PUSH, __lcl_s_SystemInt32_0
         PUSH, __intnl_SystemInt32_c3
@@ -249,11 +254,15 @@
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_SystemObject_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObject_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c1
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __const_SystemInt32_0
         PUSH, __recurEnsureNeed
         COPY
         PUSH, __const_retaddr_SystemUInt32_3
-        JUMP, 0x000008d0
+        JUMP, 0x00000910
     ____2_Sum__callret_3:
         PUSH, __2_this__param
         PUSH, __intnl_SystemObjectArray_c4
@@ -325,7 +334,7 @@
         PUSH, __2_this__param
         COPY
         PUSH, __const_retaddr_SystemUInt32_4
-        JUMP, 0x0000033c
+        JUMP, 0x0000035c
     ____2_Sum__callret_4:
         PUSH, __2_Sum__ret
         PUSH, __intnl_SystemInt32_c14
@@ -438,10 +447,10 @@
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c1
-        JUMP_IF_FALSE, 0x0000097c
-        JUMP, 0x00000984
+        JUMP_IF_FALSE, 0x000009bc
+        JUMP, 0x000009c4
     ____recurEnsure_bb2:
-        JUMP, 0x00000a68
+        JUMP, 0x00000aa8
     ____recurEnsure_bb1:
         PUSH, __intnl_SystemInt32_c25
         PUSH, __const_SystemInt32_3
@@ -456,8 +465,8 @@
         PUSH, __intnl_SystemBoolean_c2
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c2
-        JUMP_IF_FALSE, 0x000009f0
-        JUMP, 0x00000af8
+        JUMP_IF_FALSE, 0x00000a30
+        JUMP, 0x00000b38
     ____recurEnsure_bb6:
         PUSH, __intnl_SystemInt32_c30
         PUSH, __intnl_SystemObjectArray_c12
@@ -471,8 +480,8 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00000a54
-        JUMP, 0x00000a7c
+        JUMP_IF_FALSE, 0x00000a94
+        JUMP, 0x00000abc
     ____recurEnsure_bb10:
         PUSH, __intnl_SystemObjectArray_c12
         PUSH, __recurStack
@@ -498,7 +507,7 @@
         PUSH, __intnl_SystemInt32_c32
         PUSH, __intnl_SystemInt32_c31
         COPY
-        JUMP, 0x00000a1c
+        JUMP, 0x00000a5c
     ____recurEnsure_bb5:
         PUSH, __intnl_SystemInt32_c30
         PUSH, __const_SystemInt32_3
@@ -507,7 +516,7 @@
         PUSH, __intnl_SystemInt32_c33
         PUSH, __intnl_SystemInt32_c30
         COPY
-        JUMP, 0x000009b8
+        JUMP, 0x000009f8
 .code_end
 
 # constants
@@ -524,6 +533,6 @@
 #   __const_SystemInt32_3: %SystemInt32 = 2
 #   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 232
 #   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 508
-#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 656
-#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1124
-#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 1632
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 688
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1188
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 1696

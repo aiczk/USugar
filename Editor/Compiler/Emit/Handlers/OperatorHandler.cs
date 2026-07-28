@@ -807,9 +807,6 @@ internal sealed class OperatorHandler
     {
         var resultType = _lowering.GetStorageTypeName(op.Type);
         var resultSlot = _lowering.State.Builder.AllocScratch(new StorageType(resultType));
-        // Initialize result to default in case no arm matches (non-exhaustive)
-        _lowering.EmitAssign(resultSlot, _lowering.Const(
-            EmitPolicy.ParseConstValue(resultType, GetDefaultConstValue(resultType)), new StorageType(resultType)));
         var valueVal = _lowering.VisitExpression(op.Value);
 
         // Separate default arm from pattern arms to build proper if/else-if/else chain
@@ -838,14 +835,22 @@ internal sealed class OperatorHandler
         }
         else
         {
-            // Non-exhaustive fallthrough: C# throws SwitchExpressionException, but Udon has no
-            // exceptions. Match the null-invoke deviation (§8-8): loud LogError at runtime, then keep
-            // the default(T) the result slot was seeded with — never a silent wrong value.
+            // CompilerDiagnosticPolicy has already rejected every Roslyn
+            // non-exhaustiveness diagnostic. The final source arm therefore
+            // owns the residual input space. Keep evaluating its pattern and
+            // guard for their side effects/bindings, then select its value
+            // without manufacturing a runtime exception/default path.
+            var finalArm = patternArms[^1];
+            patternArms.RemoveAt(patternArms.Count - 1);
             tail = _ =>
-                _lowering.EmitExternVoid(UdonAbi.DebugLogError,
-                    new List<CLeaf> { _lowering.Const(
-                        $"USugar: SwitchExpressionException — no arm matched in switch expression ({_lowering.ClassSymbol.Name})",
-                        StorageTypes.String) });
+            {
+                EmitPatternCheckImpl(
+                    valueVal, op.Value.Type, finalArm.Pattern);
+                if (finalArm.Guard != null)
+                    _lowering.VisitExpression(finalArm.Guard);
+                var armVal = _lowering.VisitExpression(finalArm.Value);
+                _lowering.EmitAssign(resultSlot, armVal);
+            };
         }
 
         for (int i = patternArms.Count - 1; i >= 0; i--)
@@ -899,13 +904,6 @@ internal sealed class OperatorHandler
             _ => _lowering.EmitAssign(resultSlot, _lowering.VisitExpression(op.WhenFalse)));
         return _lowering.SlotRef(resultSlot);
     }
-
-    static string GetDefaultConstValue(string udonType) => udonType switch
-    {
-        "SystemBoolean" => "False",
-        "SystemString" => "null",
-        _ => "0"
-    };
 
     // ── Tuple binary (== / !=) ──
 
