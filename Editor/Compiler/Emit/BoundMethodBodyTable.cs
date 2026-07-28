@@ -10,12 +10,22 @@ using Microsoft.CodeAnalysis.Operations;
 /// Roslyn operations materialized before body emission for one source method definition.
 /// Lowering never asks a SemanticModel to reconstruct a body.
 /// </summary>
+internal enum CallableBodyDisposition
+{
+    SourceBody,
+    SynthesizedAutoAccessor,
+    DedicatedLowering,
+    NoBody,
+    Unsupported,
+}
+
 internal sealed class BoundMethodBody
 {
     public readonly IMethodSymbol MethodDefinition;
     public readonly SyntaxNode Declaration;
     public readonly IOperation Root;
     public readonly IOperation ExpressionBody;
+    public readonly CallableBodyDisposition Disposition;
     public readonly IReadOnlyDictionary<ILocalSymbol, IOperation>
         StableLocalInitializers;
     public readonly IReadOnlyList<ITypeSymbol> ReferencedTypes;
@@ -29,22 +39,38 @@ internal sealed class BoundMethodBody
         _ => AnalysisRoot,
     };
     public bool HasSourceDeclaration => Declaration != null;
+    public bool HasExecutableCallableBody
+        => Disposition is CallableBodyDisposition.SourceBody
+            or CallableBodyDisposition.SynthesizedAutoAccessor;
+    public bool ParticipatesInRecursion => HasExecutableCallableBody;
 
     public BoundMethodBody(
         IMethodSymbol methodDefinition,
         SyntaxNode declaration,
         IOperation root,
-        IOperation expressionBody)
+        IOperation expressionBody,
+        CallableBodyDisposition disposition)
     {
         MethodDefinition = methodDefinition?.OriginalDefinition
             ?? throw new ArgumentNullException(nameof(methodDefinition));
         Declaration = declaration;
         Root = root;
         ExpressionBody = expressionBody;
+        Disposition = disposition;
         var analysis = Analyze(AnalysisRoot);
         StableLocalInitializers = analysis.StableLocalInitializers;
         ReferencedTypes = analysis.ReferencedTypes;
     }
+
+    public Exception UnsupportedCallableException(string consumer)
+        => Disposition == CallableBodyDisposition.Unsupported
+            ? new NotSupportedException(
+                $"Method '{MethodDefinition.ToDisplayString()}' has no "
+                + "executable source body and no dedicated lowering.")
+            : new InvalidOperationException(
+                $"{consumer} attempted to treat "
+                + $"'{MethodDefinition.ToDisplayString()}' as a callable, "
+                + $"but its body disposition is '{Disposition}'.");
 
     static (
         IReadOnlyDictionary<ILocalSymbol, IOperation> StableLocalInitializers,
@@ -162,6 +188,9 @@ internal sealed class BoundMethodBodyTable
         public BoundMethodBody Get(IMethodSymbol rawMethod)
         {
             var method = rawMethod?.OriginalDefinition;
+            method = method?.PartialDefinitionPart
+                ?.OriginalDefinition
+                ?? method;
             if (method == null) return null;
             if (_bodies.TryGetValue(method, out var existing))
                 return existing;
@@ -170,11 +199,18 @@ internal sealed class BoundMethodBodyTable
                     $"Method body '{method}' was requested after the "
                     + "source-body snapshot was frozen.");
 
-            var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
+            var sourceMethod =
+                method.PartialImplementationPart
+                    ?.OriginalDefinition
+                ?? method;
+            var syntaxRef = sourceMethod
+                .DeclaringSyntaxReferences
+                .FirstOrDefault();
             if (syntaxRef == null)
             {
                 var sourceLess = new BoundMethodBody(
-                    method, null, null, null);
+                    method, null, null, null,
+                    Classify(method, null, null, null));
                 _bodies.Add(method, sourceLess);
                 return sourceLess;
             }
@@ -195,7 +231,12 @@ internal sealed class BoundMethodBodyTable
                 method,
                 declaration,
                 expressionBody == null ? operation : null,
-                expressionBody);
+                expressionBody,
+                Classify(
+                    method,
+                    declaration,
+                    expressionBody == null ? operation : null,
+                    expressionBody));
             _bodies.Add(method, body);
             IndexNestedCallables(body.AnalysisRoot);
             return body;
@@ -248,10 +289,89 @@ internal sealed class BoundMethodBodyTable
                     $"Nested callable '{method}' was discovered after "
                     + "the source-body snapshot was frozen.");
             var body = new BoundMethodBody(
-                method, operation.Syntax, operation, null);
+                method, operation.Syntax, operation, null,
+                CallableBodyDisposition.SourceBody);
             _bodies.Add(method, body);
             return body;
         }
+
+        static CallableBodyDisposition Classify(
+            IMethodSymbol method,
+            SyntaxNode declaration,
+            IOperation root,
+            IOperation expressionBody)
+        {
+            if (expressionBody != null
+                || root is IMethodBodyBaseOperation methodBody
+                   && (methodBody.BlockBody != null
+                       || methodBody.ExpressionBody != null)
+                || root is ILocalFunctionOperation
+                    { Body: not null }
+                || root is IAnonymousFunctionOperation
+                    { Body: not null }
+                || root is IBlockOperation)
+                return CallableBodyDisposition.SourceBody;
+
+            if (method.IsExtern)
+                return CallableBodyDisposition.Unsupported;
+            if (method.IsAbstract
+                || method.ContainingType?.TypeKind
+                    == TypeKind.Interface)
+                return CallableBodyDisposition.NoBody;
+
+            if (method.MethodKind == MethodKind.Constructor
+                && method.IsImplicitlyDeclared)
+                return CallableBodyDisposition.DedicatedLowering;
+
+            if (method.AssociatedSymbol is IEventSymbol
+                && method.IsImplicitlyDeclared)
+                return CallableBodyDisposition.DedicatedLowering;
+
+            if (IsRecordLoweredMember(method, declaration))
+                return CallableBodyDisposition.DedicatedLowering;
+
+            if (method.AssociatedSymbol is IPropertySymbol property
+                && HasCompilerBackingField(property))
+                return CallableBodyDisposition
+                    .SynthesizedAutoAccessor;
+
+            if (declaration is MethodDeclarationSyntax methodDeclaration
+                && methodDeclaration.Modifiers.Any(
+                    modifier => modifier.IsKind(
+                        Microsoft.CodeAnalysis.CSharp
+                            .SyntaxKind.PartialKeyword)))
+                return CallableBodyDisposition.NoBody;
+
+            if (declaration == null)
+                return CallableBodyDisposition.NoBody;
+
+            return CallableBodyDisposition.Unsupported;
+        }
+
+        static bool IsRecordLoweredMember(
+            IMethodSymbol method,
+            SyntaxNode declaration)
+        {
+            if (method.ContainingType is not
+                { IsRecord: true })
+                return false;
+            if (declaration is RecordDeclarationSyntax
+                || method.IsImplicitlyDeclared)
+                return true;
+            return method.AssociatedSymbol
+                    is IPropertySymbol property
+                && HasCompilerBackingField(property);
+        }
+
+        static bool HasCompilerBackingField(
+            IPropertySymbol property)
+            => property?.ContainingType?.GetMembers()
+                .OfType<IFieldSymbol>()
+                .Any(field =>
+                    field.IsImplicitlyDeclared
+                    && SymbolEqualityComparer.Default.Equals(
+                        field.AssociatedSymbol, property))
+                == true;
 
         public BoundMethodBodyTable Freeze(
             IEnumerable<IMethodSymbol> methods)

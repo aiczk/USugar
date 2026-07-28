@@ -88,6 +88,7 @@ public sealed class MethodContext
         _functionsByCallable = new();
     readonly Dictionary<string, RegisteredCallable> _syntheticCallables = new(StringComparer.Ordinal);
     readonly List<RegisteredCallableBody> _registeredBodies = new();
+    BoundMethodBodyTable.Materializer _bodyAuthority;
     bool _callableRegistryFrozen;
     public IReadOnlyDictionary<IMethodSymbol, RegisteredCallable> Callables => _callables;
     public IReadOnlyDictionary<string, RegisteredCallable> SyntheticCallables => _syntheticCallables;
@@ -105,6 +106,48 @@ public sealed class MethodContext
             c => c.ReturnSlots.Length > 0);
         ParamVarIds = new CallableProjection<string[]>(
             _callables, c => c.ParamVarIds.ToArray());
+    }
+
+    internal void ConfigureBodyAuthority(
+        BoundMethodBodyTable.Materializer bodyAuthority)
+    {
+        RequireMutableRegistry();
+        if (_bodyAuthority != null)
+            throw new InvalidOperationException(
+                "Callable body authority was configured twice.");
+        _bodyAuthority = bodyAuthority
+            ?? throw new ArgumentNullException(
+                nameof(bodyAuthority));
+    }
+
+    internal BoundMethodBody DescribeBody(
+        IMethodSymbol method)
+        => (_bodyAuthority
+            ?? throw new InvalidOperationException(
+                "Callable body authority was not configured."))
+            .Get(method)
+            ?? throw new InvalidOperationException(
+                $"Callable body '{method}' could not be described.");
+
+    internal bool IsExecutableCallable(
+        IMethodSymbol method)
+    {
+        var body = DescribeBody(method);
+        if (body.Disposition
+            == CallableBodyDisposition.Unsupported)
+            throw body.UnsupportedCallableException(
+                "Callable registration");
+        return body.HasExecutableCallableBody;
+    }
+
+    BoundMethodBody RequireExecutableBody(
+        IMethodSymbol method)
+    {
+        var body = DescribeBody(method);
+        if (!body.HasExecutableCallableBody)
+            throw body.UnsupportedCallableException(
+                "Callable registration");
+        return body;
     }
 
     public IMethodSymbol CurrentMethod;
@@ -138,6 +181,7 @@ public sealed class MethodContext
         RequireMutableRegistry();
         if (method == null)
             throw new ArgumentNullException(nameof(method));
+        var body = RequireExecutableBody(method);
         var callable = new RegisteredCallable(
             method, slot, name, exportName, receiverFieldId,
             paramVarIds, paramStorageTypes, returnSlots,
@@ -145,7 +189,8 @@ public sealed class MethodContext
             isDeferredBody: isDeferredBody);
         _callables.Add(method, callable);
         _registeredBodies.Add(
-            new RegisteredCallableBody(callable, null));
+            new RegisteredCallableBody(
+                callable, null, body));
         return callable;
     }
 
@@ -249,14 +294,31 @@ public sealed class MethodContext
         public RegisteredCallable Callable { get; }
         public IMethodSymbol Method => Callable.Definition;
         public ClosureSpec Closure { get; }
+        internal BoundMethodBody BoundBody { get; }
         public ImmutableArray<IMethodSymbol> OwnerSpecs { get; }
         public IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> TypeParameterMap { get; }
         internal CallSiteBindingScope BindingScope { get; }
 
-        internal RegisteredCallableBody(RegisteredCallable callable, ClosureSpec closure)
+        internal RegisteredCallableBody(
+            RegisteredCallable callable,
+            ClosureSpec closure,
+            BoundMethodBody boundBody)
         {
             Callable = callable ?? throw new ArgumentNullException(nameof(callable));
             Closure = closure;
+            BoundBody = boundBody
+                ?? throw new ArgumentNullException(
+                    nameof(boundBody));
+            if (!BoundBody.HasExecutableCallableBody)
+                throw BoundBody.UnsupportedCallableException(
+                    "Callable body registration");
+            if (!SymbolEqualityComparer.Default.Equals(
+                    BoundBody.MethodDefinition,
+                    callable.Definition.OriginalDefinition))
+                throw new ArgumentException(
+                    "The registered callable and executable body "
+                    + "describe different method definitions.",
+                    nameof(boundBody));
             OwnerSpecs = closure?.OwnerSpecs
                 ?? (!callable.Definition.IsDefinition
                     ? ImmutableArray.Create(callable.Definition)
@@ -405,6 +467,7 @@ public sealed class MethodContext
         RequireMutableRegistry();
         if (definition == null)
             throw new ArgumentNullException(nameof(definition));
+        var body = RequireExecutableBody(definition);
         var spec = new ClosureSpec(
             definition, slot, name,
             paramVarIds, paramStorageTypes, returnSlots,
@@ -412,7 +475,8 @@ public sealed class MethodContext
             envpFieldId, isDeferredBody);
         _closureSpecs.Add(new SpecializationKey(definition, keyArgs), spec);
         _registeredBodies.Add(
-            new RegisteredCallableBody(spec, spec));
+            new RegisteredCallableBody(
+                spec, spec, body));
         return spec;
     }
 

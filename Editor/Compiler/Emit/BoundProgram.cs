@@ -102,6 +102,13 @@ internal sealed class BoundProgram
                 throw new ArgumentException(
                     "A bound callable body cannot be null.",
                     nameof(callableBodies));
+            if (body.BoundBody == null
+                || !body.BoundBody
+                    .HasExecutableCallableBody)
+                throw new ArgumentException(
+                    $"Bound callable '{body.Method}' has no "
+                    + "executable body authority.",
+                    nameof(callableBodies));
             if (body.Closure == null)
                 callableRegistry.Add(
                     body.Method, body.Callable);

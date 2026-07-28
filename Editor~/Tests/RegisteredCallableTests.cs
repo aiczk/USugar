@@ -20,6 +20,9 @@ public class RegisteredCallableTests
         var method = (IMethodSymbol)model.GetDeclaredSymbol(
             tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single());
         var context = new MethodContext();
+        context.ConfigureBodyAuthority(
+            new BoundMethodBodyTable.Materializer(
+                compilation));
         var slot = context.Reserve(i => "m" + i);
         var function = new FlatFunction("M");
         var parameters = new[] { "value" };

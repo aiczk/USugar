@@ -95,12 +95,18 @@ internal sealed class RecursionNodeWalk
         var order = new List<IMethodSymbol>();
         var queue = new Queue<IMethodSymbol>();
 
-        // Every node is registered UNCONDITIONALLY, null body included — an auto-property accessor's
-        // operation is a bodyless null yet must still be a graph node (empty edge/touch sets); dropping
-        // null-body nodes would lose them from RecursionGraphNodes.
+        // Only executable callable bodies are graph nodes. Auto accessors participate through their
+        // synthesized disposition; members handled by dedicated lowering never become phantom nodes.
         void AddNode(IMethodSymbol sym, BoundMethodBody body)
         {
             if (bodies.ContainsKey(sym)) return;
+            body ??= _sourceBodies.Get(sym);
+            if (body.Disposition
+                == CallableBodyDisposition.Unsupported)
+                throw body.UnsupportedCallableException(
+                    "Recursion planning");
+            if (!body.ParticipatesInRecursion)
+                return;
             bodies[sym] = body;
             rawTargets[sym] = new HashSet<IMethodSymbol>(cmp);
             touches[sym] = new HashSet<IFieldSymbol>(cmp);
@@ -208,8 +214,8 @@ internal sealed class RecursionNodeWalk
             Visit(bodies[node]?.CallableRoot, node);
         }
 
-        var methodSet = new HashSet<IMethodSymbol>(roots, cmp);
-        foreach (var l in localFuncs) methodSet.Add(l);
+        var methodSet = new HashSet<IMethodSymbol>(
+            order, cmp);
 
         var edges = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(cmp);
         foreach (var node in order)
@@ -236,7 +242,11 @@ internal sealed class RecursionNodeWalk
                 variantSigs.Add(p);
 
         var callableDefinitions = new HashSet<IMethodSymbol>(
-            _plannedCallables.Select(method => method.OriginalDefinition), cmp);
+            _plannedCallables
+                .Where(method => _sourceBodies.Get(method)
+                    .HasExecutableCallableBody)
+                .Select(method => method.OriginalDefinition),
+            cmp);
         foreach (var node in order)
             callableDefinitions.Add(node.OriginalDefinition);
 

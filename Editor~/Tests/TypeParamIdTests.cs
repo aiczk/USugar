@@ -109,6 +109,8 @@ public class TpCls : UdonSharpBehaviour {
         var lfSym = ((ILocalFunctionOperation)model.GetOperation(
             root.DescendantNodes().OfType<LocalFunctionStatementSyntax>().Single())).Symbol;
         var mc = new MethodContext();
+        mc.ConfigureBodyAuthority(
+            new BoundMethodBodyTable.Materializer(comp));
         var args = System.Collections.Immutable.ImmutableArray<ITypeSymbol>.Empty
             .Add(comp.GetSpecialType(SpecialType.System_Int32));
         var owner = comp.GetTypeByMetadataName("GBox`1")

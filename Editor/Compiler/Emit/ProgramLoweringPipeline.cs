@@ -221,6 +221,7 @@ public sealed class UasmEmitter
             fields.InitializerOperations.ToArray();
         var sourceBodies =
             new BoundMethodBodyTable.Materializer(_compilation);
+        _state.Methods.ConfigureBodyAuthority(sourceBodies);
         sourceBodies.RegisterNestedCallables(fieldInitializers);
         var (callables, reach) =
             DiscoverCallablesAndReach(
@@ -247,7 +248,8 @@ public sealed class UasmEmitter
             EdgeResolver, reach, initializerRoots,
             callables.Definitions, sourceBodies).Run();
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
-        var captureRoots = ComputeCaptureRoots(reach);
+        var captureRoots = ComputeCaptureRoots(
+            reach, sourceBodies);
         var captures = CaptureScopeAnalysis.Build(
             _compilation, _classSymbol, captureRoots,
             bodyGraph.Bodies, initializerRoots);
@@ -286,24 +288,48 @@ public sealed class UasmEmitter
             methods, fieldInitializers, sourceBodies);
         var methodSet = new HashSet<IMethodSymbol>(
             methods, SymbolEqualityComparer.Default);
-        var baseInstanceMethods = reachable.BaseCopies
-            .Where(method => !methodSet.Contains(method))
-            .ToArray();
+        var programMethods = ExecutableProjection(
+            methods, sourceBodies, rejectUnsupported: true);
+        var baseInstanceMethods = ExecutableProjection(
+            reachable.BaseCopies
+                .Where(method => !methodSet.Contains(method)),
+            sourceBodies,
+            rejectUnsupported: true);
         // Local functions register at their declaration/forward-reference
         // site. Eagerly projecting them as foreign statics creates a dead
         // duplicate FlatFunction.
-        var foreignStatics = reachable.ForeignStatics
-            .Where(method =>
-                method.MethodKind != MethodKind.LocalFunction)
-            .ToArray();
-        var definitions = methods
+        var foreignStatics = ExecutableProjection(
+            reachable.ForeignStatics
+                .Where(method =>
+                    method.MethodKind
+                        != MethodKind.LocalFunction),
+            sourceBodies,
+            rejectUnsupported: true);
+        var structMethods = ExecutableProjection(
+            reachable.StructMembers,
+            sourceBodies,
+            rejectUnsupported: true);
+        var additionalDefinitions =
+            ExecutableProjection(
+                EnumerateAdditionalCallableDefinitions(),
+                sourceBodies,
+                rejectUnsupported: false);
+        var definitions = programMethods
             .Concat(foreignStatics)
-            .Concat(reachable.StructMembers)
+            .Concat(structMethods)
             .Concat(baseInstanceMethods)
-            .Concat(EnumerateAdditionalCallableDefinitions())
             .Concat(reachable.BodyByDef.Keys)
             .Concat(reachable.GenericForeignStaticBodies.Keys)
             .Concat(reachable.StructMemberDefs)
+            .Select(method =>
+                method.OriginalDefinition)
+            .Distinct<IMethodSymbol>(
+                SymbolEqualityComparer.Default);
+        definitions = ExecutableProjection(
+                definitions,
+                sourceBodies,
+                rejectUnsupported: true)
+            .Concat(additionalDefinitions)
             .Select(method => method.OriginalDefinition)
             .Distinct<IMethodSymbol>(
                 SymbolEqualityComparer.Default)
@@ -313,18 +339,18 @@ public sealed class UasmEmitter
             sourceBodies.GetOperation,
             EnumerateClassFieldInitOps,
             _classSymbol).Build(
-                methods
+                programMethods
                     .Concat(foreignStatics)
-                    .Concat(reachable.StructMembers)
+                    .Concat(structMethods)
                     .Concat(baseInstanceMethods),
                 fieldInitializers);
         var definitionSet = new HashSet<IMethodSymbol>(
             definitions, SymbolEqualityComparer.Default);
         var eagerlyRegistered = new HashSet<IMethodSymbol>(
-            methods
+            programMethods
                 .Where(method => !method.IsGenericMethod)
                 .Concat(foreignStatics)
-                .Concat(reachable.StructMembers)
+                .Concat(structMethods)
                 .Concat(baseInstanceMethods),
             SymbolEqualityComparer.Default);
         var specializations = census.MethodSpecializations
@@ -333,9 +359,9 @@ public sealed class UasmEmitter
                 && !eagerlyRegistered.Contains(method))
             .ToArray();
         var callables = new CallableDefinitionPlan(
-            methods,
+            programMethods,
             foreignStatics,
-            reachable.StructMembers,
+            structMethods,
             baseInstanceMethods,
             definitions,
             specializations,
@@ -344,17 +370,48 @@ public sealed class UasmEmitter
         return (callables, reach);
     }
 
+    static IMethodSymbol[] ExecutableProjection(
+        IEnumerable<IMethodSymbol> methods,
+        BoundMethodBodyTable.Materializer sourceBodies,
+        bool rejectUnsupported)
+    {
+        var result = new List<IMethodSymbol>();
+        var seen = new HashSet<IMethodSymbol>(
+            SymbolEqualityComparer.Default);
+        foreach (var method in methods
+                     ?? Enumerable.Empty<IMethodSymbol>())
+        {
+            if (method == null || !seen.Add(method))
+                continue;
+            var body = sourceBodies.Get(method);
+            if (body.Disposition
+                == CallableBodyDisposition.Unsupported)
+            {
+                if (rejectUnsupported)
+                    throw body.UnsupportedCallableException(
+                        "Callable planning");
+                continue;
+            }
+            if (body.HasExecutableCallableBody)
+                result.Add(method);
+        }
+        return result.ToArray();
+    }
+
     static IReadOnlyList<IMethodSymbol> ComputeCaptureRoots(
-        ReachabilityPlan reach)
+        ReachabilityPlan reach,
+        BoundMethodBodyTable.Materializer sourceBodies)
     {
         var roots = reach.BodyByDef.Keys
             .Where(method =>
-                method.DeclaringSyntaxReferences.Length > 0)
+                sourceBodies.Get(method)
+                    .HasExecutableCallableBody)
             .ToList();
         roots.AddRange(
             reach.GenericForeignStaticBodies.Keys
                 .Where(method =>
-                    method.DeclaringSyntaxReferences.Length > 0
+                    sourceBodies.Get(method)
+                        .HasExecutableCallableBody
                     && !reach.BodyByDef.ContainsKey(method)));
         return Array.AsReadOnly(roots.ToArray());
     }
@@ -1412,8 +1469,7 @@ public sealed class UasmEmitter
         {
             var scope = body.BindingScope;
             typePlanner.Plan(body.Method, body.TypeParameterMap);
-            var boundBody =
-                methodBodies.Require(body.Method.OriginalDefinition);
+            var boundBody = body.BoundBody;
             var mentionsPayload =
                 LambdaCaptureAnalyzer.ReceiverCaptureKey(body.Method) != null
                 || boundBody.ReferencedTypes.Any(type =>
@@ -1853,8 +1909,7 @@ public sealed class UasmEmitter
         var typeMap = body.TypeParameterMap;
 
         // Get method body IOperation
-        var boundBody = _state.Program.MethodBodies.Require(
-            method.OriginalDefinition);
+        var boundBody = body.BoundBody;
         {
             var syntax = boundBody.Declaration;
             var bodyOp = boundBody.Root;
@@ -1907,17 +1962,72 @@ public sealed class UasmEmitter
                 && _state.TryGetEnvBinding(rcvKey, out _))
                 EnvEmit.Write(_builder, _state, rcvKey, _bridge.Load(rcvParamId, new StorageType(AggregateAbi.ArrayType)));
 
-            if (bodyOp is IMethodBodyOperation methodBody)
+            if (boundBody.Disposition
+                == CallableBodyDisposition
+                    .SynthesizedAutoAccessor)
+            {
+                if (syntax
+                        is not AccessorDeclarationSyntax
+                        || method.AssociatedSymbol
+                            is not IPropertySymbol autoProp)
+                    throw new InvalidOperationException(
+                        $"Synthesized accessor "
+                        + $"'{method.ToDisplayString()}' has no "
+                        + "auto-property declaration.");
+
+                // Per-declaration backing: the chain leaf owns the bare
+                // name; an overridden base declaration owns its own slot.
+                var backingVar =
+                    AutoPropBackingVar(autoProp);
+                var propType =
+                    GetStorageTypeName(autoProp.Type);
+                if (method.MethodKind
+                        == MethodKind.PropertyGet
+                    && callable.ReturnSlots.Length == 1)
+                    _bridge.Store(
+                        callable.ReturnSlots[0].Id,
+                        _bridge.Load(
+                            backingVar,
+                            new StorageType(propType)));
+                else if (method.MethodKind
+                             == MethodKind.PropertySet
+                         && callable.ParamVarIds.Length > 0)
+                    _bridge.Store(
+                        backingVar,
+                        _bridge.Load(
+                            callable.ParamVarIds[0],
+                            new StorageType(propType)));
+                else
+                    throw new InvalidOperationException(
+                        $"Synthesized accessor "
+                        + $"'{method.ToDisplayString()}' has an "
+                        + "invalid callable ABI.");
+            }
+            else if (boundBody.Disposition
+                     != CallableBodyDisposition.SourceBody)
+                throw boundBody.UnsupportedCallableException(
+                    "Body emission");
+            else if (bodyOp is IMethodBodyOperation methodBody)
             {
                 if (methodBody.BlockBody != null)
                     _operations.VisitOperation(methodBody.BlockBody);
                 else if (methodBody.ExpressionBody != null)
                     _operations.VisitOperation(methodBody.ExpressionBody);
+                else
+                    throw new InvalidOperationException(
+                        $"Source method "
+                        + $"'{method.ToDisplayString()}' "
+                        + "materialized without a body.");
             }
             else if (bodyOp is ILocalFunctionOperation localFuncOp)
             {
                 if (localFuncOp.Body != null)
                     _operations.VisitOperation(localFuncOp.Body);
+                else
+                    throw new InvalidOperationException(
+                        $"Local function "
+                        + $"'{method.ToDisplayString()}' "
+                        + "materialized without a body.");
             }
             else if (bodyOp is IConstructorBodyOperation ctorBodyOp)
             {
@@ -1931,6 +2041,14 @@ public sealed class UasmEmitter
                         _state.Methods.CurrentStructReceiverParamId);
                 if (ctorBodyOp.BlockBody != null)
                     _operations.VisitOperation(ctorBodyOp.BlockBody);
+                else if (ctorBodyOp.ExpressionBody != null)
+                    _operations.VisitOperation(
+                        ctorBodyOp.ExpressionBody);
+                else
+                    throw new InvalidOperationException(
+                        $"Constructor "
+                        + $"'{method.ToDisplayString()}' "
+                        + "materialized without a body.");
             }
             else if (bodyOp is IAnonymousFunctionOperation anonFunc)
             {
@@ -1944,7 +2062,14 @@ public sealed class UasmEmitter
                         var resultVal = _operations.VisitExpression(anonFunc.Body);
                         _bridge.Store(lambdaRets[0].Id, resultVal);
                     }
+                    else
+                        _operations.VisitOperation(
+                            anonFunc.Body);
                 }
+                else
+                    throw new InvalidOperationException(
+                        "Anonymous function materialized "
+                        + "without a body.");
             }
             else if (bodyOp is IBlockOperation block)
                 _operations.VisitOperation(block);
@@ -1958,49 +2083,51 @@ public sealed class UasmEmitter
                     var resultVal = _operations.VisitExpression(exprOp);
                     _bridge.Store(callable.ReturnSlots[0].Id, resultVal);
                 }
-            }
-            // Block-bodied property accessor: int X { get { return expr; } }
-            else if (syntax is AccessorDeclarationSyntax accessorDecl)
-            {
-                if (accessorDecl.Body == null && accessorDecl.ExpressionBody == null
-                    && method.AssociatedSymbol is IPropertySymbol autoProp)
-                {
-                    // Auto-property accessor: synthesize body (get → load field, set → store field).
-                    // Per-DECLARATION backing (AutoPropBackingVar): the chain leaf owns the bare
-                    // name; an overridden base declaration's copies use their own storage (base.P).
-                    var backingVar = AutoPropBackingVar(autoProp);
-                    var propType = GetStorageTypeName(autoProp.Type);
-                    if (method.MethodKind == MethodKind.PropertyGet
-                        && callable.ReturnSlots.Length == 1)
-                    {
-                        _bridge.Store(
-                            callable.ReturnSlots[0].Id,
-                            _bridge.Load(backingVar, new StorageType(propType)));
-                    }
-                    else if (method.MethodKind == MethodKind.PropertySet
-                        && callable.ParamVarIds.Length > 0)
-                    {
-                        _bridge.Store(
-                            backingVar,
-                            _bridge.Load(
-                                callable.ParamVarIds[0],
-                                new StorageType(propType)));
-                    }
-                }
                 else
-                {
-                    var accessorOp = boundBody.Root;
-                    if (accessorOp is IMethodBodyOperation accessorBody)
-                    {
-                        if (accessorBody.BlockBody != null)
-                            _operations.VisitOperation(accessorBody.BlockBody);
-                        else if (accessorBody.ExpressionBody != null)
-                            _operations.VisitOperation(accessorBody.ExpressionBody);
-                    }
-                    else if (accessorOp is IBlockOperation accessorBlock)
-                        _operations.VisitOperation(accessorBlock);
-                }
+                    throw new InvalidOperationException(
+                        $"Expression-bodied property "
+                        + $"'{method.ToDisplayString()}' has an "
+                        + "invalid body or callable ABI.");
             }
+            // A source accessor normally materializes as
+            // IMethodBodyOperation. Keep the direct-root form explicit,
+            // but never accept an unknown operation shape as an empty
+            // callable.
+            else if (syntax
+                     is AccessorDeclarationSyntax)
+            {
+                var accessorOp = boundBody.Root;
+                if (accessorOp
+                    is IMethodBodyOperation accessorBody)
+                {
+                    if (accessorBody.BlockBody != null)
+                        _operations.VisitOperation(
+                            accessorBody.BlockBody);
+                    else if (accessorBody.ExpressionBody
+                             != null)
+                        _operations.VisitOperation(
+                            accessorBody.ExpressionBody);
+                    else
+                        throw new InvalidOperationException(
+                            $"Source accessor "
+                            + $"'{method.ToDisplayString()}' "
+                            + "materialized without a body.");
+                }
+                else if (accessorOp
+                         is IBlockOperation accessorBlock)
+                    _operations.VisitOperation(
+                        accessorBlock);
+                else
+                    throw new InvalidOperationException(
+                        $"Source accessor "
+                        + $"'{method.ToDisplayString()}' has no "
+                        + "lowerable operation body.");
+            }
+            else
+                throw new InvalidOperationException(
+                    $"Source callable "
+                    + $"'{method.ToDisplayString()}' has unsupported "
+                    + $"body root '{bodyOp?.Kind.ToString() ?? "null"}'.");
         }
 
         // FieldChangeCallback epilogue: update _old_ to current value
