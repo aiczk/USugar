@@ -21,7 +21,6 @@ public static class USugarCompilerHelper
     public static bool IsFrameworkNamespace(INamespaceSymbol ns)
         => NamespaceRoot(ns) is "UnityEngine" or "VRC" or "TMPro" or "System" or "UdonSharp";
 
-    /// <summary>Framework minus UdonSharp: a UdonSharp-namespace member is user-side, never an extern.</summary>
     public static bool IsExternNamespace(INamespaceSymbol ns)
         => NamespaceRoot(ns) is "UnityEngine" or "VRC" or "TMPro" or "System";
 

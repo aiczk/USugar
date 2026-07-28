@@ -357,11 +357,6 @@ internal static class FlatVerify
         }
     }
 
-    /// <summary>Post-spill only: a function that still carries a non-tail recursive edge or a
-    /// Reentrant dispatch must also carry the frame save the spill pass inserts. Nothing else fails
-    /// when InsertRecursionSpills is skipped or is reordered before CoalesceSlots (whose rebuild
-    /// drops the inserted statements) — the corpus stays byte-identical for shapes it does not
-    /// cover, and the frame silently survives into the callee.</summary>
     internal static void VerifySpillsInserted(FlatModule module)
     {
         foreach (var f in module.Functions)

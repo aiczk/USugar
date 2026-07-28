@@ -33,8 +33,19 @@ public class NameAllocator
     /// <summary>Format a key + counter into "__N_key" form.</summary>
     public static string FormatId(string key, int counter) => $"__{counter}_{key}";
 
-    /// <summary>Normalize a source symbol name for use as a UASM identifier.</summary>
-    public static string Sanitize(string name) => name.Replace('.', '_');
+    public static string Sanitize(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return name;
+        var chars = name.ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+            if (!IsAssemblerIdentifierChar(chars[i]))
+                chars[i] = '_';
+        return new string(chars);
+    }
+
+    static bool IsAssemblerIdentifierChar(char c)
+        => char.IsLetterOrDigit(c) || c == '_'
+           || c == '<' || c == '>' || c == '[' || c == ']';
 
     // The method-layout naming contract (LayoutPlanBuilder exports + every synthetic bridge): allocator
     // keys "{name}__param"/"{name}__ret", counter-qualified slot ids "__N_{name}__param"/
