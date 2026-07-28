@@ -47,7 +47,7 @@ USugar integrates with the existing UdonSharp pipeline and requires no SDK modif
 
 ## Supported C#
 
-USugar supports user-defined classes and structs, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, and recursion.
+USugar supports user-defined classes and structs, anonymous types, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, and recursion.
 
 It also supports common language constructs such as `ref` and `out` parameters, `using`, user-defined operators and conversions, ranges, index-from-end expressions, and string interpolation.
 
@@ -85,15 +85,16 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - Multidimensional arrays are unsupported; use one-dimensional or jagged arrays.
 - Runtime construction of `UdonSharpBehaviour` instances is unsupported.
 - Records are unsupported. Their CLR contracts combine runtime type identity, equality, hashing, cloning, and printing; USugar rejects them instead of implementing only a subset. Use a class for reference semantics or a struct with explicit equality and copy operations for value semantics.
+- Anonymous types retain C# reference semantics even though their physical carrier is `object[]`: assignment aliases, `==` compares identity, and the generated `Equals`, `GetHashCode`, and `ToString` members use the read-only property values.
 - Static constructors, module initializers, destructors, and explicit constructors on `UdonSharpBehaviour` types are unsupported because Udon has no matching CLR lifetime hooks.
-- `GetType()` is unsupported when a value can contain a USugar class, struct, or delegate bundle.
-- Delegates use a callable-only model: creation, typed storage, invocation, null checks, combination, removal, events, closures, variance adapters, and `ref`/`out` signatures are supported. Delegate-to-delegate equality, object erasure, `Equals`, `GetHashCode`, `GetType`, `ToString`, `Target`, `Method`, and `GetInvocationList` are rejected.
+- `GetType()` is unsupported when a value can contain a USugar class, struct, anonymous type, or delegate bundle.
+- Delegates use a callable-only model: creation, typed storage, invocation, null checks, combination, removal, events, closures, variance adapters, and `ref`/`out` signatures are supported. Delegate-to-delegate equality, object erasure, `Equals`, `GetHashCode`, `GetType`, `ToString`, `Target`, `Method`, and `GetInvocationList` are rejected; generated aggregate members that would observe a contained delegate are rejected for the same reason.
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
 - Mutable static fields, auto-properties, and events are unsupported. Constants, compile-time-foldable `static readonly` values, static methods, and computed static properties are supported.
 - Non-tail recursion uses a shared software stack with 8,192 object slots. Effective recursion
   depth depends on the number of values live across each recursive call.
-- User classes, delegates, tuples, and other `object[]`-backed values cannot round-trip through
+- User classes, delegates, tuples, anonymous types, and other `object[]`-backed values cannot round-trip through
   the standard UdonSharp proxy/Inspector. USugar rejects serialized fields with those
   representations; mark runtime-only fields `[NonSerialized]` and initialize them in code.
 - Each emitted concrete `UdonSharpBehaviour` must resolve to exactly one

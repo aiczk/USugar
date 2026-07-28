@@ -104,9 +104,7 @@ internal static class BundleDataCodec
         var fields = InstanceFields(runtimeType);
         var bundle = new object[BundleAbi.HeaderSize + fields.Count];
         bundle[BundleAbi.Type] = BundleAbi.RuntimeTypeId(
-            runtimeType, runtimeType.IsValueType
-                ? RuntimeBundleKind.Aggregate
-                : RuntimeBundleKind.Class);
+            runtimeType, RuntimeKind(runtimeType));
         if (!runtimeType.IsValueType) seen.Add(value, bundle);
         for (var i = 0; i < fields.Count; i++)
             bundle[BundleAbi.HeaderSize + i] = Encode(
@@ -272,9 +270,7 @@ internal static class BundleDataCodec
             && !declaredType.IsInterface
             && declaredType != typeof(object))
         {
-            var declaredKind = declaredType.IsValueType
-                ? RuntimeBundleKind.Aggregate
-                : RuntimeBundleKind.Class;
+            var declaredKind = RuntimeKind(declaredType);
             if (BundleAbi.RuntimeTypeId(
                     declaredType, declaredKind)
                 == runtimeTypeId)
@@ -291,9 +287,7 @@ internal static class BundleDataCodec
                         && candidate.GetArrayRank() > 1
                     || !declaredType.IsAssignableFrom(candidate))
                     continue;
-                var kind = candidate.IsValueType
-                    ? RuntimeBundleKind.Aggregate
-                    : RuntimeBundleKind.Class;
+                var kind = RuntimeKind(candidate);
                 if (BundleAbi.RuntimeTypeId(candidate, kind)
                     == runtimeTypeId)
                     return candidate;
@@ -331,6 +325,21 @@ internal static class BundleDataCodec
            || type.IsClass
               && type != typeof(string)
               && !typeof(Delegate).IsAssignableFrom(type);
+
+    static RuntimeBundleKind RuntimeKind(Type type)
+        => type.IsValueType
+            ? RuntimeBundleKind.Aggregate
+            : IsAnonymousType(type)
+                ? RuntimeBundleKind.ReferenceAggregate
+                : RuntimeBundleKind.Class;
+
+    static bool IsAnonymousType(Type type)
+        => type.IsSealed
+           && type.BaseType == typeof(object)
+           && type.IsDefined(
+               typeof(CompilerGeneratedAttribute), inherit: false)
+           && type.Name.IndexOf(
+               "AnonymousType", StringComparison.Ordinal) >= 0;
 
     static void RequireSerializableType(
         Type type, Func<Type, bool> isNativeLeaf,

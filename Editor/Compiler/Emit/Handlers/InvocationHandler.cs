@@ -80,6 +80,29 @@ internal sealed class InvocationHandler
                 _lowering.VisitExpression(
                     op.Arguments[1].Value));
 
+        if (target.IsStatic
+            && target.Name == nameof(object.ReferenceEquals)
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && op.Arguments.Length == 2
+            && op.Arguments.Any(argument =>
+                _lowering.State.Boundary
+                    .ClassifyValue(argument.Value)
+                    .MayContainCompilerBundle))
+            return _lowering.ExternCall(
+                UdonAbiKey.Method(
+                    "SystemObject", "ReferenceEquals",
+                    new[] { "SystemObject", "SystemObject" },
+                    "SystemBoolean"),
+                new List<CLeaf>
+                {
+                    _lowering.VisitExpression(
+                        op.Arguments[0].Value),
+                    _lowering.VisitExpression(
+                        op.Arguments[1].Value)
+                },
+                StorageTypes.Boolean);
+
         if (!target.IsStatic
             && target.Name == nameof(object.GetType)
             && target.ContainingType.SpecialType
@@ -91,8 +114,60 @@ internal sealed class InvocationHandler
             throw new System.NotSupportedException(
                 "GetType() is not supported for a value that may contain "
                 + "a compiler bundle: Udon cannot preserve the CLR runtime "
-                + "type identity of program-local classes, structs, records, "
-                + "or delegates.");
+                + "type identity of program-local classes, structs, "
+                + "anonymous types, or delegates.");
+
+        if (!target.IsStatic
+            && op.Instance != null
+            && _lowering.ResolveType(op.Instance.Type)
+                is INamedTypeSymbol
+                {
+                    IsAnonymousType: true
+                } anonymousType)
+        {
+            if (target.Name == nameof(object.Equals)
+                && op.Arguments.Length == 1)
+            {
+                var receiver =
+                    _lowering.VisitExpression(op.Instance);
+                var argument =
+                    _lowering.VisitExpression(
+                        op.Arguments[0].Value);
+                return _lowering.EmitAnonymousEquals(
+                    receiver, argument, anonymousType);
+            }
+            if (target.Name == nameof(object.GetHashCode)
+                && op.Arguments.Length == 0)
+                return _lowering.EmitBundleValueHash(
+                    _lowering.VisitExpression(op.Instance),
+                    anonymousType);
+            if (target.Name == nameof(object.ToString)
+                && op.Arguments.Length == 0)
+                return _lowering.EmitKnownBundleToString(
+                    _lowering.VisitExpression(op.Instance),
+                    anonymousType,
+                    nullIsError: true);
+        }
+
+        if (!target.IsStatic
+            && op.Instance != null
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && _lowering.State.Boundary
+                .ClassifyValue(op.Instance)
+                .MayContainCompilerBundle)
+        {
+            if (target.Name == nameof(object.Equals)
+                && op.Arguments.Length == 1)
+                return _lowering.EmitDynamicObjectInstanceEquals(
+                    _lowering.VisitExpression(op.Instance),
+                    _lowering.VisitExpression(
+                        op.Arguments[0].Value));
+            if (target.Name == nameof(object.GetHashCode)
+                && op.Arguments.Length == 0)
+                return _lowering.EmitDynamicObjectHash(
+                    _lowering.VisitExpression(op.Instance));
+        }
 
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.

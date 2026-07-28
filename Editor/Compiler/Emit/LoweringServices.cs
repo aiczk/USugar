@@ -125,11 +125,16 @@ internal sealed class LoweringServices
     internal bool IsAggregateValue(ITypeSymbol type)
         => SourceShape(type).Bundle == RuntimeBundleKind.Aggregate;
 
+    internal bool IsReferenceAggregate(ITypeSymbol type)
+        => SourceShape(type).Bundle
+           == RuntimeBundleKind.ReferenceAggregate;
+
     internal bool IsObjectArrayEmulated(ITypeSymbol type)
     {
         var bundle = SourceShape(type).Bundle;
         return bundle is
             RuntimeBundleKind.Aggregate
+            or RuntimeBundleKind.ReferenceAggregate
             or RuntimeBundleKind.Class;
     }
 
@@ -1860,7 +1865,8 @@ internal sealed class LoweringServices
             PlanClassToStringDemand(classType);
             return;
         }
-        if (shape.Bundle != RuntimeBundleKind.Aggregate)
+        if (shape.Bundle is not RuntimeBundleKind.Aggregate
+                and not RuntimeBundleKind.ReferenceAggregate)
             return;
         if (type is not INamedTypeSymbol aggregate) return;
 
@@ -2830,6 +2836,27 @@ internal sealed class LoweringServices
         if (shape.Bundle == RuntimeBundleKind.Aggregate
             && type is INamedTypeSymbol aggregate)
             return EmitAggregateString(value, aggregate);
+        if (shape.Bundle
+                == RuntimeBundleKind.ReferenceAggregate
+            && type is INamedTypeSymbol referenceAggregate)
+        {
+            if (nullIsError)
+                return EmitAggregateString(
+                    value, referenceAggregate);
+            var referenceResult =
+                _builder.AllocScratch(StorageTypes.String);
+            EmitAssign(
+                referenceResult,
+                Const("", StorageTypes.String));
+            _builder.EmitIf(
+                NullableAbi.IsNull(_builder, value),
+                null,
+                _ => EmitAssign(
+                    referenceResult,
+                    EmitAggregateString(
+                        value, referenceAggregate)));
+            return SlotRef(referenceResult);
+        }
 
         var result =
             _builder.AllocScratch(StorageTypes.String);
@@ -2927,7 +2954,7 @@ internal sealed class LoweringServices
         EmitAssign(leftSlot, left);
         EmitAssign(rightSlot, right);
 
-        if (shape.Bundle != RuntimeBundleKind.Class)
+        if (shape.Bundle == RuntimeBundleKind.Aggregate)
             return EmitBundleFieldsEqual(
                 SlotRef(leftSlot), SlotRef(rightSlot), type);
 
@@ -2981,6 +3008,70 @@ internal sealed class LoweringServices
         return SlotRef(result);
     }
 
+    internal CLeaf EmitAnonymousEquals(
+        CLeaf receiver, CLeaf other,
+        INamedTypeSymbol type)
+    {
+        if (type == null || !type.IsAnonymousType)
+            throw new ArgumentException(
+                "Anonymous equality requires an anonymous type.",
+                nameof(type));
+
+        var receiverSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        var otherSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        EmitAssign(receiverSlot, receiver);
+        EmitAssign(otherSlot, other);
+
+        // C# evaluates the receiver and argument before callvirt performs
+        // its null check. Reading the receiver header here gives a null
+        // receiver the ordinary VM-fault path after both have been staged.
+        var receiverType = AggregateAbi.ReadSlot(
+            _builder, SlotRef(receiverSlot), BundleAbi.Type,
+            StorageTypes.String);
+        var expectedType = Const(
+            BundleAbi.RuntimeTypeId(type),
+            StorageTypes.String);
+        var receiverMatches = ExternCall(
+            UdonAbi.StringEquality,
+            new List<CLeaf>
+                { receiverType, expectedType },
+            StorageTypes.Boolean);
+        var otherIsBundle = BundleProbe.IsTagged(
+            _builder, SlotRef(otherSlot), BundleAbi.Prefix);
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(
+            result,
+            Const(false, StorageTypes.Boolean));
+        _builder.EmitIf(otherIsBundle, _ =>
+        {
+            var otherType = AggregateAbi.ReadSlot(
+                _builder, SlotRef(otherSlot), BundleAbi.Type,
+                StorageTypes.String);
+            var otherMatches = ExternCall(
+                UdonAbi.StringEquality,
+                new List<CLeaf>
+                    { otherType, expectedType },
+                StorageTypes.Boolean);
+            var bothMatch = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf>
+                    { receiverMatches, otherMatches },
+                StorageTypes.Boolean);
+            _builder.EmitIf(
+                bothMatch,
+                __ => EmitAssign(
+                    result,
+                    EmitBundleValueEquality(
+                        SlotRef(receiverSlot),
+                        SlotRef(otherSlot), type)),
+                null);
+        }, null);
+        return SlotRef(result);
+    }
+
     CLeaf EmitBundleFieldsEqual(
         CLeaf left, CLeaf right,
         INamedTypeSymbol type)
@@ -3010,8 +3101,9 @@ internal sealed class LoweringServices
             var fieldShape = SourceShape(fieldType);
             CLeaf equal;
             if (fieldType is INamedTypeSymbol nested
-                && fieldShape.Bundle
-                    == RuntimeBundleKind.Aggregate)
+                && fieldShape.Bundle is
+                    RuntimeBundleKind.Aggregate
+                    or RuntimeBundleKind.ReferenceAggregate)
                 equal = EmitBundleValueEquality(
                     leftValue, rightValue, nested);
             else if (fieldType
@@ -3056,8 +3148,36 @@ internal sealed class LoweringServices
                 _builder, value, field.Index,
                 StorageTypes.Object);
             CLeaf fieldHash;
-            if (SourceShape(ResolveType(field.Type))
-                    .IsBundle)
+            var fieldType = ResolveType(field.Type);
+            var fieldShape = SourceShape(fieldType);
+            if (fieldType is INamedTypeSymbol nested
+                && fieldShape.Bundle
+                    == RuntimeBundleKind.Aggregate)
+            {
+                fieldHash = EmitBundleValueHash(
+                    fieldValue, nested);
+            }
+            else if (fieldType is INamedTypeSymbol
+                         nestedReference
+                     && fieldShape.Bundle
+                         == RuntimeBundleKind.ReferenceAggregate)
+            {
+                var nestedHash =
+                    _builder.AllocScratch(StorageTypes.Int32);
+                _builder.EmitIf(
+                    NullableAbi.IsNull(
+                        _builder, fieldValue),
+                    _ => EmitAssign(
+                        nestedHash,
+                        Const(0, StorageTypes.Int32)),
+                    _ => EmitAssign(
+                        nestedHash,
+                        EmitBundleValueHash(
+                            fieldValue,
+                            nestedReference)));
+                fieldHash = SlotRef(nestedHash);
+            }
+            else if (fieldShape.IsBundle)
             {
                 // A constant contribution keeps the equality/hash contract
                 // for structural bundle fields without falling back to the
@@ -3168,6 +3288,119 @@ internal sealed class LoweringServices
         return SlotRef(result);
     }
 
+    internal CLeaf EmitDynamicObjectInstanceEquals(
+        CLeaf receiver, CLeaf argument)
+    {
+        var receiverSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        var argumentSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        EmitAssign(receiverSlot, receiver);
+        EmitAssign(argumentSlot, argument);
+        var receiverValue = SlotRef(receiverSlot);
+        var argumentValue = SlotRef(argumentSlot);
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        var isBundle = EmitIsCompilerBundle(receiverValue);
+        _builder.EmitIf(
+            isBundle,
+            _ => EmitAssign(
+                result,
+                EmitDynamicObjectEquals(
+                    receiverValue, argumentValue)),
+            _ => EmitAssign(
+                result,
+                ExternCall(
+                    UdonAbiKey.Method(
+                        "SystemObject", "Equals",
+                        new[] { "SystemObject" },
+                        "SystemBoolean"),
+                    new List<CLeaf>
+                        { receiverValue, argumentValue },
+                    StorageTypes.Boolean)));
+        return SlotRef(result);
+    }
+
+    internal CLeaf EmitDynamicObjectHash(CLeaf value)
+    {
+        var valueSlot =
+            _builder.AllocScratch(StorageTypes.Object);
+        EmitAssign(valueSlot, value);
+        var staged = SlotRef(valueSlot);
+        var result =
+            _builder.AllocScratch(StorageTypes.Int32);
+        var isBundle = EmitIsCompilerBundle(staged);
+        _builder.EmitIf(isBundle, _ =>
+        {
+            var typeId = AggregateAbi.ReadSlot(
+                _builder, staged, BundleAbi.Type,
+                StorageTypes.String);
+            var matched =
+                _builder.AllocScratch(StorageTypes.Boolean);
+            EmitAssign(
+                matched,
+                Const(false, StorageTypes.Boolean));
+            var seen = new HashSet<string>(
+                StringComparer.Ordinal);
+            foreach (var candidate
+                     in _state.Program.Types.KnownBundleTypes)
+            {
+                var resolved = ResolveType(candidate);
+                if (resolved == null) continue;
+                var runtimeTypeId =
+                    BundleAbi.RuntimeTypeId(resolved);
+                if (!seen.Add(runtimeTypeId)) continue;
+                var matches = ExternCall(
+                    UdonAbi.StringEquality,
+                    new List<CLeaf>
+                    {
+                        typeId,
+                        Const(runtimeTypeId,
+                            StorageTypes.String)
+                    },
+                    StorageTypes.Boolean);
+                _builder.EmitIf(matches, __ =>
+                {
+                    EmitAssign(
+                        matched,
+                        Const(true, StorageTypes.Boolean));
+                    var shape = SourceShape(resolved);
+                    EmitAssign(
+                        result,
+                        resolved is INamedTypeSymbol aggregate
+                        && shape.Bundle is
+                            RuntimeBundleKind.Aggregate
+                            or RuntimeBundleKind.ReferenceAggregate
+                            ? EmitBundleValueHash(
+                                staged, aggregate)
+                            : ExternCall(
+                                UdonAbi.ObjectGetHashCode,
+                                new List<CLeaf> { staged },
+                                StorageTypes.Int32));
+                }, null);
+            }
+            var unknown = ExternCall(
+                UdonAbi.BooleanNot,
+                new List<CLeaf> { SlotRef(matched) },
+                StorageTypes.Boolean);
+            _builder.EmitIf(
+                unknown,
+                __ => EmitAssign(
+                    result,
+                    ExternCall(
+                        UdonAbi.ObjectGetHashCode,
+                        new List<CLeaf> { staged },
+                        StorageTypes.Int32)),
+                null);
+        }, _ => EmitAssign(
+            result,
+            ExternCall(
+                UdonAbi.ObjectGetHashCode,
+                new List<CLeaf> { staged },
+                StorageTypes.Int32)));
+        return SlotRef(result);
+    }
+
     CLeaf EmitIsCompilerBundle(CLeaf value)
         => BundleProbe.IsTagged(
             _builder, value, BundleAbi.Prefix);
@@ -3250,8 +3483,9 @@ internal sealed class LoweringServices
                 continue;
             if (resolved
                          is INamedTypeSymbol aggregate
-                     && shape.Bundle
-                         == RuntimeBundleKind.Aggregate)
+                     && shape.Bundle is
+                         RuntimeBundleKind.Aggregate
+                         or RuntimeBundleKind.ReferenceAggregate)
                 EmitCandidate(
                     runtimeTypeId,
                     () => EmitBundleValueEquality(

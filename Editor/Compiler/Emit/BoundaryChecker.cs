@@ -268,7 +268,9 @@ internal sealed class BoundaryChecker
         var containing = propRef.Property.ContainingType;
         if (containing == null
             || ShapeOf(containing).Bundle
-                is RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class)
+                is RuntimeBundleKind.Aggregate
+                    or RuntimeBundleKind.ReferenceAggregate
+                    or RuntimeBundleKind.Class)
             return false;
         if (propRef.Instance is not null and not IInstanceReferenceOperation)
             return ExternResolver.IsUdonSharpBehaviour(containing)

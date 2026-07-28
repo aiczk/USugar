@@ -860,8 +860,9 @@ internal sealed class ExpressionHandler
             var castsNull = castOperand is IDefaultValueOperation
                 || (castOperand?.ConstantValue.HasValue == true && castOperand.ConstantValue.Value == null);
             if (!castsNull
-                || destinationShape.Bundle
-                    != RuntimeBundleKind.Class)
+                || destinationShape.Bundle is not
+                    RuntimeBundleKind.Class
+                    and not RuntimeBundleKind.ReferenceAggregate)
                 throw new NotSupportedException(
                     $"Cast from "
                     + $"'{castSource.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "

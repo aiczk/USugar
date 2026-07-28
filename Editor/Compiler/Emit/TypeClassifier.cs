@@ -22,6 +22,7 @@ public enum RuntimeBundleKind
     None,
     Class,
     Aggregate,
+    ReferenceAggregate,
     Delegate,
 }
 
@@ -80,6 +81,8 @@ public static class TypeClassifier
             new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
         var bundle = IsUserClassLeaf(type)
             ? RuntimeBundleKind.Class
+            : IsReferenceAggregateLeaf(type)
+                ? RuntimeBundleKind.ReferenceAggregate
             : type is INamedTypeSymbol { DelegateInvokeMethod: not null }
                     ? RuntimeBundleKind.Delegate
                     : IsAggregateValueLeaf(type)
@@ -92,6 +95,7 @@ public static class TypeClassifier
         {
             RuntimeBundleKind.Class
                 or RuntimeBundleKind.Aggregate
+                or RuntimeBundleKind.ReferenceAggregate
                 => TransportCapabilities.TypedProgramChannel,
             RuntimeBundleKind.Delegate
                 => containsUserClass
@@ -120,6 +124,7 @@ public static class TypeClassifier
             || element is INamedTypeSymbol
                 { DelegateInvokeMethod: not null }
             || IsUserClassLeaf(element)
+            || IsReferenceAggregateLeaf(element)
             || IsAggregateValueLeaf(element))
             return true;
         return element is INamedTypeSymbol nullable
@@ -135,6 +140,7 @@ public static class TypeClassifier
     {
         type = Resolve(type, ctx);
         return IsUserClassLeaf(type)
+               || IsReferenceAggregateLeaf(type)
                || IsAggregateValueLeaf(type)
                || type is INamedTypeSymbol
                    { DelegateInvokeMethod: not null };
@@ -177,8 +183,15 @@ public static class TypeClassifier
     internal static bool IsAggregateValueLeaf(ITypeSymbol type)
     {
         if (type is not INamedTypeSymbol named || named.TypeKind == TypeKind.Delegate) return false;
-        return named.IsTupleType || named.IsAnonymousType || IsUserStruct(named);
+        return named.IsTupleType || IsUserStruct(named);
     }
+
+    public static bool IsReferenceAggregate(ITypeSymbol type)
+        => ShapeOf(type, new TypeClassifierContext(null)).Bundle
+           == RuntimeBundleKind.ReferenceAggregate;
+
+    internal static bool IsReferenceAggregateLeaf(ITypeSymbol type)
+        => type is INamedTypeSymbol { IsAnonymousType: true };
 
     public static bool IsUserStruct(INamedTypeSymbol type)
     {
@@ -190,7 +203,9 @@ public static class TypeClassifier
     public static bool IsObjectArrayEmulated(ITypeSymbol type)
     {
         var bundle = ShapeOf(type, new TypeClassifierContext(null)).Bundle;
-        return bundle is RuntimeBundleKind.Aggregate or RuntimeBundleKind.Class;
+        return bundle is RuntimeBundleKind.Aggregate
+            or RuntimeBundleKind.ReferenceAggregate
+            or RuntimeBundleKind.Class;
     }
 
     static ITypeSymbol Resolve(ITypeSymbol type, TypeClassifierContext ctx)
@@ -230,6 +245,11 @@ public static class TypeClassifier
             foreach (var member in named.GetMembers())
                 if (member is IFieldSymbol { IsStatic: false } field)
                     contents |= ContentsOf(field.Type, typeParameterMap, visited);
+        if (IsReferenceAggregateLeaf(named))
+            foreach (var property in named.GetMembers()
+                         .OfType<IPropertySymbol>())
+                contents |= ContentsOf(
+                    property.Type, typeParameterMap, visited);
         foreach (var argument in named.TypeArguments)
             contents |= ContentsOf(argument, typeParameterMap, visited);
         return contents;
@@ -383,12 +403,21 @@ internal static class SourceSemanticProfile
                    .Kind == ValueKind.Delegate;
 
         bool ContainsDelegateProtocol(IOperation value)
-            => IsDelegateValue(value)
-               || value?.Type != null
-               && TypeClassifier.ShapeOf(
-                       value.Type,
-                       new TypeClassifierContext(null))
-                   .ContainsDelegate;
+        {
+            for (var current = value;
+                 current != null;
+                 current = current is IConversionOperation conversion
+                     ? conversion.Operand
+                     : null)
+                if (IsDelegateValue(current)
+                    || current.Type != null
+                    && TypeClassifier.ShapeOf(
+                            current.Type,
+                            new TypeClassifierContext(null))
+                        .ContainsDelegate)
+                    return true;
+            return false;
+        }
 
         switch (operation)
         {
@@ -435,6 +464,28 @@ internal static class SourceSemanticProfile
                 throw UnsupportedDelegateObservation(
                     $"object.{invocation.TargetMethod.Name} "
                     + "on a delegate value");
+
+            case IInvocationOperation invocation
+                when invocation.Instance != null
+                && invocation.TargetMethod.Name
+                    is "Equals" or "GetHashCode" or "ToString"
+                && ContainsDelegateProtocol(
+                    invocation.Instance):
+                throw UnsupportedDelegateObservation(
+                    $"compiler-generated "
+                    + $"'{invocation.TargetMethod.Name}' on a value "
+                    + "containing a delegate");
+
+            case IInvocationOperation invocation
+                when invocation.TargetMethod.IsStatic
+                && invocation.TargetMethod.ContainingType
+                    .SpecialType
+                    == SpecialType.System_Object
+                && invocation.TargetMethod.Name == "Equals"
+                && invocation.Arguments.Any(argument =>
+                    ContainsDelegateProtocol(argument.Value)):
+                throw UnsupportedDelegateObservation(
+                    "object.Equals on a value containing a delegate");
 
             case IPropertyReferenceOperation property
                 when property.Instance != null

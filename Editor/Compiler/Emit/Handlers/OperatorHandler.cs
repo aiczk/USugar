@@ -55,12 +55,16 @@ internal sealed class OperatorHandler
         }
 
 
-        // ── User class (v1) reference equality: c1 == c2 / c == null → reference compare on the object[]
-        // bundle (the bundle reference IS the identity; an unoverridden Equals/== is reference equality). ──
+        // ── Reference-bundle equality: the object[] carrier itself is the identity for user classes
+        // and anonymous types. ──
         if (ClassAbi.IsReferenceEquality(
                 op.OperatorKind,
-                _lowering.IsUserClass(op.LeftOperand.Type),
-                _lowering.IsUserClass(op.RightOperand.Type)))
+                _lowering.IsUserClass(op.LeftOperand.Type)
+                    || _lowering.IsReferenceAggregate(
+                        op.LeftOperand.Type),
+                _lowering.IsUserClass(op.RightOperand.Type)
+                    || _lowering.IsReferenceAggregate(
+                        op.RightOperand.Type)))
             return ClassAbi.EmitReferenceEquality(_lowering.Builder, op.OperatorKind,
                 _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand));
 

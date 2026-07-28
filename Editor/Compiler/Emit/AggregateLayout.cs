@@ -30,7 +30,7 @@ public class AggregateLayout
     readonly Dictionary<ISymbol, int> _symbolToIndex;
 
     // Every source-level bundle reserves slot 0 for its runtime identity. Payload starts at slot 1
-    // for classes, structs, tuples, and anonymous values alike. SlotCount is the backing-array size;
+    // for classes, structs, tuples, and anonymous objects alike. SlotCount is the backing-array size;
     // Count stays the logical field count. FieldInfo.Index is always the physical slot.
     readonly int _reservedLeadingSlots;
 
@@ -147,8 +147,8 @@ public class AggregateLayout
         }
         else if (type.IsAnonymousType)
         {
-            // Anonymous type: its read-only properties map to slots in declaration order (no reserved
-            // slot). Member access (p.X) resolves through this map exactly like a tuple element.
+            // Anonymous type: its read-only properties map to slots in declaration order. The
+            // object[] carrier is shared with aggregates, but the object retains reference semantics.
             int i = reserved;
             foreach (var prop in type.GetMembers().OfType<IPropertySymbol>())
             {
@@ -209,6 +209,7 @@ public static class BundleAbi
     {
         RuntimeBundleKind.Class => "class",
         RuntimeBundleKind.Aggregate => "aggregate",
+        RuntimeBundleKind.ReferenceAggregate => "reference-aggregate",
         RuntimeBundleKind.Delegate => "delegate",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };

@@ -71,6 +71,13 @@ public sealed class UasmEmitter
         => SourceShape(type, typeParameterMap).Bundle
            == RuntimeBundleKind.Aggregate;
 
+    internal bool IsReferenceAggregate(
+        ITypeSymbol type,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+        => SourceShape(type, typeParameterMap).Bundle
+           == RuntimeBundleKind.ReferenceAggregate;
+
     internal bool IsObjectArrayEmulated(
         ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
@@ -78,6 +85,7 @@ public sealed class UasmEmitter
     {
         var bundle = SourceShape(type, typeParameterMap).Bundle;
         return bundle is RuntimeBundleKind.Class
+            or RuntimeBundleKind.ReferenceAggregate
             or RuntimeBundleKind.Aggregate;
     }
 
