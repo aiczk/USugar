@@ -699,8 +699,12 @@ public sealed class ResolvedEdgeResolver
         foreach (var value in Values())
         {
             var unwrapped = UnwrapConversionOps(value);
+            var valueType = unwrapped?.Type;
+            if (EmitPolicy.IsNullableT(
+                    valueType, out var nullableUnderlying))
+                valueType = nullableUnderlying;
             if (ClassAbi.FindUserStructToStringOverride(
-                    unwrapped?.Type) is { } method)
+                    valueType) is { } method)
                 yield return method;
         }
     }

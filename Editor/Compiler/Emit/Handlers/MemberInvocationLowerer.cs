@@ -367,7 +367,10 @@ internal sealed class MemberInvocationLowerer
     internal CLeaf VisitInterpolatedString(IInterpolatedStringOperation op)
     {
         var formatParts = new List<string>();
-        var argVals = new List<CLeaf>();
+        var interpolations = new List<IInterpolationOperation>();
+        var usesCompositeFormat =
+            op.Parts.Any(part =>
+                part is IInterpolationOperation);
         int argIndex = 0;
 
         foreach (var part in op.Parts)
@@ -376,7 +379,14 @@ internal sealed class MemberInvocationLowerer
             {
                 case IInterpolatedStringTextOperation text:
                     if (text.Text is ILiteralOperation lit && lit.ConstantValue.HasValue)
-                        formatParts.Add(lit.ConstantValue.Value?.ToString() ?? "");
+                    {
+                        var literal =
+                            lit.ConstantValue.Value?.ToString() ?? "";
+                        formatParts.Add(
+                            usesCompositeFormat
+                                ? EscapeCompositeFormatText(literal)
+                                : literal);
+                    }
                     break;
                 case IInterpolationOperation interpolation:
                     var placeholder = new System.Text.StringBuilder();
@@ -408,13 +418,34 @@ internal sealed class MemberInvocationLowerer
                     // sealed/singleton set devirtualizes inside the dispatch helper).
                     // B67: a user enum in an interpolation hole would be boxed and Format-ToString'd to its
                     // underlying number — pre-convert it to the C#-correct name string instead.
-                    var interpVal = _lowering.VisitExpression(interpolation.Expression);
-                    argVals.Add(_lowering.ConvertConcatOperand(
-                        interpVal, interpolation.Expression));
+                    interpolations.Add(interpolation);
                     argIndex++;
                     break;
             }
         }
+
+        // Composite formatting evaluates every argument expression from
+        // left to right before it formats any captured value. An earlier
+        // argument's ToString side effects therefore cannot affect the
+        // evaluation of a later argument expression.
+        var stagedValues =
+            new List<CLeaf>(interpolations.Count);
+        foreach (var interpolation in interpolations)
+        {
+            var expression = interpolation.Expression;
+            var slot = _lowering.Builder.AllocScratch(
+                _lowering.GetStorageType(expression.Type));
+            _lowering.EmitAssign(
+                slot, _lowering.VisitExpression(expression));
+            stagedValues.Add(_lowering.SlotRef(slot));
+        }
+
+        var argVals = new List<CLeaf>(interpolations.Count);
+        for (var index = 0;
+             index < interpolations.Count;
+             index++)
+            argVals.Add(ConvertInterpolationOperand(
+                stagedValues[index], interpolations[index]));
 
         var formatStr = string.Join("", formatParts);
         var formatConst = _lowering.Const(formatStr, StorageTypes.String);
@@ -457,6 +488,165 @@ internal sealed class MemberInvocationLowerer
                 new List<CLeaf> { formatConst, arrVal },
                 StorageTypes.String);
         }
+    }
+
+    static string EscapeCompositeFormatText(string text)
+        => text.Replace("{", "{{").Replace("}", "}}");
+
+    CLeaf ConvertInterpolationOperand(
+        CLeaf value, IInterpolationOperation interpolation)
+    {
+        var expression = interpolation.Expression;
+        var type = _lowering.ResolveType(expression.Type);
+        var format = InterpolationFormat(interpolation);
+
+        if (EmitPolicy.IsNullableT(type, out var underlying))
+        {
+            underlying = _lowering.ResolveType(underlying);
+            if (_lowering.IsFoldedEnum(underlying))
+                return ConvertNullableEnumInterpolation(
+                    value, underlying, format);
+            if (underlying != null
+                && _lowering.SourceShape(underlying).IsBundle)
+            {
+                RequireBundleInterpolationSupported(
+                    underlying, format);
+                return NullableAbi.EmitGetValueOrDefault(
+                    _lowering.Builder, value,
+                    StorageTypes.String,
+                    _lowering.Const("", StorageTypes.String),
+                    present =>
+                        _lowering.EmitKnownBundleToString(
+                            present, underlying,
+                            nullIsError: false));
+            }
+            return value;
+        }
+
+        if (_lowering.IsFoldedEnum(type))
+            return ConvertEnumInterpolation(
+                value, type, format);
+
+        if (type != null
+            && _lowering.SourceShape(type).IsBundle)
+        {
+            RequireBundleInterpolationSupported(type, format);
+            return _lowering.ConvertConcatOperand(
+                value, expression);
+        }
+
+        if (format != null
+            && (type?.SpecialType
+                    == SpecialType.System_Object
+                || type is INamedTypeSymbol
+                    { TypeKind: TypeKind.Interface })
+            && _lowering.State.Boundary
+                .ClassifyValue(expression)
+                .MayContainCompilerBundle)
+            throw new NotSupportedException(
+                $"Interpolated format ':{format}' on erased type "
+                + $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported when the value may be a compiler "
+                + "bundle: Udon cannot dispatch IFormattable through "
+                + "the erased bundle carrier. Format the value "
+                + "explicitly before interpolation.");
+
+        return _lowering.ConvertConcatOperand(value, expression);
+    }
+
+    static string InterpolationFormat(
+        IInterpolationOperation interpolation)
+    {
+        if (interpolation.FormatString == null)
+            return null;
+        var constant =
+            interpolation.FormatString.ConstantValue;
+        if (constant.HasValue
+            && constant.Value is string format)
+            return format;
+        throw new NotSupportedException(
+            "A non-constant interpolation format is not supported.");
+    }
+
+    CLeaf ConvertNullableEnumInterpolation(
+        CLeaf value, ITypeSymbol enumType, string format)
+    {
+        var kind =
+            ClassifyEnumInterpolationFormat(enumType, format);
+        if (kind == EnumInterpolationFormat.Numeric)
+            return value;
+        return NullableAbi.EmitGetValueOrDefault(
+            _lowering.Builder, value,
+            StorageTypes.String,
+            _lowering.Const("", StorageTypes.String),
+            present => _lowering.TryEmitEnumToString(
+                _lowering.RetagSmallNullablePresent(
+                    present, enumType),
+                enumType));
+    }
+
+    CLeaf ConvertEnumInterpolation(
+        CLeaf value, ITypeSymbol enumType, string format)
+        => ClassifyEnumInterpolationFormat(enumType, format)
+            == EnumInterpolationFormat.Numeric
+            ? value
+            : _lowering.TryEmitEnumToString(value, enumType);
+
+    enum EnumInterpolationFormat
+    {
+        General,
+        Numeric,
+    }
+
+    static EnumInterpolationFormat
+        ClassifyEnumInterpolationFormat(
+            ITypeSymbol enumType, string format)
+    {
+        if (string.IsNullOrEmpty(format)
+            || string.Equals(
+                format, "G",
+                StringComparison.OrdinalIgnoreCase))
+            return EnumInterpolationFormat.General;
+        if (string.Equals(
+                format, "D",
+                StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                format, "X",
+                StringComparison.OrdinalIgnoreCase))
+            return EnumInterpolationFormat.Numeric;
+
+        // Enum's F format performs a flag decomposition even without a
+        // [Flags] attribute. The synthesized helper only implements
+        // exact-name/general formatting.
+        throw new NotSupportedException(
+            $"Interpolated enum format ':{format}' is not supported "
+            + $"for '{enumType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'. "
+            + "USugar supports G, D, and X for folded enums; format "
+            + "the value explicitly for other formats.");
+    }
+
+    void RequireBundleInterpolationSupported(
+        ITypeSymbol type, string format)
+    {
+        var iFormattable = _lowering.Compilation
+            .GetTypeByMetadataName("System.IFormattable");
+        if (iFormattable == null
+            || type is not INamedTypeSymbol named
+            || !named.AllInterfaces.Any(candidate =>
+                SymbolEqualityComparer.Default.Equals(
+                    candidate, iFormattable)))
+            return;
+
+        throw new NotSupportedException(
+            $"Interpolation of compiler bundle "
+            + $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "implementing IFormattable is not supported: Udon "
+            + "cannot preserve the IFormattable.ToString(string, "
+            + "IFormatProvider) dispatch"
+            + (format == null
+                ? "."
+                : $" for format ':{format}'.")
+            + " Call that method explicitly before interpolation.");
     }
 
     // ── Object Creation ──

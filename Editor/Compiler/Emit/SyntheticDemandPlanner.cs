@@ -160,13 +160,19 @@ internal sealed class SyntheticDemandPlanner
         }
         else if (operation is IInterpolationOperation interpolation)
         {
+            var interpolationType =
+                interpolation.Expression.Type;
+            if (EmitPolicy.IsNullableT(
+                    interpolationType,
+                    out var nullableUnderlying))
+                interpolationType = nullableUnderlying;
             lowering.PlanEnumToStringDemand(
-                interpolation.Expression.Type,
+                interpolationType,
                 rejectFlags: false);
             lowering.PlanBundleStringDemands(
-                interpolation.Expression.Type);
+                interpolationType);
             lowering.PlanClassToStringDemand(
-                interpolation.Expression.Type);
+                interpolationType);
         }
         else if (operation is IBinaryOperation
                  {
