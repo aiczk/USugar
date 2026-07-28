@@ -123,7 +123,7 @@ public class FlatVerifyTests
     }
 
     [Fact]
-    public void TailSparedCallOutsideRecursiveCalleeSet_Throws()
+    public void TailSparedCallOutsideCycleCalleeSet_Throws()
     {
         var f = Flat(Block(0,
             new List<IFlatInstruction>
@@ -140,7 +140,26 @@ public class FlatVerifyTests
             () => FlatVerify.Verify(f));
 
         Assert.Contains("TailSpared", ex.Message);
-        Assert.Contains("RecursiveCalleeNames", ex.Message);
+        Assert.Contains("CycleCalleeNames", ex.Message);
+    }
+
+    [Fact]
+    public void TailSparedCallInsideCycleCalleeSetWithoutSpillTarget_Passes()
+    {
+        var f = Flat(Block(0,
+            new List<IFlatInstruction>
+            {
+                new CExprStmt(new CInternalCall(
+                    "callee",
+                    new List<CLeaf>(),
+                    StorageTypes.Void,
+                    tailSpared: true)),
+            },
+            new CRet()));
+        f.AddCycleCallee("callee");
+
+        FlatVerify.Verify(f);
+        Assert.Empty(f.RecursiveCalleeNames);
     }
 
     [Fact]

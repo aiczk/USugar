@@ -158,12 +158,12 @@ internal static class FlatVerify
                             TailSpared: true
                         } call
                     }
-                    && !function.RecursiveCalleeNames.Contains(
+                    && !function.CycleCalleeNames.Contains(
                         call.FuncName))
                     throw new VerificationException(
                         $"{function.Name}: TailSpared call to "
                         + $"'{call.FuncName}' is not a member of "
-                        + "RecursiveCalleeNames.");
+                        + "CycleCalleeNames.");
     }
 
     sealed class TypeContext

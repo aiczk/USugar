@@ -2076,9 +2076,11 @@ public class Caller : UdonSharpBehaviour {
         var baseUasm = TestHelper.CompileToUasm(source, "BaseHandler");
         var derivedUasm = TestHelper.CompileToUasm(source, "DerivedHandler");
 
-        // Base class: IsSupported param is __0_urlStr__param
-        Assert.Contains("__0_urlStr__param", baseUasm);
-        Assert.Contains("__0___0_IsSupported__ret", baseUasm);
+        // The abstract base declaration has no executable callable, so it
+        // must not materialize dead parameter/return storage of its own.
+        Assert.DoesNotContain("__0_urlStr__param", baseUasm);
+        Assert.DoesNotContain(
+            "__0___0_IsSupported__ret", baseUasm);
 
         // Derived class: despite ExtraMethod taking urlStr first,
         // the override must reuse base's __0_urlStr__param (not __1_urlStr__param)
@@ -2505,6 +2507,43 @@ public class JaggedTest : UdonSharpBehaviour {
 ");
         Assert.Contains("SystemObjectArray", uasm);
         Assert.DoesNotContain("SystemInt32ArrayArray", uasm);
+    }
+
+    [Fact]
+    public void JaggedArray_GetType_ReflectsItsObjectArrayCarrier()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class JaggedGetTypeTest : UdonSharpBehaviour {
+    public bool result;
+    void Start() {
+        int[][] values = new int[1][];
+        result = values.GetType() == typeof(object[]);
+    }
+}
+", "JaggedGetTypeTest");
+
+        Assert.Contains(
+            "SystemObject.__GetType__SystemType",
+            uasm);
+        Assert.Contains("__const_SystemType_", uasm);
+    }
+
+    [Fact]
+    public void JaggedArray_GetType_DoesNotOpenGeneralObjectExterns()
+    {
+        var ex = Assert.Throws<NotSupportedException>(
+            () => TestHelper.CompileToUasm(@"
+using UdonSharp;
+using UnityEngine;
+public class JaggedExternGuardTest : UdonSharpBehaviour {
+    int[][] values;
+    void Start() { Debug.Log(values); }
+}
+", "JaggedExternGuardTest"));
+
+        Assert.Contains("extern-call ABI", ex.Message);
     }
 
     // ── Expression-bodied method ──

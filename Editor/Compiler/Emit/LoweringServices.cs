@@ -136,6 +136,18 @@ internal sealed class LoweringServices
     internal bool ContainsUserClassPayload(ITypeSymbol type)
         => SourceShape(type).ContainsUserClassPayload;
 
+    /// <summary>
+    /// Whether an array's physical carrier is owned by the compiler rather than the source ABI.
+    /// Emission consumes the representation decision frozen into the bound program; it must not
+    /// rediscover that decision from live symbols or from the shared SystemObjectArray storage name.
+    /// </summary>
+    internal bool UsesCompilerOwnedArrayCarrier(ITypeSymbol type)
+        => ResolveType(type) is IArrayTypeSymbol
+           && _state.Types.Describe(
+                   type, _state.TypeParamMap)
+               .Representation
+               == UdonRepresentationKind.ObjectArrayBundle;
+
     internal bool IsUserStruct(ITypeSymbol type)
         => IsAggregateValue(type)
            && ResolveType(type) is INamedTypeSymbol named
@@ -3795,6 +3807,10 @@ internal sealed class LoweringServices
         // frame after the call, so it is flagged TailSpared instead of wrapped; ONE non-tail site used to
         // make EVERY site of the callee spill and deep mixed tail/non-tail recursion overflowed the
         // 8192-entry __recurStack (compile-clean VmFault on legal C#).
+        if (_state.Recursion.IsCycleEdge(
+                _currentMethod, target))
+            _builder.CurrentFunction.AddCycleCallee(
+                func.Name);
         var sitePlan = CallableSitePlan.Direct(target, callSite,
             IsRecursiveEdge(_currentMethod, target), _state.Recursion);
         if (sitePlan.RecursiveEdge)

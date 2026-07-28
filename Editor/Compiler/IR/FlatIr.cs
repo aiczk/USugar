@@ -75,6 +75,8 @@ public sealed class FlatFunction
     int _protectedRecursionSiteCount;
     readonly HashSet<string> _recursiveCalleeNames =
         new(StringComparer.Ordinal);
+    readonly HashSet<string> _cycleCalleeNames =
+        new(StringComparer.Ordinal);
 
     public string Name { get; }
     public string ExportName { get; }
@@ -88,6 +90,8 @@ public sealed class FlatFunction
         new List<ReturnSlot>();
     public IReadOnlyCollection<string> RecursiveCalleeNames
         => _recursiveCalleeNames;
+    internal IReadOnlyCollection<string> CycleCalleeNames
+        => _cycleCalleeNames;
     public IList<(string Name, StorageType Type)> RecursionSpillFields
         { get; private set; } =
             new List<(string, StorageType)>();
@@ -144,6 +148,13 @@ public sealed class FlatFunction
     {
         ThrowIfFrozen();
         _recursiveCalleeNames.Add(
+            name ?? throw new ArgumentNullException(nameof(name)));
+    }
+
+    internal void AddCycleCallee(string name)
+    {
+        ThrowIfFrozen();
+        _cycleCalleeNames.Add(
             name ?? throw new ArgumentNullException(nameof(name)));
     }
 
