@@ -897,7 +897,7 @@ internal sealed class OperatorHandler
         if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
             throw new System.NotSupportedException(
                 $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
-        var result = _lowering.EmitBundleValueEquality(
+        var result = _lowering.EmitTupleOperatorEquality(
             _lowering.VisitExpression(op.LeftOperand),
             _lowering.VisitExpression(op.RightOperand),
             aggType);
@@ -915,7 +915,7 @@ internal sealed class OperatorHandler
         IBinaryOperation op,
         INamedTypeSymbol aggType)
     {
-        var result = _lowering.EmitBundleValueEquality(
+        var result = _lowering.EmitTupleOperatorEquality(
             _lowering.VisitExpression(op.LeftOperand),
             _lowering.VisitExpression(op.RightOperand),
             aggType);

@@ -2835,7 +2835,20 @@ internal sealed class LoweringServices
                 useOverrides: true);
         if (shape.Bundle == RuntimeBundleKind.Aggregate
             && type is INamedTypeSymbol aggregate)
+        {
+            if (ClassAbi.FindUserStructToStringOverride(
+                    aggregate) is { } toStringOverride)
+                return EmitCallToMethod(
+                    RequireRegisteredCallable(
+                        toStringOverride),
+                    new List<CLeaf>
+                    {
+                        AggregateAbi.DeepClone(
+                            _builder, value, aggregate,
+                            _state.Aggregates.GetLayout)
+                    });
             return EmitAggregateString(value, aggregate);
+        }
         if (shape.Bundle
                 == RuntimeBundleKind.ReferenceAggregate
             && type is INamedTypeSymbol referenceAggregate)
@@ -3008,13 +3021,213 @@ internal sealed class LoweringServices
         return SlotRef(result);
     }
 
-    internal CLeaf EmitAnonymousEquals(
+    internal CLeaf EmitTupleOperatorEquality(
+        CLeaf left, CLeaf right,
+        INamedTypeSymbol tupleType)
+    {
+        if (tupleType == null || !tupleType.IsTupleType)
+            throw new ArgumentException(
+                "Tuple operator equality requires a tuple type.",
+                nameof(tupleType));
+        var leftSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        var rightSlot =
+            _builder.AllocScratch(StorageTypes.ObjectArray);
+        EmitAssign(leftSlot, left);
+        EmitAssign(rightSlot, right);
+        var layout = _state.Aggregates.GetLayout(tupleType);
+        CLeaf result = Const(true, StorageTypes.Boolean);
+        foreach (var field in layout.Fields)
+        {
+            var leftValue = AggregateAbi.ReadSlot(
+                _builder, SlotRef(leftSlot), field.Index,
+                StorageTypes.Object);
+            var rightValue = AggregateAbi.ReadSlot(
+                _builder, SlotRef(rightSlot), field.Index,
+                StorageTypes.Object);
+            var equal = EmitTupleElementOperatorEquality(
+                leftValue, rightValue,
+                ResolveType(field.Type));
+            result = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf> { result, equal },
+                StorageTypes.Boolean);
+        }
+        return result;
+    }
+
+    CLeaf EmitTupleElementOperatorEquality(
+        CLeaf left, CLeaf right,
+        ITypeSymbol elementType)
+    {
+        elementType = ResolveType(elementType);
+        if (EmitPolicy.IsNullableT(
+                elementType, out var underlying))
+        {
+            var result =
+                _builder.AllocScratch(StorageTypes.Boolean);
+            var leftPresent =
+                NullableAbi.HasValue(_builder, left);
+            var rightPresent =
+                NullableAbi.HasValue(_builder, right);
+            var bothPresent = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf>
+                    { leftPresent, rightPresent },
+                StorageTypes.Boolean);
+            var eitherPresent = ExternCall(
+                UdonAbi.BooleanLogicalOr,
+                new List<CLeaf>
+                    { leftPresent, rightPresent },
+                StorageTypes.Boolean);
+            EmitAssign(
+                result,
+                ExternCall(
+                    UdonAbi.BooleanNot,
+                    new List<CLeaf> { eitherPresent },
+                    StorageTypes.Boolean));
+            _builder.EmitIf(
+                bothPresent,
+                _ => EmitAssign(
+                    result,
+                    EmitTupleElementOperatorEquality(
+                        RetagSmallNullablePresent(
+                            left, underlying),
+                        RetagSmallNullablePresent(
+                            right, underlying),
+                        underlying)),
+                null);
+            return SlotRef(result);
+        }
+
+        if (elementType is INamedTypeSymbol named)
+        {
+            if (named.DelegateInvokeMethod != null)
+                throw new NotSupportedException(
+                    "Tuple equality containing a delegate is outside "
+                    + "USugar's callable-only delegate model.");
+            if (named.IsTupleType)
+                return EmitTupleOperatorEquality(
+                    left, right, named);
+            if (HasSourceEqualityOperator(named))
+                throw new NotSupportedException(
+                    $"Tuple equality for element type "
+                    + $"'{named.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "is not supported: its source-defined == operator "
+                    + "cannot be rebound from the tuple operation. "
+                    + "Compare those elements explicitly.");
+            var shape = SourceShape(named);
+            if (shape.Bundle
+                    == RuntimeBundleKind.ReferenceAggregate
+                || shape.Bundle == RuntimeBundleKind.Class)
+                return ExternCall(
+                    UdonAbi.ObjectEquality,
+                    new List<CLeaf> { left, right },
+                    StorageTypes.Boolean);
+            if (shape.Bundle == RuntimeBundleKind.Aggregate)
+                throw new NotSupportedException(
+                    $"Tuple equality for aggregate element "
+                    + $"'{named.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "requires a source-defined == operator. Compare "
+                    + "the elements explicitly.");
+        }
+
+        if (elementType is IArrayTypeSymbol
+            || elementType?.IsReferenceType == true
+               && elementType.SpecialType
+                   != SpecialType.System_String)
+        {
+            if (IsUnityObjectType(elementType))
+            {
+                var leftObject =
+                    _builder.AllocScratch(StorageTypes.UnityObject);
+                var rightObject =
+                    _builder.AllocScratch(StorageTypes.UnityObject);
+                EmitAssign(leftObject, left);
+                EmitAssign(rightObject, right);
+                return ExternCall(
+                    UdonAbiKey.Method(
+                        "UnityEngineObject", "op_Equality",
+                        new[]
+                            {
+                                "UnityEngineObject",
+                                "UnityEngineObject"
+                            },
+                        "SystemBoolean"),
+                    new List<CLeaf>
+                    {
+                        SlotRef(leftObject),
+                        SlotRef(rightObject)
+                    },
+                    StorageTypes.Boolean);
+            }
+            return ExternCall(
+                UdonAbi.ObjectEquality,
+                new List<CLeaf> { left, right },
+                StorageTypes.Boolean);
+        }
+
+        var comparisonType = elementType;
+        var comparisonName =
+            GetStorageTypeName(comparisonType);
+        if (comparisonType is INamedTypeSymbol
+            {
+                TypeKind: TypeKind.Enum
+            } enumType)
+        {
+            comparisonType = enumType.EnumUnderlyingType;
+            comparisonName =
+                GetStorageTypeName(comparisonType);
+            left = EmitEnumToUnderlying(left, enumType);
+            right = EmitEnumToUnderlying(right, enumType);
+        }
+        else if (ExternResolver.IsSmallIntOrChar(
+                     comparisonName))
+        {
+            left = EmitNarrowingConvert(
+                left, comparisonName, "SystemInt32");
+            right = EmitNarrowingConvert(
+                right, comparisonName, "SystemInt32");
+            comparisonName = "SystemInt32";
+        }
+        return ExternCall(
+            UdonAbiKey.Method(
+                comparisonName, "op_Equality",
+                new[] { comparisonName, comparisonName },
+                "SystemBoolean"),
+            new List<CLeaf> { left, right },
+            StorageTypes.Boolean);
+    }
+
+    static bool HasSourceEqualityOperator(
+        INamedTypeSymbol type)
+        => type.GetMembers("op_Equality")
+            .OfType<IMethodSymbol>()
+            .Any(method =>
+                method.DeclaringSyntaxReferences.Length != 0);
+
+    static bool IsUnityObjectType(ITypeSymbol type)
+    {
+        for (var current = type as INamedTypeSymbol;
+             current != null;
+             current = current.BaseType)
+            if (current.Name == "Object"
+                && current.ContainingNamespace
+                    ?.ToDisplayString() == "UnityEngine")
+                return true;
+        return false;
+    }
+
+    internal CLeaf EmitBundleObjectEquals(
         CLeaf receiver, CLeaf other,
         INamedTypeSymbol type)
     {
-        if (type == null || !type.IsAnonymousType)
+        var shape = SourceShape(type);
+        if (type == null
+            || shape.Bundle is not RuntimeBundleKind.Aggregate
+                and not RuntimeBundleKind.ReferenceAggregate)
             throw new ArgumentException(
-                "Anonymous equality requires an anonymous type.",
+                "Bundle object equality requires a value or reference aggregate.",
                 nameof(type));
 
         var receiverSlot =
@@ -3098,35 +3311,120 @@ internal sealed class LoweringServices
                 _builder, right, field.Index,
                 StorageTypes.Object);
             var fieldType = ResolveType(field.Type);
-            var fieldShape = SourceShape(fieldType);
-            CLeaf equal;
-            if (fieldType is INamedTypeSymbol nested
-                && fieldShape.Bundle is
-                    RuntimeBundleKind.Aggregate
-                    or RuntimeBundleKind.ReferenceAggregate)
-                equal = EmitBundleValueEquality(
-                    leftValue, rightValue, nested);
-            else if (fieldType
-                     is INamedTypeSymbol
-                         { DelegateInvokeMethod: not null })
-                throw new NotSupportedException(
-                    "Compiler-generated equality for an aggregate "
-                    + "containing a delegate is outside the callable-only "
-                    + "delegate model.");
-            else
-                equal = ExternCall(
-                    UdonAbi.ObjectEquals,
-                    new List<CLeaf>
-                    {
-                        leftValue, rightValue
-                    },
-                    StorageTypes.Boolean);
+            var equal = EmitGeneratedFieldEquality(
+                leftValue, rightValue, fieldType);
             result = ExternCall(
                 UdonAbi.BooleanLogicalAnd,
                 new List<CLeaf> { result, equal },
                 StorageTypes.Boolean);
         }
         return result;
+    }
+
+    CLeaf EmitGeneratedFieldEquality(
+        CLeaf left, CLeaf right,
+        ITypeSymbol fieldType)
+    {
+        fieldType = ResolveType(fieldType);
+        if (EmitPolicy.IsNullableT(
+                fieldType, out var underlying))
+        {
+            var result =
+                _builder.AllocScratch(StorageTypes.Boolean);
+            var leftPresent =
+                NullableAbi.HasValue(_builder, left);
+            var rightPresent =
+                NullableAbi.HasValue(_builder, right);
+            var bothPresent = ExternCall(
+                UdonAbi.BooleanLogicalAnd,
+                new List<CLeaf>
+                    { leftPresent, rightPresent },
+                StorageTypes.Boolean);
+            var eitherPresent = ExternCall(
+                UdonAbi.BooleanLogicalOr,
+                new List<CLeaf>
+                    { leftPresent, rightPresent },
+                StorageTypes.Boolean);
+            EmitAssign(
+                result,
+                ExternCall(
+                    UdonAbi.BooleanNot,
+                    new List<CLeaf> { eitherPresent },
+                    StorageTypes.Boolean));
+            _builder.EmitIf(
+                bothPresent,
+                _ => EmitAssign(
+                    result,
+                    EmitGeneratedFieldEquality(
+                        RetagSmallNullablePresent(
+                            left, underlying),
+                        RetagSmallNullablePresent(
+                            right, underlying),
+                        underlying)),
+                null);
+            return SlotRef(result);
+        }
+
+        if (fieldType is INamedTypeSymbol
+            { DelegateInvokeMethod: not null })
+            throw new NotSupportedException(
+                "Compiler-generated equality for an aggregate "
+                + "containing a delegate is outside the callable-only "
+                + "delegate model.");
+
+        if (fieldType is INamedTypeSymbol named)
+        {
+            RequireGeneratedEqualityCompatible(named);
+            var shape = SourceShape(named);
+            if (shape.Bundle is
+                RuntimeBundleKind.Aggregate
+                or RuntimeBundleKind.ReferenceAggregate)
+                return EmitBundleValueEquality(
+                    left, right, named);
+        }
+
+        return ExternCall(
+            UdonAbi.ObjectEquals,
+            new List<CLeaf> { left, right },
+            StorageTypes.Boolean);
+    }
+
+    static void RequireGeneratedEqualityCompatible(
+        INamedTypeSymbol type)
+    {
+        if (!HasSourceEqualitySemantics(type))
+            return;
+        throw new NotSupportedException(
+            "Compiler-generated equality for an aggregate containing "
+            + $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "is not supported because that type supplies custom "
+            + "Equals/IEquatable semantics. Call the desired equality "
+            + "member explicitly.");
+    }
+
+    static bool HasSourceEqualitySemantics(
+        INamedTypeSymbol type)
+    {
+        for (var current = type;
+             current != null;
+             current = current.BaseType)
+            if (current.GetMembers(nameof(object.Equals))
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    !method.IsStatic
+                    && method.Parameters.Length == 1
+                    && method.DeclaringSyntaxReferences.Length != 0))
+                return true;
+
+        if (type.DeclaringSyntaxReferences.Length == 0)
+            return false;
+        return type.AllInterfaces.Any(@interface =>
+            @interface.OriginalDefinition.Name
+                == "IEquatable"
+            && @interface.OriginalDefinition.Arity == 1
+            && @interface.OriginalDefinition
+                .ContainingNamespace?.ToDisplayString()
+                == "System");
     }
 
     internal CLeaf EmitBundleValueHash(
@@ -3147,62 +3445,9 @@ internal sealed class LoweringServices
             var fieldValue = AggregateAbi.ReadSlot(
                 _builder, value, field.Index,
                 StorageTypes.Object);
-            CLeaf fieldHash;
             var fieldType = ResolveType(field.Type);
-            var fieldShape = SourceShape(fieldType);
-            if (fieldType is INamedTypeSymbol nested
-                && fieldShape.Bundle
-                    == RuntimeBundleKind.Aggregate)
-            {
-                fieldHash = EmitBundleValueHash(
-                    fieldValue, nested);
-            }
-            else if (fieldType is INamedTypeSymbol
-                         nestedReference
-                     && fieldShape.Bundle
-                         == RuntimeBundleKind.ReferenceAggregate)
-            {
-                var nestedHash =
-                    _builder.AllocScratch(StorageTypes.Int32);
-                _builder.EmitIf(
-                    NullableAbi.IsNull(
-                        _builder, fieldValue),
-                    _ => EmitAssign(
-                        nestedHash,
-                        Const(0, StorageTypes.Int32)),
-                    _ => EmitAssign(
-                        nestedHash,
-                        EmitBundleValueHash(
-                            fieldValue,
-                            nestedReference)));
-                fieldHash = SlotRef(nestedHash);
-            }
-            else if (fieldShape.IsBundle)
-            {
-                // A constant contribution keeps the equality/hash contract
-                // for structural bundle fields without falling back to the
-                // object[] reference hash.
-                fieldHash = Const(0, StorageTypes.Int32);
-            }
-            else
-            {
-                var hashSlot =
-                    _builder.AllocScratch(StorageTypes.Int32);
-                _builder.EmitIf(
-                    NullableAbi.IsNull(
-                        _builder, fieldValue),
-                    _ => EmitAssign(
-                        hashSlot,
-                        Const(0, StorageTypes.Int32)),
-                    _ => EmitAssign(
-                        hashSlot,
-                        ExternCall(
-                            UdonAbi.ObjectGetHashCode,
-                            new List<CLeaf>
-                                { fieldValue },
-                            StorageTypes.Int32)));
-                fieldHash = SlotRef(hashSlot);
-            }
+            var fieldHash = EmitGeneratedFieldHash(
+                fieldValue, fieldType);
             hash = ExternCall(
                 UdonAbi.Int32Add,
                 new List<CLeaf>
@@ -3222,6 +3467,96 @@ internal sealed class LoweringServices
                 StorageTypes.Int32);
         }
         return hash;
+    }
+
+    CLeaf EmitGeneratedFieldHash(
+        CLeaf value, ITypeSymbol fieldType)
+    {
+        fieldType = ResolveType(fieldType);
+        if (EmitPolicy.IsNullableT(
+                fieldType, out var underlying))
+        {
+            var nullableHash =
+                _builder.AllocScratch(StorageTypes.Int32);
+            _builder.EmitIf(
+                NullableAbi.HasValue(_builder, value),
+                _ => EmitAssign(
+                    nullableHash,
+                    EmitGeneratedFieldHash(
+                        RetagSmallNullablePresent(
+                            value, underlying),
+                        underlying)),
+                _ => EmitAssign(
+                    nullableHash,
+                    Const(0, StorageTypes.Int32)));
+            return SlotRef(nullableHash);
+        }
+
+        if (fieldType is INamedTypeSymbol
+            { DelegateInvokeMethod: not null })
+            throw new NotSupportedException(
+                "Compiler-generated hashing for an aggregate "
+                + "containing a delegate is outside the callable-only "
+                + "delegate model.");
+
+        if (fieldType is INamedTypeSymbol named)
+        {
+            RequireGeneratedHashCompatible(named);
+            var shape = SourceShape(named);
+            if (shape.Bundle
+                == RuntimeBundleKind.Aggregate)
+                return EmitBundleValueHash(value, named);
+            if (shape.Bundle
+                == RuntimeBundleKind.ReferenceAggregate)
+            {
+                var nestedHash =
+                    _builder.AllocScratch(StorageTypes.Int32);
+                _builder.EmitIf(
+                    NullableAbi.IsNull(_builder, value),
+                    _ => EmitAssign(
+                        nestedHash,
+                        Const(0, StorageTypes.Int32)),
+                    _ => EmitAssign(
+                        nestedHash,
+                        EmitBundleValueHash(value, named)));
+                return SlotRef(nestedHash);
+            }
+        }
+
+        var hashSlot =
+            _builder.AllocScratch(StorageTypes.Int32);
+        _builder.EmitIf(
+            NullableAbi.IsNull(_builder, value),
+            _ => EmitAssign(
+                hashSlot,
+                Const(0, StorageTypes.Int32)),
+            _ => EmitAssign(
+                hashSlot,
+                ExternCall(
+                    UdonAbi.ObjectGetHashCode,
+                    new List<CLeaf> { value },
+                    StorageTypes.Int32)));
+        return SlotRef(hashSlot);
+    }
+
+    static void RequireGeneratedHashCompatible(
+        INamedTypeSymbol type)
+    {
+        for (var current = type;
+             current != null;
+             current = current.BaseType)
+            if (current.GetMembers(nameof(object.GetHashCode))
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    !method.IsStatic
+                    && method.Parameters.Length == 0
+                    && method.DeclaringSyntaxReferences.Length != 0))
+                throw new NotSupportedException(
+                    "Compiler-generated hashing for an aggregate "
+                    + $"containing '{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "is not supported because that type overrides "
+                    + "GetHashCode(). Call the desired hash member "
+                    + "explicitly.");
     }
 
     CLeaf EmitFieldString(CLeaf value, ITypeSymbol type)

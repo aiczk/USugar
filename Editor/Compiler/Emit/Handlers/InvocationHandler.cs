@@ -133,7 +133,7 @@ internal sealed class InvocationHandler
                 var argument =
                     _lowering.VisitExpression(
                         op.Arguments[0].Value);
-                return _lowering.EmitAnonymousEquals(
+                return _lowering.EmitBundleObjectEquals(
                     receiver, argument, anonymousType);
             }
             if (target.Name == nameof(object.GetHashCode)
@@ -147,6 +147,32 @@ internal sealed class InvocationHandler
                     _lowering.VisitExpression(op.Instance),
                     anonymousType,
                     nullIsError: true);
+        }
+
+        if (!target.IsStatic
+            && op.Instance != null
+            && target.DeclaringSyntaxReferences.Length == 0
+            && _lowering.ResolveType(op.Instance.Type)
+                is INamedTypeSymbol aggregateReceiver
+            && _lowering.IsAggregateValue(
+                aggregateReceiver))
+        {
+            if (target.Name == nameof(object.Equals)
+                && op.Arguments.Length == 1)
+            {
+                var receiver =
+                    _lowering.VisitExpression(op.Instance);
+                var argument =
+                    _lowering.VisitExpression(
+                        op.Arguments[0].Value);
+                return _lowering.EmitBundleObjectEquals(
+                    receiver, argument, aggregateReceiver);
+            }
+            if (target.Name == nameof(object.GetHashCode)
+                && op.Arguments.Length == 0)
+                return _lowering.EmitBundleValueHash(
+                    _lowering.VisitExpression(op.Instance),
+                    aggregateReceiver);
         }
 
         if (!target.IsStatic
@@ -230,20 +256,29 @@ internal sealed class InvocationHandler
         if (op.Instance != null && EmitPolicy.IsNullableT(target.ContainingType, out var nulUnder)
             && target.Name is "ToString" or "Equals" or "GetHashCode")
         {
-            // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
-            // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
-            // reject, mirroring the bare user-struct receiver's object-method polarity.
-            if (_lowering.ResolveType(nulUnder) is INamedTypeSymbol nulAgg && _lowering.IsAggregateValue(nulAgg))
-                throw new System.NotSupportedException(
-                    $"'{target.Name}' on a nullable of struct/tuple type "
-                    + $"'{nulUnder.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' is not supported: "
-                    + "the value boxes as its object[] bundle, so the object-method extern would use the array "
-                    + "reference, not the value. Test HasValue and use the unwrapped value's members instead.");
-
+            // An aggregate underlying boxes as its object[] bundle, so route
+            // each object member through the aggregate protocol instead of
+            // observing the carrier array's reference semantics.
+            var nulAgg =
+                _lowering.ResolveType(nulUnder)
+                    as INamedTypeSymbol;
+            var aggregateUnderlying =
+                nulAgg != null
+                && _lowering.IsAggregateValue(nulAgg);
             var nulBox = _lowering.VisitExpression(op.Instance);
             switch (target.Name)
             {
                 case "ToString":
+                    if (aggregateUnderlying)
+                        return NullableAbi.EmitGetValueOrDefault(
+                            _lowering.Builder, nulBox,
+                            StorageTypes.String,
+                            _lowering.Const(
+                                "", StorageTypes.String),
+                            present =>
+                                _lowering.EmitKnownBundleToString(
+                                    present, nulAgg,
+                                    nullIsError: true));
                     // A user enum prints its member NAME (B67) — route the present value through the same
                     // synthesized helper as the bare receiver (re-tagged: the helper's param is strict-typed).
                     if (_lowering.IsFoldedEnum(_lowering.ResolveType(nulUnder)))
@@ -255,11 +290,25 @@ internal sealed class InvocationHandler
                         present => _lowering.ExternCall(UdonAbiKey.Method("SystemObject", "ToString", "SystemString"),
                             new List<CLeaf> { present }, StorageTypes.String));
                 case "GetHashCode":
+                    if (aggregateUnderlying)
+                        return NullableAbi.EmitGetValueOrDefault(
+                            _lowering.Builder, nulBox,
+                            StorageTypes.Int32,
+                            _lowering.Const(
+                                0, StorageTypes.Int32),
+                            present =>
+                                _lowering.EmitBundleValueHash(
+                                    present, nulAgg));
                     return NullableAbi.EmitGetValueOrDefault(_lowering.Builder, nulBox, StorageTypes.Int32,
                         _lowering.Const(0, StorageTypes.Int32),
                         present => _lowering.ExternCall(UdonAbiKey.Method("SystemObject", "GetHashCode", "SystemInt32"),
                             new List<CLeaf> { present }, StorageTypes.Int32));
                 default: // Equals(object)
+                    if (aggregateUnderlying)
+                        return _lowering.EmitDynamicObjectEquals(
+                            nulBox,
+                            _lowering.VisitExpression(
+                                op.Arguments[0].Value));
                     return _lowering.ExternCall(UdonAbi.ObjectEquals,
                         new List<CLeaf> { nulBox, _lowering.VisitExpression(op.Arguments[0].Value) }, StorageTypes.Boolean);
             }

@@ -81,17 +81,16 @@ public class {cls} : UdonSharpBehaviour {{ public int seed; public int result; v
     [Theory]
     [InlineData("B60E", "a.Equals(b)")]
     [InlineData("B60H", "a.GetHashCode() == 0")]
-    public void B60_ConcreteStructInheritedMember_DesignedReject(string cls, string expr)
+    public void B60_ConcreteStructInheritedMember_UsesBundleSemantics(string cls, string expr)
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm($@"
+        var uasm = TestHelper.CompileToUasm($@"
 using System; using UdonSharp;
 public struct S60 {{ public int x; }}
 public class {cls} : UdonSharpBehaviour {{
   public int result;
   void Start(){{ S60 a = new S60{{x=1}}; S60 b = new S60{{x=1}}; result = ({expr}) ? 1 : 0; }}
-}}", cls));
-        Assert.Contains("user-defined struct", ex.Message);
-        Assert.DoesNotContain("SystemValueType", ex.Message);
+}}", cls);
+        Assert.DoesNotContain("SystemValueType", uasm);
     }
 
     // ── ConstTypeToken funnel (audit): every System.Type-constant bake (o is T / typeof(T) /

@@ -139,6 +139,45 @@ public class AtNested : UdonSharpBehaviour {
 }", "AtNested");
 
     [Fact]
+    public void Anon_CustomFieldEquality_IsRejectedInsteadOfIgnored()
+    {
+        var error = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"using System;
+using UdonSharp;
+public struct AtEqValue : IEquatable<AtEqValue> {
+  public int X;
+  public bool Equals(AtEqValue other) => true;
+}
+public class AtCustomEq : UdonSharpBehaviour {
+  void Start() {
+    var first = new { Value = new AtEqValue() };
+    var second = new { Value = new AtEqValue() };
+    first.Equals(second);
+  }
+}", "AtCustomEq"));
+
+        Assert.Contains("custom Equals/IEquatable", error.Message);
+    }
+
+    [Fact]
+    public void Anon_CustomFieldHash_IsRejectedInsteadOfIgnored()
+    {
+        var error = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"using UdonSharp;
+public class AtHashValue {
+  public override int GetHashCode() => 7;
+}
+public class AtCustomHash : UdonSharpBehaviour {
+  void Start() {
+    var value = new { Value = new AtHashValue() };
+    value.GetHashCode();
+  }
+}", "AtCustomHash"));
+
+        Assert.Contains("overrides GetHashCode", error.Message);
+    }
+
+    [Fact]
     public void Anon_GeneratedObservationOfDelegate_IsRejected()
     {
         var error = Assert.Throws<System.NotSupportedException>(

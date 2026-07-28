@@ -233,6 +233,9 @@ public sealed class ResolvedEdgeResolver
             yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
         foreach (var m in EmitPolicy.UsingDisposeMethods(op))
             yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
+        foreach (var method in StructToStringOverrides(op))
+            yield return new ResolvedTarget(
+                method, TargetRole.ReachStructMember);
 
         // ReachForeignStatic: a closed, non-generic foreign static reached by call / method-group / static
         // computed-property.
@@ -415,6 +418,8 @@ public sealed class ResolvedEdgeResolver
             case IInterpolationOperation interpPart:
                 foreach (var impl in ClassToStringImplDefs(interpPart.Expression))
                     yield return impl;
+                foreach (var impl in StructToStringOverrides(interpPart))
+                    yield return impl.OriginalDefinition;
                 break;
             // M4b: a string-concat operand holding a v1-class value dispatches the same slot — the
             // emission side unwraps the boxing conversion Concat(object,object) wraps operands in,
@@ -425,6 +430,17 @@ public sealed class ResolvedEdgeResolver
                     yield return impl;
                 foreach (var impl in ClassToStringImplDefs(UnwrapConversionOps(concat.RightOperand)))
                     yield return impl;
+                foreach (var impl in StructToStringOverrides(concat))
+                    yield return impl.OriginalDefinition;
+                break;
+            case ICompoundAssignmentOperation compoundConcat
+                when compoundConcat.OperatorKind
+                         == BinaryOperatorKind.Add
+                     && compoundConcat.Target.Type?.SpecialType
+                         == SpecialType.System_String:
+                foreach (var impl in StructToStringOverrides(
+                             compoundConcat))
+                    yield return impl.OriginalDefinition;
                 break;
             case IPropertyReferenceOperation pr:
                 foreach (var propertySite in CallableSites.FromOperation(pr))
@@ -644,6 +660,49 @@ public sealed class ResolvedEdgeResolver
     {
         while (op is IConversionOperation conv) op = conv.Operand;
         return op;
+    }
+
+    static IEnumerable<IMethodSymbol> StructToStringOverrides(
+        IOperation operation)
+    {
+        IEnumerable<IOperation> Values()
+        {
+            switch (operation)
+            {
+                case IInterpolationOperation interpolation:
+                    yield return interpolation.Expression;
+                    break;
+                case IBinaryOperation
+                    {
+                        OperatorKind: BinaryOperatorKind.Add
+                    } concat
+                    when concat.Type?.SpecialType
+                         == SpecialType.System_String:
+                    yield return concat.LeftOperand;
+                    yield return concat.RightOperand;
+                    break;
+                case ICompoundAssignmentOperation compound
+                    when compound.OperatorKind
+                             == BinaryOperatorKind.Add
+                         && compound.Target.Type?.SpecialType
+                             == SpecialType.System_String:
+                    yield return compound.Value;
+                    break;
+                case IConversionOperation conversion
+                    when conversion.Type?.SpecialType
+                             == SpecialType.System_Object:
+                    yield return conversion.Operand;
+                    break;
+            }
+        }
+
+        foreach (var value in Values())
+        {
+            var unwrapped = UnwrapConversionOps(value);
+            if (ClassAbi.FindUserStructToStringOverride(
+                    unwrapped?.Type) is { } method)
+                yield return method;
+        }
     }
 
     /// <summary>Named-callee matcher over <see cref="EnumerateInternalCallTargets"/> — feeds the

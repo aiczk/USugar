@@ -541,6 +541,25 @@ public static class ClassAbi
         return VirtualDispatch.SlotIntroducer(method).ContainingType?.SpecialType == SpecialType.System_Object;
     }
 
+    public static IMethodSymbol FindUserStructToStringOverride(
+        ITypeSymbol type)
+    {
+        if (type is not INamedTypeSymbol
+            {
+                TypeKind: TypeKind.Struct,
+                IsTupleType: false
+            } structType
+            || !TypeClassifier.IsAggregateValue(structType))
+            return null;
+        return structType.GetMembers(nameof(object.ToString))
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(method =>
+                !method.IsStatic
+                && method.Parameters.Length == 0
+                && method.DeclaringSyntaxReferences.Length != 0
+                && IsObjectToStringSlot(method));
+    }
+
     /// <summary>M4b: what CLR Object.ToString() prints for an instance of `t` — Type.ToString() format:
     /// namespace-qualified, nested types joined with '+', a generic type as backtick-arity plus the
     /// constructed arguments' own full names in brackets (args flattened outer-to-inner, the reflection

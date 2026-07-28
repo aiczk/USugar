@@ -239,9 +239,9 @@ public class W12HashStr : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void TypeParamReceiver_UserStructEquals_RejectsLoudly()
+    public void TypeParamReceiver_UserStructEquals_UsesValueSemantics()
     {
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
 public struct W12S { public int a; }
 public class W12EqS : UdonSharpBehaviour {
@@ -251,7 +251,9 @@ public class W12EqS : UdonSharpBehaviour {
         T dummy = v;
         return dummy.Equals(default(T)) ? 1 : 0;
     }
-}", "W12EqS"));
-        Assert.Contains("ValueType semantics", ex.Message);
+}", "W12EqS");
+        Assert.Contains(
+            "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+            uasm);
     }
 }

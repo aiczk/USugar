@@ -95,7 +95,7 @@ public class WjrIntOr : UdonSharpBehaviour {
     [Fact]
     public void StructInterpolation_UsesBundleStringification()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public struct WjrS1 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructInterp : UdonSharpBehaviour {
@@ -103,12 +103,15 @@ public class WjrStructInterp : UdonSharpBehaviour {
     void Start(){ WjrS1 t; t.v = seed; s = $""{t}""; }
 }", "WjrStructInterp");
         Assert.DoesNotContain("\"System.Object[]\"", uasm);
+        Assert.Contains(
+            consts,
+            constant => Equals(constant.Value, "s"));
     }
 
     [Fact]
     public void StructConcat_UsesBundleStringification()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public struct WjrS2 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructConcat : UdonSharpBehaviour {
@@ -116,12 +119,15 @@ public class WjrStructConcat : UdonSharpBehaviour {
     void Start(){ WjrS2 t; t.v = seed; s = ""x"" + t; }
 }", "WjrStructConcat");
         Assert.DoesNotContain("\"System.Object[]\"", uasm);
+        Assert.Contains(
+            consts,
+            constant => Equals(constant.Value, "s"));
     }
 
     [Fact]
     public void StructCompoundConcat_UsesBundleStringification()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public struct WjrS3 { public int v; public override string ToString(){ return ""s"" + v; } }
 public class WjrStructCompound : UdonSharpBehaviour {
@@ -129,6 +135,9 @@ public class WjrStructCompound : UdonSharpBehaviour {
     void Start(){ WjrS3 t; t.v = seed; s = ""x""; s += t; }
 }", "WjrStructCompound");
         Assert.DoesNotContain("\"System.Object[]\"", uasm);
+        Assert.Contains(
+            consts,
+            constant => Equals(constant.Value, "s"));
     }
 
     [Fact]

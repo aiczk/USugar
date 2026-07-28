@@ -754,18 +754,30 @@ public class CwNblEnumStr : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void NullableAggregate_ObjectMethod_LoudRejects()  // CW17 aggregate leg
+    public void NullableAggregate_ObjectMethods_UseBundleSemantics()  // CW17 aggregate leg
     {
-        // An aggregate underlying boxes as its object[] bundle: the SystemObject extern would print/
-        // hash/compare the ARRAY REFERENCE, not the value (C#: the struct's own semantics) — loud
-        // reject, mirroring the bare user-struct receiver's object-method polarity.
-        var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
+        // Nullable<T>'s null rules wrap the underlying aggregate's value
+        // ToString/Equals/GetHashCode semantics.
+        var (uasm, consts) = TestHelper.CompileWithConsts(@"
 using UdonSharp;
 public class CwNblAgg : UdonSharpBehaviour {
     public string s;
-    void Start() { (int, int)? t = (1, 2); s = t.ToString(); }
-}", "CwNblAgg"));
-        Assert.Contains("HasValue", ex.Message);
+    public bool equal;
+    public int hash;
+    void Start() {
+        (int, int)? t = (1, 2);
+        (int, int)? u = (1, 2);
+        s = t.ToString();
+        equal = t.Equals(u);
+        hash = t.GetHashCode();
+    }
+}", "CwNblAgg");
+        Assert.Contains(
+            consts,
+            constant => Equals(constant.Value, "("));
+        Assert.Contains(
+            "SystemObject.__GetHashCode__SystemInt32",
+            uasm);
     }
 
     [Fact]
