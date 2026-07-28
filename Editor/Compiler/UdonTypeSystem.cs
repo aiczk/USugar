@@ -209,15 +209,14 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> typeParameterMap,
         UdonTypeId sourceType, StorageType storage)
     {
-        if (type is IArrayTypeSymbol array)
+        if (type is IArrayTypeSymbol)
         {
-            var elementType = Resolve(array.ElementType, typeParameterMap);
             if (storage == StorageTypes.ComponentArray)
                 return UdonRepresentationKind.ComponentArray;
-            if (elementType is IArrayTypeSymbol
-                || elementType is INamedTypeSymbol
-                    { DelegateInvokeMethod: not null }
-                || TypeClassifier.IsObjectArrayEmulated(elementType))
+            if (TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                    type,
+                    new TypeClassifierContext(
+                        typeParameterMap)))
                 return UdonRepresentationKind.ObjectArrayBundle;
             return UdonRepresentationKind.NativeArray;
         }

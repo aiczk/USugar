@@ -201,7 +201,14 @@ public class WalkerCensusCarrier
         Assert.Equal(RuntimeBundleKind.None, classArray.Bundle);
         Assert.False(classArray.IsBundle);
         Assert.True(classArray.ContainsUserClassPayload);
-        Assert.True(classArray.Supports(TransportCapabilities.ExternCall));
+        Assert.False(classArray.Supports(TransportCapabilities.ExternCall));
         Assert.False(classArray.Supports(TransportCapabilities.TypedProgramChannel));
+
+        var delegateArray = TypeClassifier.ShapeOf(types["aDel"], ctx);
+        Assert.Equal(RuntimeBundleKind.None, delegateArray.Bundle);
+        Assert.False(delegateArray.IsBundle);
+        Assert.False(delegateArray.ContainsUserClassPayload);
+        Assert.False(delegateArray.Supports(TransportCapabilities.ExternCall));
+        Assert.True(delegateArray.Supports(TransportCapabilities.TypedProgramChannel));
     }
 }

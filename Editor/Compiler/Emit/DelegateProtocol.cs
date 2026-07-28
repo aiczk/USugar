@@ -268,19 +268,8 @@ internal static class DelegateAbi
     }
 
     public static CLeaf IsTaggedBundle(CoreBuilder builder, CLeaf bundle)
-    {
-        var kind = ReadSlot(builder, bundle, Type, "SystemString");
-        return builder.ExternCall(
-            UdonAbiKey.Method(
-                "SystemString", "StartsWith",
-                new[] { "SystemString" }, "SystemBoolean"),
-            new List<CLeaf>
-            {
-                kind,
-                builder.Const(KindTag, StorageTypes.String)
-            },
-            StorageTypes.Boolean);
-    }
+        => BundleProbe.IsTagged(
+            builder, bundle, KindTag, BundleSize);
 
     public static CLeaf HasTarget(CoreBuilder builder, CLeaf target)
         => builder.ExternCall(UdonAbiKey.Method("UnityEngineObject", "op_Inequality", new[] { "UnityEngineObject", "UnityEngineObject" }, "SystemBoolean"),

@@ -198,8 +198,12 @@ internal sealed class ExpressionHandler
         {
             _lowering.RejectProgramLocalCrossBehaviourFieldRead(fieldRef.Field);
             var instanceVal = _lowering.VisitExpression(fieldRef.Instance);
-            return _lowering.LoadProgramVariable(
-                instanceVal, fieldRef.Field.Name, _lowering.GetStorageType(fieldRef.Field.Type));
+            var value = _lowering.LoadProgramVariable(
+                instanceVal,
+                fieldRef.Field.Name,
+                _lowering.GetStorageType(fieldRef.Field.Type));
+            return _lowering.MaterializeCrossProgramValue(
+                value, fieldRef.Field.Type);
         }
         // other.field → extern getter (same pattern as VisitPropertyReference)
         {

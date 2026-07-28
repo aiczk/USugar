@@ -1469,5 +1469,239 @@ public class CwDeconXb : UdonSharpBehaviour {
     void Start() { var (n, sv) = other.Make(); result = n + sv.x; }
 }", "CwDeconXb");
         Assert.Matches(GetThenCloneCtor, uasm);
+        var transportRead = uasm.IndexOf(
+            "GetProgramVariable",
+            StringComparison.Ordinal);
+        Assert.True(transportRead >= 0);
+        Assert.True(
+            Regex.Matches(
+                uasm.Substring(transportRead),
+                @"SystemObjectArray\.__ctor__").Count >= 2,
+            "The transported tuple and its aggregate element must both be value-materialized.");
+    }
+
+    [Fact]
+    public void CrossBehaviourField_AggregateReceive_ClonesAfterGetProgramVariable()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwRecvFieldValue { public int x; }
+public class CwRecvFieldOwner : UdonSharpBehaviour {
+    public CwRecvFieldValue value;
+}
+public class CwRecvFieldCaller : UdonSharpBehaviour {
+    public CwRecvFieldOwner other;
+    public int result;
+    void Start() {
+        CwRecvFieldValue copy = other.value;
+        copy.x = 9;
+        result = copy.x;
+    }
+}", "CwRecvFieldCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void CrossBehaviourProperty_AggregateReceive_ClonesAfterGetProgramVariable()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwRecvPropertyValue { public int x; }
+public class CwRecvPropertyOwner : UdonSharpBehaviour {
+    CwRecvPropertyValue backing;
+    public CwRecvPropertyValue Value { get { return backing; } }
+}
+public class CwRecvPropertyCaller : UdonSharpBehaviour {
+    public CwRecvPropertyOwner other;
+    public int result;
+    void Start() {
+        CwRecvPropertyValue copy = other.Value;
+        copy.x = 9;
+        result = copy.x;
+    }
+}", "CwRecvPropertyCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void DelegateArray_CannotEnterGeneralExtern()
+    {
+        var ex = Assert.Throws<NotSupportedException>(
+            () => TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+using UnityEngine;
+public class CwDelegateArrayExtern : UdonSharpBehaviour {
+    public Action[] callbacks;
+    void Start() { Debug.Log(callbacks); }
+}", "CwDelegateArrayExtern"));
+
+        Assert.Contains("extern-call ABI", ex.Message);
+    }
+
+    [Fact]
+    public void CrossBehaviourMethod_AggregateReturn_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwMethodReturnValue { public int x; }
+public class CwMethodReturnOwner : UdonSharpBehaviour {
+    CwMethodReturnValue backing;
+    public CwMethodReturnValue Read() { return backing; }
+}
+public class CwMethodReturnCaller : UdonSharpBehaviour {
+    public CwMethodReturnOwner other;
+    public int result;
+    void Start() {
+        CwMethodReturnValue copy = other.Read();
+        copy.x = 11;
+        result = copy.x;
+    }
+}", "CwMethodReturnCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void InterfaceMethod_AggregateReturn_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwIfaceMethodValue { public int x; }
+public interface ICwIfaceMethodReturn {
+    CwIfaceMethodValue Read();
+}
+public class CwIfaceMethodOwner : UdonSharpBehaviour, ICwIfaceMethodReturn {
+    CwIfaceMethodValue backing;
+    public CwIfaceMethodValue Read() { return backing; }
+}
+public class CwIfaceMethodCaller : UdonSharpBehaviour {
+    public ICwIfaceMethodReturn other;
+    public int result;
+    void Start() {
+        CwIfaceMethodValue copy = other.Read();
+        copy.x = 12;
+        result = copy.x;
+    }
+}", "CwIfaceMethodCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void InterfaceProperty_AggregateReturn_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwIfacePropertyValue { public int x; }
+public interface ICwIfacePropertyReturn {
+    CwIfacePropertyValue Value { get; }
+}
+public class CwIfacePropertyOwner : UdonSharpBehaviour, ICwIfacePropertyReturn {
+    CwIfacePropertyValue backing;
+    public CwIfacePropertyValue Value { get { return backing; } }
+}
+public class CwIfacePropertyCaller : UdonSharpBehaviour {
+    public ICwIfacePropertyReturn other;
+    public int result;
+    void Start() {
+        CwIfacePropertyValue copy = other.Value;
+        copy.x = 13;
+        result = copy.x;
+    }
+}", "CwIfacePropertyCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void CrossBehaviourIndexer_AggregateReturn_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwIndexerReturnValue { public int x; }
+public class CwIndexerReturnOwner : UdonSharpBehaviour {
+    CwIndexerReturnValue backing;
+    public CwIndexerReturnValue this[int index] {
+        get { return backing; }
+    }
+}
+public class CwIndexerReturnCaller : UdonSharpBehaviour {
+    public CwIndexerReturnOwner other;
+    public int result;
+    void Start() {
+        CwIndexerReturnValue copy = other[0];
+        copy.x = 14;
+        result = copy.x;
+    }
+}", "CwIndexerReturnCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void DelegateInvoke_AggregateReturn_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public struct CwDelegateReturnValue { public int x; }
+public class CwDelegateReturnCaller : UdonSharpBehaviour {
+    public Func<CwDelegateReturnValue> callback;
+    public int result;
+    void Start() {
+        CwDelegateReturnValue copy = callback();
+        copy.x = 15;
+        result = copy.x;
+    }
+}", "CwDelegateReturnCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    [Fact]
+    public void DelegateInvoke_AggregateRefCopyBack_Materializes()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct CwDelegateRefValue { public int x; }
+public delegate void CwDelegateRef(ref CwDelegateRefValue value);
+public class CwDelegateRefCaller : UdonSharpBehaviour {
+    public CwDelegateRef callback;
+    public int result;
+    void Start() {
+        CwDelegateRefValue value = default;
+        callback(ref value);
+        result = value.x;
+    }
+}", "CwDelegateRefCaller");
+
+        AssertTransportReadFollowedByClone(uasm);
+    }
+
+    static void AssertTransportReadFollowedByClone(string uasm)
+    {
+        var read = uasm.IndexOf(
+            "GetProgramVariable",
+            StringComparison.Ordinal);
+        Assert.True(
+            read >= 0,
+            "Expected a cross-program GetProgramVariable read.");
+        var clone = uasm.IndexOf(
+            "SystemObjectArray.__ctor__",
+            read,
+            StringComparison.Ordinal);
+        var nullGuard = uasm.IndexOf(
+            "SystemObject.__op_Inequality__",
+            read,
+            StringComparison.Ordinal);
+        Assert.True(
+            nullGuard > read && nullGuard < clone,
+            "Aggregate transport materialization must guard a missing/null foreign value.");
+        Assert.True(
+            clone > read,
+            "Aggregate transport reads must materialize a fresh value bundle.");
     }
 }

@@ -393,13 +393,15 @@ internal sealed class DeconstructionAssignmentHandler
         {
             // Single SystemObjectArray return: execute the same typed transport used by ordinary
             // cross calls, then index into the returned aggregate.
-            var arrVal = _lowering.CrossCall(
+            var transported = _lowering.CrossCall(
                 instanceVal,
                 exportName,
                 _lowering.CrossCallArguments(invocation.Arguments, callTarget, paramIds),
                 callReturns,
                 new StorageType(AggregateAbi.ArrayType),
                 _lowering.TryMarkReentrantCrossDispatch(invocation, callTarget));
+            var arrVal = _lowering.MaterializeCrossProgramValue(
+                transported, callTarget.ReturnType);
             var returnLayout =
                 _lowering.State.Aggregates.GetLayout(
                     (INamedTypeSymbol)_lowering.ResolveType(

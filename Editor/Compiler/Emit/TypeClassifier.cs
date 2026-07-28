@@ -82,6 +82,8 @@ public static class TypeClassifier
                         ? RuntimeBundleKind.Aggregate
                         : RuntimeBundleKind.None;
         var containsUserClass = (contents & TypeContents.UserClass) != 0;
+        var compilerOwnedArrayCarrier =
+            UsesCompilerOwnedArrayCarrier(type, ctx);
         var transport = bundle switch
         {
             RuntimeBundleKind.Class
@@ -91,11 +93,47 @@ public static class TypeClassifier
                 => containsUserClass
                     ? TransportCapabilities.None
                     : TransportCapabilities.TypedProgramChannel,
+            _ when compilerOwnedArrayCarrier
+                => containsUserClass
+                    ? TransportCapabilities.None
+                    : TransportCapabilities.TypedProgramChannel,
             _ => containsUserClass
                 ? TransportCapabilities.ExternCall
                 : TransportCapabilities.TypedProgramChannel | TransportCapabilities.ExternCall,
         };
         return new RuntimeShape(bundle, transport, contents);
+    }
+
+    internal static bool UsesCompilerOwnedArrayCarrier(
+        ITypeSymbol type,
+        TypeClassifierContext ctx)
+    {
+        type = Resolve(type, ctx);
+        if (type is not IArrayTypeSymbol array)
+            return false;
+        var element = Resolve(array.ElementType, ctx);
+        if (element is IArrayTypeSymbol
+            || element is INamedTypeSymbol
+                { DelegateInvokeMethod: not null }
+            || IsUserClassLeaf(element)
+            || IsAggregateValueLeaf(element))
+            return true;
+        return element is INamedTypeSymbol nullable
+               && nullable.OriginalDefinition.SpecialType
+                   == SpecialType.System_Nullable_T
+               && UsesCompilerOwnedNullablePayload(
+                   nullable.TypeArguments[0], ctx);
+    }
+
+    static bool UsesCompilerOwnedNullablePayload(
+        ITypeSymbol type,
+        TypeClassifierContext ctx)
+    {
+        type = Resolve(type, ctx);
+        return IsUserClassLeaf(type)
+               || IsAggregateValueLeaf(type)
+               || type is INamedTypeSymbol
+                   { DelegateInvokeMethod: not null };
     }
 
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)

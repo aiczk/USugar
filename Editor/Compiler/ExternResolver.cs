@@ -122,15 +122,9 @@ public static class ExternResolver
                 && typeParamMap.TryGetValue(etp, out var resolvedElem))
                 elementType = resolvedElem;
 
-            if (elementType is IArrayTypeSymbol)
-                return "SystemObjectArray";
-            // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as
-            // aggregate arrays (element extern type SystemObject). MUST be an explicit case here — the
-            // element recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
-            if (elementType is INamedTypeSymbol elemDlg && elemDlg.DelegateInvokeMethod != null)
-                return "SystemObjectArray";
-            // struct[] / tuple[] / class[] → object[] of boxed object[] elements (no SystemObjectArrayArray).
-            if (TypeClassifier.IsObjectArrayEmulated(elementType))
+            if (TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                    arrayType,
+                    new TypeClassifierContext(typeParamMap)))
                 return "SystemObjectArray";
             var elemTypeName = LowerUdonStorageName(
                 elementType, typeParamMap, isRegisteredUdonType);
@@ -201,17 +195,9 @@ public static class ExternResolver
         // Array types
         if (type is IArrayTypeSymbol arrayType)
         {
-            if (arrayType.ElementType is IArrayTypeSymbol)
-                return "SystemObjectArray";
-            // Delegate-element array (Func<T>[], …) → object[] of boxed bundle references, same shape as
-            // aggregate arrays (element extern type SystemObject). MUST be an explicit case — the element
-            // recursion would otherwise produce a bogus SystemObjectArrayArray (design §1.2).
-            if (arrayType.ElementType is INamedTypeSymbol arrElemDlg && arrElemDlg.DelegateInvokeMethod != null)
-                return "SystemObjectArray";
-            // struct[] / tuple[] / class[] → object[] whose elements are the boxed per-element object[]. Udon
-            // has no SystemObjectArrayArray (object[][]) externs, so a nested-array element type cannot be
-            // used; a plain object[] holds the object[] elements as boxed objects.
-            if (TypeClassifier.IsObjectArrayEmulated(arrayType.ElementType))
+            if (TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                    arrayType,
+                    new TypeClassifierContext(null)))
                 return "SystemObjectArray";
             // All types that resolve to IUdonEventReceiver use ComponentArray at runtime:
             // UdonSharpBehaviour[], derived[], UdonBehaviour[], user-interface[]

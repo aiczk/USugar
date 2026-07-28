@@ -172,8 +172,10 @@ internal sealed class DelegateInvocationLowerer
                     if (argument == null) continue;
                     var type = _lowering.GetStorageType(
                         invoke.Parameters[ordinal].Type);
-                    var value = _lowering.LoadField(
+                    CLeaf value = _lowering.LoadField(
                         convArgs[ordinal], type);
+                    value = _lowering.MaterializeCrossProgramValue(
+                        value, invoke.Parameters[ordinal].Type);
                     _owner.Externs.StoreRefOutArgument(
                         argument, value, refStores[ordinal]);
                 }
@@ -185,9 +187,13 @@ internal sealed class DelegateInvocationLowerer
         // stay unflagged so bundle-driven deep tail recursion never spills (§4.4).
         bool reentrant = _lowering.MarkReentrantDispatch(op);
 
-        return new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
+        var value = new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, _lowering.TypeParamMap,
             argExprs, isConditional, reentrant, DescribeDelegateReceiver(op.Instance),
             copyBack);
+        return invoke.ReturnsVoid
+            ? value
+            : _lowering.MaterializeCrossProgramValue(
+                value, invoke.ReturnType);
     }
 
     /// <summary>
@@ -218,8 +224,12 @@ internal sealed class DelegateInvocationLowerer
         StorageType? retType = invoke.ReturnsVoid
             ? null
             : _lowering.State.ResolveStorageType(invoke.ReturnType, typeParamMap);
-        return new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
+        var value = new DelegateDispatchEmitter(_lowering.State).Emit(bundle, invoke, convArgs, convRet, convEnv, retType, typeParamMap,
             argExprsByOrdinal, isConditional: false, reentrant: true, receiverDescription: "multicast fan-out");
+        return invoke.ReturnsVoid
+            ? value
+            : _lowering.MaterializeCrossProgramValue(
+                value, invoke.ReturnType, typeParamMap);
     }
 
     /// <summary>Multicast design §1.4: exposes the existing element-equality leg (target+method+env,

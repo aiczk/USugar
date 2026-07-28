@@ -22,7 +22,9 @@ internal sealed class ExternInvocationLowerer
         // Supported aggregate-array copy operations were consumed by the
         // intrinsic registry; reject every remaining alias-producing member.
         RejectUnsafeAggregateArrayExtern(op, target);
-        if (!target.IsStatic && op.Instance?.Type != null)
+        if (!target.IsStatic && op.Instance?.Type != null
+            && !IsRepresentationSafeCompilerArrayReceiver(
+                op.Instance.Type, target))
             _lowering.State.Boundary.RequireCanPassExternArgument(
                 op.Instance, op.Instance.Type,
                 $"receiver of {target.Name}", deferAggregateReceiverPolicy: true);
@@ -200,6 +202,37 @@ internal sealed class ExternInvocationLowerer
     }
 
     // ── CW26: rank-1 aggregate-element array Clone/CopyTo/Array.Copy (value-semantics lowering) ──
+
+    /// <summary>
+    /// Compiler-owned arrays have no blanket extern transport capability. A small System.Array
+    /// receiver surface is nevertheless representation-preserving: shape queries inspect only the
+    /// carrier, while Clone on reference-semantic elements copies exactly the references C# copies.
+    /// Keeping this exception at the selected operation prevents the array's object[] carrier from
+    /// becoming admissible to unrelated externs such as Debug.Log.
+    /// </summary>
+    bool IsRepresentationSafeCompilerArrayReceiver(
+        ITypeSymbol receiverType,
+        IMethodSymbol target)
+    {
+        if (!TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                receiverType,
+                new TypeClassifierContext(
+                    _lowering.State.TypeParamMap))
+            || target.ContainingType?.SpecialType
+                != SpecialType.System_Array)
+            return false;
+
+        if (target.Name is "GetLength"
+            or "GetLongLength"
+            or "GetLowerBound"
+            or "GetUpperBound")
+            return true;
+
+        // Aggregate Clone was already consumed by the deep-copy intrinsic above.
+        return target.Name == "Clone"
+               && target.Parameters.Length == 0
+               && AggregateArrayElement(receiverType) == null;
+    }
 
     /// <summary>Rank-1 array whose element is a value-semantic aggregate (user struct / tuple), else null.
     /// Class/scalar elements return null so their shallow externs stay untouched
@@ -977,8 +1010,12 @@ internal sealed class ExternInvocationLowerer
         // and stays collision-free across overloads / multiple interfaces / explicit impls).
         var dispatchName = LayoutPlanBuilder.InterfaceDispatchName(target, ifaceMl);
         var returnType = target.ReturnsVoid ? "SystemVoid" : _lowering.GetStorageTypeName(target.ReturnType);
-        return _lowering.CrossCall(instanceVal, dispatchName, paramPairs,
+        var value = _lowering.CrossCall(instanceVal, dispatchName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : ifaceReturns, new StorageType(returnType), ifaceReentrant);
+        return target.ReturnsVoid
+            ? value
+            : _lowering.MaterializeCrossProgramValue(
+                value, target.ReturnType);
     }
 
     // ── Cross-Class Call ──
@@ -1004,8 +1041,12 @@ internal sealed class ExternInvocationLowerer
             return _lowering.CrossCall(instanceVal, exportName, paramPairs, callReturns, StorageTypes.Void, crossReentrant);
 
         var returnType = target.ReturnsVoid ? "SystemVoid" : _lowering.GetStorageTypeName(target.ReturnType);
-        return _lowering.CrossCall(instanceVal, exportName, paramPairs,
+        var value = _lowering.CrossCall(instanceVal, exportName, paramPairs,
             target.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : callReturns, new StorageType(returnType), crossReentrant);
+        return target.ReturnsVoid
+            ? value
+            : _lowering.MaterializeCrossProgramValue(
+                value, target.ReturnType);
     }
 
     // ── User Method Call ──

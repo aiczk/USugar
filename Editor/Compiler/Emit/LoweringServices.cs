@@ -298,9 +298,8 @@ internal sealed class LoweringServices
             // typeobj, so the compare is false for them). An `object`-typed value holding a scalar or a
             // typed array (int[]) is NOT an object[] → the read would fault, so the read and the whole
             // ReferenceEquals chain live INSIDE the guard. IsInstanceOfType(null,·) is false → null too.
-            var isBundle = ExternCall(UdonAbiKey.Method("SystemType", "IsInstanceOfType", new[] { "SystemObject" }, "SystemBoolean"),
-                new List<CLeaf> { ConstTypeToken(_compilation.CreateArrayTypeSymbol(
-                    _compilation.GetSpecialType(SpecialType.System_Object))), valueVal }, StorageTypes.Boolean);
+            var isBundle = BundleProbe.IsTagged(
+                _builder, valueVal, BundleAbi.Prefix);
             var guarded = _state.Builder.AllocScratch(StorageTypes.Boolean);
             EmitAssign(guarded, Const(false, StorageTypes.Boolean));
             _builder.EmitIf(isBundle, _ =>
@@ -3138,88 +3137,8 @@ internal sealed class LoweringServices
     }
 
     CLeaf EmitIsCompilerBundle(CLeaf value)
-    {
-        var result =
-            _builder.AllocScratch(StorageTypes.Boolean);
-        EmitAssign(
-            result,
-            Const(false, StorageTypes.Boolean));
-        var objectArray =
-            _compilation.CreateArrayTypeSymbol(
-                _compilation.GetSpecialType(
-                    SpecialType.System_Object));
-        var stringType =
-            _compilation.GetSpecialType(
-                SpecialType.System_String);
-        var isArray = ExternCall(
-            UdonAbiKey.Method(
-                "SystemType", "IsInstanceOfType",
-                new[] { "SystemObject" },
-                "SystemBoolean"),
-            new List<CLeaf>
-            {
-                ConstTypeToken(objectArray), value
-            },
-            StorageTypes.Boolean);
-        _builder.EmitIf(isArray, _ =>
-        {
-            var length = ExternCall(
-                UdonAbi.ArrayLength(
-                    AggregateAbi.ArrayType),
-                new List<CLeaf> { value },
-                StorageTypes.Int32);
-            var hasHeader = ExternCall(
-                UdonAbi.Int32LessThan,
-                new List<CLeaf>
-                {
-                    Const(0, StorageTypes.Int32),
-                    length
-                },
-                StorageTypes.Boolean);
-            _builder.EmitIf(hasHeader, __ =>
-            {
-                var header = AggregateAbi.ReadSlot(
-                    _builder, value, BundleAbi.Type,
-                    StorageTypes.Object);
-                var isString = ExternCall(
-                    UdonAbiKey.Method(
-                        "SystemType",
-                        "IsInstanceOfType",
-                        new[] { "SystemObject" },
-                        "SystemBoolean"),
-                    new List<CLeaf>
-                    {
-                        ConstTypeToken(stringType),
-                        header
-                    },
-                    StorageTypes.Boolean);
-                _builder.EmitIf(isString, ___ =>
-                {
-                    var typeId = AggregateAbi.ReadSlot(
-                        _builder, value,
-                        BundleAbi.Type,
-                        StorageTypes.String);
-                    EmitAssign(
-                        result,
-                        ExternCall(
-                            UdonAbiKey.Method(
-                                "SystemString",
-                                "StartsWith",
-                                new[] { "SystemString" },
-                                "SystemBoolean"),
-                            new List<CLeaf>
-                            {
-                                typeId,
-                                Const(
-                                    BundleAbi.Prefix,
-                                    StorageTypes.String)
-                            },
-                            StorageTypes.Boolean));
-                }, null);
-            }, null);
-        }, null);
-        return SlotRef(result);
-    }
+        => BundleProbe.IsTagged(
+            _builder, value, BundleAbi.Prefix);
 
     void EmitKnownBundleEquality(
         CLeaf left,
@@ -3346,19 +3265,8 @@ internal sealed class LoweringServices
     {
         var result = _builder.AllocScratch(StorageTypes.Object);
         EmitAssign(result, value);
-        var objectArray = _compilation.CreateArrayTypeSymbol(
-            _compilation.GetSpecialType(
-                SpecialType.System_Object));
-        var isBundle = ExternCall(
-            UdonAbiKey.Method(
-                "SystemType", "IsInstanceOfType",
-                new[] { "SystemObject" },
-                "SystemBoolean"),
-            new List<CLeaf>
-            {
-                ConstTypeToken(objectArray), value
-            },
-            StorageTypes.Boolean);
+        var isBundle = BundleProbe.IsTagged(
+            _builder, value, BundleAbi.Prefix);
         _builder.EmitIf(isBundle, _ =>
         {
             var typeId = AggregateAbi.ReadSlot(
@@ -3523,7 +3431,17 @@ internal sealed class LoweringServices
         var parameters = CrossCallParameters(accessor, paramIds, orderedArgs);
         var returns = accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : GetCalleeReturns(accessor);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
-        return CrossCall(instanceVal, exportName, parameters, returns, new StorageType(retType), reentrant);
+        var value = CrossCall(
+            instanceVal,
+            exportName,
+            parameters,
+            returns,
+            new StorageType(retType),
+            reentrant);
+        return accessor.ReturnsVoid
+            ? value
+            : MaterializeCrossProgramValue(
+                value, accessor.ReturnType);
     }
 
     /// <summary>[W6] gate shared by the read/write/compound indexer sites: a user-behaviour indexer
@@ -3617,15 +3535,77 @@ internal sealed class LoweringServices
     internal CLeaf EmitCrossBehaviourPropertyGet(IPropertyReferenceOperation op, CLeaf instanceVal,
         StorageType returnType)
     {
+        CLeaf value;
         if (IsNonPublicAutoCrossProperty(op.Property.GetMethod, op.Property))
-            return LoadProgramVariable(instanceVal, op.Property.Name, returnType);
-        var (getExportName, _, getRetId) = GetCalleeLayout(op.Property.GetMethod);
-        var getReturns = getRetId != null
-            ? new[] { new ReturnSlot(getRetId, returnType) }
-            : System.Array.Empty<ReturnSlot>();
-        return CrossCall(instanceVal, getExportName, System.Array.Empty<CrossCallParameter>(),
-            getReturns, returnType,
-            TryMarkReentrantCrossDispatch(op, op.Property.GetMethod));
+            value = LoadProgramVariable(
+                instanceVal, op.Property.Name, returnType);
+        else
+        {
+            var (getExportName, _, getRetId) =
+                GetCalleeLayout(op.Property.GetMethod);
+            var getReturns = getRetId != null
+                ? new[] { new ReturnSlot(getRetId, returnType) }
+                : System.Array.Empty<ReturnSlot>();
+            value = CrossCall(
+                instanceVal,
+                getExportName,
+                System.Array.Empty<CrossCallParameter>(),
+                getReturns,
+                returnType,
+                TryMarkReentrantCrossDispatch(
+                    op, op.Property.GetMethod));
+        }
+        return MaterializeCrossProgramValue(
+            value, op.Property.Type);
+    }
+
+    /// <summary>
+    /// The single source-semantic choke point for values received through GetProgramVariable /
+    /// SendCustomEvent transport. Aggregate source types are values in C#, despite using a shared
+    /// object[] carrier in Udon, so every receive mints independent storage. A missing/null foreign
+    /// return becomes the source type's default value instead of being dereferenced as a bundle.
+    /// Class, delegate, array, and scalar source types retain their reference/value carrier as-is.
+    /// </summary>
+    internal CLeaf MaterializeCrossProgramValue(
+        CLeaf value,
+        ITypeSymbol sourceType,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap = null)
+    {
+        if (_state.ResolveSourceType(
+                    sourceType,
+                    typeParameterMap)
+                is not INamedTypeSymbol aggregate
+            || !IsAggregateValue(aggregate))
+            return value;
+
+        var result = _builder.AllocScratch(
+            new StorageType(AggregateAbi.ArrayType));
+        var hasValue = ExternCall(
+            UdonAbi.ObjectInequality,
+            new List<CLeaf>
+            {
+                value,
+                Const(null, StorageTypes.Object)
+            },
+            StorageTypes.Boolean);
+        _builder.EmitIf(
+            hasValue,
+            _ => EmitAssign(
+                result,
+                AggregateAbi.DeepClone(
+                    _builder,
+                    value,
+                    aggregate,
+                    _state.Aggregates.GetLayout)),
+            _ => EmitAssign(
+                result,
+                AggregateAbi.MintDefault(
+                    _builder,
+                    _state.Aggregates.GetLayout(aggregate),
+                    _state.Aggregates.GetLayout,
+                    GetStorageTypeName)));
+        return SlotRef(result);
     }
 
     internal CLeaf EmitInterfaceAccessorCall(IMethodSymbol accessor, MethodLayout ml, CLeaf instanceVal,
@@ -3638,8 +3618,12 @@ internal sealed class LoweringServices
             return CrossCall(instanceVal, ml.ExportName, parameters, rets, StorageTypes.Void, reentrant);
         var dispatchName = LayoutPlanBuilder.InterfaceDispatchName(accessor, ml);
         var retType = accessor.ReturnsVoid ? "SystemVoid" : GetStorageTypeName(accessor.ReturnType);
-        return CrossCall(instanceVal, dispatchName, parameters,
+        var value = CrossCall(instanceVal, dispatchName, parameters,
             accessor.ReturnsVoid ? System.Array.Empty<ReturnSlot>() : rets, new StorageType(retType), reentrant);
+        return accessor.ReturnsVoid
+            ? value
+            : MaterializeCrossProgramValue(
+                value, accessor.ReturnType);
     }
 
     // ── Delegate value comparison (design §2.5; shared by OperatorHandler `==`/`!=` and the
