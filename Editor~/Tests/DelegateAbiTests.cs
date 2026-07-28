@@ -303,15 +303,12 @@ public class VarianceEmissionCount : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void WrapperEquality_ComparesTwoVariantConversions_Compiles()
+    public void WrapperEquality_IsRejectedByCallableOnlyModel()
     {
-        // D1' (design §4): comparing two SEPARATELY method-group-bound delegates, both variant-converted
-        // to the same wider type, structurally compiles (delegate compare extern emitted). The VALUE
-        // divergence from C# (D1' — env is compared by BUNDLE REFERENCE, so two separately-minted
-        // same-method bundles wrapped for comparison are unequal even though C#'s Method+Target equality
-        // says they should match) is VM-verified in Editor~/_local_harness/VarianceVmTests.cs
-        // (DiffCategory.Mismatch, documented deviation — same reasoning class as multicast's D1).
-        var uasm = TestHelper.CompileToUasm(@"
+        // Variant wrappers made the old partial equality visibly diverge
+        // from CLR Method+Target equality. Model A rejects the observation.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class D1WrapperEq : UdonSharpBehaviour {
@@ -324,9 +321,8 @@ public class D1WrapperEq : UdonSharpBehaviour {
         Func<object> w2 = d2;
         same = w1 == w2;
     }
-}", "D1WrapperEq");
-        Assert.Contains("__dlg_wrap_", uasm);
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+}", "D1WrapperEq"));
+        Assert.Contains("delegate-to-delegate equality", error.Message);
     }
     [Fact]
     public void CaptureFreeLambda_StoredIntoArrayElement_Compiles()

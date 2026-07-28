@@ -314,20 +314,27 @@ internal static class SourceSemanticProfile
                      ?? Enumerable.Empty<BoundMethodBody>())
         {
             RequireSupportedMethod(body.MethodDefinition);
-            RequireSupportedOperation(body.AnalysisRoot);
+            RequireSupportedOperation(
+                body.AnalysisRoot,
+                body.StableLocalInitializers);
         }
         foreach (var root in initializerRoots
                      ?? Enumerable.Empty<IOperation>())
-            RequireSupportedOperation(root);
+            RequireSupportedOperation(root, null);
     }
 
-    static void RequireSupportedOperation(IOperation root)
+    static void RequireSupportedOperation(
+        IOperation root,
+        IReadOnlyDictionary<ILocalSymbol, IOperation>
+            stableLocalInitializers)
     {
         if (root == null)
             return;
         foreach (var operation in root.DescendantsAndSelf())
         {
             RequireSupportedType(operation.Type);
+            RequireSupportedDelegateOperation(
+                operation, stableLocalInitializers);
             switch (operation)
             {
                 case IInvocationOperation invocation:
@@ -360,6 +367,125 @@ internal static class SourceSemanticProfile
             }
         }
     }
+
+    static void RequireSupportedDelegateOperation(
+        IOperation operation,
+        IReadOnlyDictionary<ILocalSymbol, IOperation>
+            stableLocalInitializers)
+    {
+        bool IsDelegateValue(IOperation value)
+            => value != null
+               && ValueClassifier.ClassifyStable(
+                       value,
+                       new TypeClassifierContext(null),
+                       captureScope: null,
+                       stableLocalInitializers)
+                   .Kind == ValueKind.Delegate;
+
+        bool ContainsDelegateProtocol(IOperation value)
+            => IsDelegateValue(value)
+               || value?.Type != null
+               && TypeClassifier.ShapeOf(
+                       value.Type,
+                       new TypeClassifierContext(null))
+                   .ContainsDelegate;
+
+        switch (operation)
+        {
+            case IBinaryOperation binary
+                when binary.OperatorKind
+                    is BinaryOperatorKind.Equals
+                    or BinaryOperatorKind.NotEquals
+                && !NullableAbi.IsNullLiteral(
+                    binary.LeftOperand)
+                && !NullableAbi.IsNullLiteral(
+                    binary.RightOperand)
+                && (IsDelegateValue(binary.LeftOperand)
+                    || IsDelegateValue(
+                        binary.RightOperand)):
+                throw UnsupportedDelegateObservation(
+                    "delegate-to-delegate equality");
+
+            case ITupleBinaryOperation tuple
+                when ContainsDelegateProtocol(
+                         tuple.LeftOperand)
+                     || ContainsDelegateProtocol(
+                         tuple.RightOperand):
+                throw UnsupportedDelegateObservation(
+                    "tuple equality containing a delegate");
+
+            case IInvocationOperation invocation
+                when invocation.Instance != null
+                && IsDelegateValue(invocation.Instance)
+                && invocation.TargetMethod.Name
+                    != "Invoke":
+                throw UnsupportedDelegateObservation(
+                    $"delegate member "
+                    + $"'{invocation.TargetMethod.Name}'");
+
+            case IInvocationOperation invocation
+                when invocation.TargetMethod.IsStatic
+                && invocation.TargetMethod.ContainingType
+                    .SpecialType
+                    == SpecialType.System_Object
+                && invocation.TargetMethod.Name
+                    is "Equals" or "ReferenceEquals"
+                && invocation.Arguments.Any(argument =>
+                    IsDelegateValue(argument.Value)):
+                throw UnsupportedDelegateObservation(
+                    $"object.{invocation.TargetMethod.Name} "
+                    + "on a delegate value");
+
+            case IPropertyReferenceOperation property
+                when property.Instance != null
+                && IsDelegateValue(property.Instance):
+                throw UnsupportedDelegateObservation(
+                    $"delegate property "
+                    + $"'{property.Property.Name}'");
+
+            case IConversionOperation conversion
+                when ContainsDelegateProtocol(
+                         conversion.Operand)
+                && (conversion.Type == null
+                    || !TypeClassifier.ShapeOf(
+                            conversion.Type,
+                            new TypeClassifierContext(null))
+                        .ContainsDelegate)
+                && !IsImmediateSameDelegateRoundTrip(
+                    conversion):
+                throw UnsupportedDelegateObservation(
+                    $"conversion from delegate "
+                    + $"'{conversion.Operand.Type}' to "
+                    + $"'{conversion.Type}' carries no statically "
+                    + "visible signature adapter");
+        }
+    }
+
+    static bool IsDelegateType(ITypeSymbol type)
+        => type is INamedTypeSymbol
+            { DelegateInvokeMethod: not null };
+
+    static bool IsImmediateSameDelegateRoundTrip(
+        IConversionOperation erasure)
+    {
+        if (erasure.Parent
+            is not IConversionOperation recovery
+            || !IsDelegateType(recovery.Type))
+            return false;
+        var source = erasure.Operand.Type;
+        return IsDelegateType(source)
+               && SymbolEqualityComparer.Default.Equals(
+                   source, recovery.Type);
+    }
+
+    static NotSupportedException
+        UnsupportedDelegateObservation(string operation)
+        => new(
+            $"{operation} is not supported by USugar's callable-only "
+            + "delegate model. Delegates may be created, copied, invoked, "
+            + "combined, removed, and compared with null, but their CLR "
+            + "object identity, invocation-list equality, reflection, "
+            + "hashing, and string representation are not exposed.");
 
     static void RequireSupportedMethod(IMethodSymbol method)
     {

@@ -9,10 +9,8 @@ namespace USugar.Tests;
 /// test; real-VM value pins live in the local harness wave corpus fcd_wave9_fixround4.json,
 /// 25/25 Match post-fix, 9 Mismatch + 9 loud crashes pre-fix):
 ///
-/// [X1] Delegate .Equals() method call emitted a nonexistent
-///      UnityEngineComponent.__Equals__SystemObject__SystemBoolean extern (loud crash on legal
-///      C#; ref eq1=1). Now routed through the same (target, method) value comparison as `==`
-///      (CompareDelegates, moved to LoweringServices — one knowledge source).
+/// [X1] Delegate .Equals() used to expose a partial CLR value model. The callable-only delegate
+///      profile now rejects it before extern resolution.
 /// [X2] Capturing LAMBDA as recursion-cycle member: a captured local read AFTER the reentrant
 ///      dispatch inside the lambda body saw the inner activation's re-seeded flat slot
 ///      (DiffFuzz ref=60 vs VM 50). The hoisted node's dispatch-site spill set then included its
@@ -42,10 +40,10 @@ public class Wave9Round4RegressionTests
     // ── [X1] delegate .Equals method ──
 
     [Fact]
-    public void DelegateEqualsMethod_CompilesAsValueEquality()
+    public void DelegateEqualsMethod_RejectsCallableOnlyModel()
     {
-        // Pre-fix: loud 'missing extern: UnityEngineComponent.__Equals__SystemObject__SystemBoolean'.
-        var uasm = TestHelper.CompileToUasm(@"
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W9V26Min : UdonSharpBehaviour {
@@ -56,10 +54,8 @@ public class W9V26Min : UdonSharpBehaviour {
         eq1 = a.Equals(b) ? 1 : 0;
     }
     public int M(int v) { return v + 1; }
-}", "W9V26Min");
-        Assert.DoesNotContain("__Equals__SystemObject__SystemBoolean", uasm);
-        // The == value-equality machinery: method-element compare via string equality.
-        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+}", "W9V26Min"));
+        Assert.Contains("callable-only", error.Message);
     }
 
     [Fact]
@@ -77,7 +73,7 @@ public class W9X1Bad : UdonSharpBehaviour {
     public int M(int v) { return v + 1; }
 }", "W9X1Bad"));
         Assert.NotNull(ex);
-        Assert.Contains("non-delegate argument", ex.Message);
+        Assert.Contains("callable-only", ex.Message);
     }
 
     // ── [X2]/[X3] capture-cell spill at hoisted cycle members' dispatch sites ──

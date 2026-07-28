@@ -657,14 +657,15 @@ public class CwMulti9 : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void DelegateEquality_UntaggedOperand_ReferenceEqualityFallback()  // CW10
+    public void DelegateEquality_UntaggedOperand_IsRejected()  // CW10
     {
         // CompareDelegates read slots 1/2/4 behind only null checks while its dispatch twin reads
         // them only inside IsTaggedBundle: `d == handler` on a foreign-written untagged object[]
         // faulted the VM (OOB __Get / string-equality cast) where invoking the same value LogErrors
         // and continues. Both operands now tag-check first; either untagged → plain reference
         // equality of the two bundle refs (C#-consistent for the identical laundered ref).
-        var (uasm, consts) = TestHelper.CompileWithConsts(@"
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileWithConsts(@"
 using UdonSharp;
 using System;
 public class CwDlgEq10 : UdonSharpBehaviour {
@@ -672,10 +673,8 @@ public class CwDlgEq10 : UdonSharpBehaviour {
     public bool eq;
     void M1() { }
     void Start() { a = M1; b = M1; eq = (a == b); }
-}", "CwDlgEq10");
-        var kindTag = consts.First(c => Equals(c.Value, DelegateAbi.KindTag)).Id;
-        // The equality's both-non-null leg compares both shared type headers.
-        Assert.Equal(2, Regex.Matches(uasm, $@"PUSH, {Regex.Escape(kindTag)}\b").Count);
+}", "CwDlgEq10"));
+        Assert.Contains("delegate-to-delegate equality", error.Message);
     }
 
     [Fact]
@@ -1460,7 +1459,7 @@ public class CwObjCarrier : UdonSharpBehaviour {
         other.cb = () => { b.o = null; };
     }
 }", "CwObjCarrier"));
-        Assert.Contains("cross-program field 'cb'", ex.Message);
+        Assert.Contains("callable-only", ex.Message);
     }
 
     [Fact]
@@ -1606,7 +1605,7 @@ public class CwDelegateArrayExtern : UdonSharpBehaviour {
     void Start() { Debug.Log(callbacks); }
 }", "CwDelegateArrayExtern"));
 
-        Assert.Contains("extern-call ABI", ex.Message);
+        Assert.Contains("callable-only", ex.Message);
     }
 
     [Fact]

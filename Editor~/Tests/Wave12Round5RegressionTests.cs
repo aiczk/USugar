@@ -167,11 +167,12 @@ public class W12R5NullCast : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void DelegateToObjectBoxing_Compiles()
+    public void DelegateToObjectBoxing_RejectsErasure()
     {
-        // The boxing DIRECTION (delegate → object) is untouched: the reject fires only on a
-        // NON-delegate operand cast TO a delegate, so storing a delegate into an object stays legal.
-        var uasm = TestHelper.CompileToUasm(@"
+        // Persisting a delegate in an object slot would make the CLR object
+        // observation surface reachable without a sound delegate protocol.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class W12R5Boxing : UdonSharpBehaviour {
@@ -182,8 +183,8 @@ public class W12R5Boxing : UdonSharpBehaviour {
         object o = d;
         result = o == null ? 0 : 1;
     }
-}", "W12R5Boxing");
-        Assert.Contains("__dlg", uasm);
+}", "W12R5Boxing"));
+        Assert.Contains("callable-only", error.Message);
     }
 
     [Fact]

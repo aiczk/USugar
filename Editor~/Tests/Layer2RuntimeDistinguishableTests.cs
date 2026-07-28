@@ -1,3 +1,4 @@
+using System;
 using Xunit;
 
 namespace USugar.Tests;
@@ -104,19 +105,18 @@ public class L2Dlg : UdonSharpBehaviour {
     // ── REJECT: folded targets are loud (accepted over-rejection) ──
 
     [Fact]
-    public void IsFuncDelegate_UsesBundleRuntimeIdentity()
+    public void IsFuncDelegate_RejectsObjectErasure()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class L2RFunc : UdonSharpBehaviour {
     public int seed; public int result;
     object boxed;
     void Start() { Func<int> f = () => seed; boxed = f; result = boxed is Func<int> ? 1 : 0; }
-}", "L2RFunc");
-        Assert.Contains(
-            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
-            uasm);
+}", "L2RFunc"));
+        Assert.Contains("callable-only", error.Message);
     }
 
     [Fact]

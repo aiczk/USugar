@@ -82,9 +82,10 @@ internal sealed class OperatorHandler
                 return DelegateAbi.CompareToNull(_lowering.Builder, _lowering.VisitExpression(op.RightOperand), isNotEquals);
 
             // d1 == d2 → element-wise (target, method) value equality with null legs (fcd07).
-            if (DelegateAbi.IsDelegateType(op.LeftOperand.Type) && DelegateAbi.IsDelegateType(op.RightOperand.Type))
-                return DelegateAbi.CompareDelegates(_lowering.Builder,
-                    _lowering.VisitExpression(op.LeftOperand), _lowering.VisitExpression(op.RightOperand), isNotEquals);
+            throw new System.NotSupportedException(
+                "Delegate-to-delegate equality is outside USugar's "
+                + "callable-only delegate model. Compare with null, or "
+                + "track explicit application-level identity.");
         }
 
         // wave-13 multishapes lens (2026-07-04): a PLAIN `d1 + d2` / `d1 - d2` on delegate-typed VALUES
@@ -921,10 +922,5 @@ internal sealed class OperatorHandler
                 StorageTypes.Boolean)
             : result;
     }
-
-    // ── Delegate comparison helpers (design §2.5) ──
-    // Delegate comparison helpers moved to DelegateAbi (wave-9
-    // round-4 [X1]: the .Equals METHOD spelling of delegate equality reuses the same value
-    // comparison from InvocationHandler — one knowledge source).
 
 }

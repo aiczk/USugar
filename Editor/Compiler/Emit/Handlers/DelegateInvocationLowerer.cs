@@ -3,7 +3,7 @@ using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
 
-/// <summary>Owns delegate equality and invocation protocol lowering.</summary>
+/// <summary>Owns delegate invocation protocol lowering.</summary>
 internal sealed class DelegateInvocationLowerer
 {
     readonly InvocationHandler _owner;
@@ -11,71 +11,6 @@ internal sealed class DelegateInvocationLowerer
 
     internal DelegateInvocationLowerer(InvocationHandler owner)
         => _owner = owner ?? throw new System.ArgumentNullException(nameof(owner));
-
-    /// <summary>Wave-9 round-4 [X1] + round-5 [X8]/[X12]: delegate value equality through .Equals.
-    /// Instance a.Equals(b) and static object.Equals(a, b) on delegate bundles are VALUE equality in
-    /// the CLR — route both through the same (target, method) element comparison as the `==` operator
-    /// (CompareDelegates, §2.5). A DIFFERENT delegate type compares false regardless of target/method
-    /// (GetType() inequality) — emit the evaluations (C# evaluates both operands) and the constant.
-    /// Mixed delegate/non-delegate operands stay loud (§8-3). [X12]: the static form previously fell
-    /// through to an object.Equals extern comparing the two bundle object[] REFERENCES — reference
-    /// inequality where the CLR sees value equality.</summary>
-    internal bool TryEmitDelegateEquals(IInvocationOperation op, out CLeaf result)
-    {
-        result = null;
-        var target = op.TargetMethod;
-        if (target.Name != "Equals") return false;
-
-        // Instance form: a.Equals(b) on a delegate-typed receiver (round-4 [X1]). Extern resolution
-        // mapped the System.Func receiver onto UnityEngineComponent and emitted a nonexistent
-        // __Equals__SystemObject__SystemBoolean extern (loud crash on legal C#).
-        if (op.Instance != null && !target.IsStatic
-            && op.Arguments.Length == 1 && DelegateAbi.IsDelegateType(op.Instance.Type))
-        {
-            var eqArg = LoweringServices.UnwrapConversions(op.Arguments[0].Value);
-            if (!DelegateAbi.IsDelegateType(eqArg.Type))
-                throw new System.NotSupportedException(
-                    "Delegate .Equals(...) with a non-delegate argument is not supported. "
-                    + "Compare two delegate values (or use ==).");
-            if (!SymbolEqualityComparer.Default.Equals(op.Instance.Type, eqArg.Type))
-            {
-                _lowering.VisitExpression(op.Instance);
-                _lowering.VisitExpression(eqArg);
-                result = _lowering.Const(false, StorageTypes.Boolean);
-                return true;
-            }
-            result = DelegateAbi.CompareDelegates(_lowering.Builder,
-                _lowering.VisitExpression(op.Instance), _lowering.VisitExpression(eqArg), isNotEquals: false);
-            return true;
-        }
-
-        // Static form: object.Equals(a, b) with delegate-typed operands (round-5 [X12]).
-        if (target.IsStatic && target.ContainingType.SpecialType == SpecialType.System_Object
-            && op.Arguments.Length == 2)
-        {
-            var lhs = LoweringServices.UnwrapConversions(op.Arguments[0].Value);
-            var rhs = LoweringServices.UnwrapConversions(op.Arguments[1].Value);
-            var lhsDlg = DelegateAbi.IsDelegateType(lhs.Type);
-            var rhsDlg = DelegateAbi.IsDelegateType(rhs.Type);
-            if (!lhsDlg && !rhsDlg) return false; // not a delegate comparison — existing extern path
-            if (lhsDlg != rhsDlg)
-                throw new System.NotSupportedException(
-                    "object.Equals(...) mixing a delegate and a non-delegate operand is not supported. "
-                    + "Compare two delegate values (or use ==).");
-            if (!SymbolEqualityComparer.Default.Equals(lhs.Type, rhs.Type))
-            {
-                _lowering.VisitExpression(lhs);
-                _lowering.VisitExpression(rhs);
-                result = _lowering.Const(false, StorageTypes.Boolean);
-                return true;
-            }
-            result = DelegateAbi.CompareDelegates(_lowering.Builder,
-                _lowering.VisitExpression(lhs), _lowering.VisitExpression(rhs), isNotEquals: false);
-            return true;
-        }
-
-        return false;
-    }
 
     // ── Delegate Invocation (design §2.6: single unified dispatch for ALL invoke shapes) ──
 

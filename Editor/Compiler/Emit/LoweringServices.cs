@@ -3017,9 +3017,10 @@ internal sealed class LoweringServices
             else if (fieldType
                      is INamedTypeSymbol
                          { DelegateInvokeMethod: not null })
-                equal = DelegateAbi.CompareDelegates(
-                    _builder, leftValue, rightValue,
-                    isNotEquals: false);
+                throw new NotSupportedException(
+                    "Compiler-generated equality for an aggregate "
+                    + "containing a delegate is outside the callable-only "
+                    + "delegate model.");
             else
                 equal = ExternCall(
                     UdonAbi.ObjectEquals,
@@ -3245,14 +3246,9 @@ internal sealed class LoweringServices
             var runtimeTypeId =
                 BundleAbi.RuntimeTypeId(resolved);
             if (shape.Bundle
-                    == RuntimeBundleKind.Delegate
-                && resolved is INamedTypeSymbol)
-                EmitCandidate(
-                    runtimeTypeId,
-                    () => DelegateAbi.CompareDelegates(
-                        _builder, left, right,
-                        isNotEquals: false));
-            else if (resolved
+                    == RuntimeBundleKind.Delegate)
+                continue;
+            if (resolved
                          is INamedTypeSymbol aggregate
                      && shape.Bundle
                          == RuntimeBundleKind.Aggregate)

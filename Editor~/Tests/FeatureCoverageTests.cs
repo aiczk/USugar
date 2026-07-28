@@ -1565,11 +1565,10 @@ public class NullSafeDlg : UdonSharpBehaviour {
     // ── Delegate comparison ──
 
     [Fact]
-    public void DelegateField_Comparison_ComparesTargetAndMethod()
+    public void DelegateField_Comparison_IsRejected()
     {
-        // Element-wise (target, method) value equality via __Get on bundle [0]/[1] — semantics
-        // unchanged from the 3-var ABI; addr is always excluded (design §2.5).
-        var uasm = TestHelper.CompileToUasm(@"
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgCmp : UdonSharpBehaviour {
@@ -1582,10 +1581,8 @@ public class DlgCmp : UdonSharpBehaviour {
     }
     void Foo() { }
     void Bar() { }
-}", "DlgCmp");
-        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
-        Assert.Contains("SystemString.__op_Equality__SystemString_SystemString__SystemBoolean", uasm);
+}", "DlgCmp"));
+        Assert.Contains("delegate-to-delegate equality", error.Message);
     }
 
     // ── Null invocation follows the stock carrier fault path ──

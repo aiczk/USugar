@@ -60,13 +60,6 @@ internal sealed class InvocationHandler
 
     CLeaf VisitInvocation(IInvocationOperation op)
     {
-        // Wave-9 round-5 [X8]: the delegate-Equals arms run BEFORE the erasing-channel argument
-        // guard — the operands are consumed HERE by the value comparison, never laundered through
-        // Equals' erasing System.Object parameter, but the guard saw that parameter first and
-        // loud-rejected a legal comparison whose argument was a delegate-typed PARAM.
-        if (_delegates.TryEmitDelegateEquals(op, out var dlgEqResult))
-            return dlgEqResult;
-
         // Resolve type parameters in generic method type arguments (e.g., Min<T> → Min<int>)
         var boundSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.Method);

@@ -125,19 +125,16 @@ public class DlgBothOps : UdonSharpBehaviour {
         Assert.Contains(".export __dlg_fanout_Void__Void", uasm);
     }
 
-    // ── D1 (§1.5/§4): whole-multicast `==` stays reference equality — it must NEVER reference the
-    //    multicast machinery (fan-out/combine/remove); it is the SAME CompareDelegates env-slot
-    //    reference-equality leg single-cast `==` already used before A-M1. ──
+    // ── Whole-multicast equality is outside the callable-only public model.
+    //    Element comparison remains private to removal. ──
 
     [Fact]
-    public void DelegateEquality_NeverReferencesMulticastMachinery()
+    public void DelegateEquality_IsRejectedBeforeMulticastLowering()
     {
-        // No `+=`/`-=` anywhere — if `==` needed any multicast synthesis, this file would contain it.
-        // It doesn't: CompareDelegates (§2.5, reused verbatim) only ever does SystemObjectArray.__Get +
-        // SystemObject.__op_Equality on Target/Method/Env — reference equality on the env slot, never a
-        // structural list walk. This is D1 (§1.5/§4): whole-multicast `==` deliberately stays reference
-        // equality, not upgraded to compare invocation lists.
-        var uasm = TestHelper.CompileToUasm(@"
+        // The old comparison inspected only part of the invocation-list
+        // contract. Reject before multicast helpers are synthesized.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using UdonSharp;
 using System;
 public class DlgEq : UdonSharpBehaviour {
@@ -145,11 +142,8 @@ public class DlgEq : UdonSharpBehaviour {
     public Action b;
     public bool eq;
     void Start() { eq = (a == b); }
-}", "DlgEq");
-        Assert.DoesNotContain("__dlg_combine_", uasm);
-        Assert.DoesNotContain("__dlg_remove_", uasm);
-        Assert.DoesNotContain("__dlg_fanout_", uasm);
-        Assert.Contains("SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean", uasm);
+}", "DlgEq"));
+        Assert.Contains("delegate-to-delegate equality", error.Message);
     }
 
     // ── Reject surface inherited from delegate creation policy (§3.4-1, §R9) ──

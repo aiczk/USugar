@@ -33,13 +33,13 @@ namespace USugar.Tests;
 /// [X7]  The aggregate local declaration reuse guard made the SECOND generic spec skip both
 ///       DeclareLocal and the object[] ctor — every spec-2 activation aliased spec-1's array
 ///       (ref r2=183 vs 126). The aggregate path now redeclares + reallocates like the scalar path.
-/// [X8]  delegate .Equals with a delegate-typed PARAM argument loud-rejected: the erasing-channel
-///       argument guard ran before the Equals arm. The delegate-Equals arms now run first.
+/// [X8]  Historical delegate .Equals routing. The callable-only delegate profile now rejects the
+///       object-value protocol uniformly, including delegate-typed parameter arguments.
 /// [X9]  `T cur = v; …; return cur;` in a generic delegate-param fold loud-rejected legal C# —
 ///       the [J5] param-copy taint is now a WEAK tier (sealed at stores/arguments, legal at
 ///       returns), propagated through the copy-edge fixpoint with strong-dominates promotion.
-/// [X12] Static object.Equals(f, g) on delegate bundles compared object[] REFERENCES (ref eq=1
-///       vs 0) — now routed through the same (target, method) value comparison as `==`.
+/// [X12] Historical static object.Equals routing. It now rejects with the same callable-only
+///       diagnostic instead of exposing incomplete delegate value equality.
 /// [X13] Deconstruction into ANY property/indexer lvalue rejected ("Unsupported l-value target:
 ///       PropertyReferenceOperation") — AssignToLValue now routes property targets through
 ///       EmitPropertySet.
@@ -305,12 +305,12 @@ public struct FrameC3 { public int v; }", "MinC3");
     // ── [X8] delegate .Equals with a delegate-typed param argument ──
 
     [Fact]
-    public void DelegateEquals_DelegateParamArgument_Compiles()
+    public void DelegateEquals_DelegateParamArgument_Rejects()
     {
-        // MinD1: pre-fix GuardCaptureEscapeArguments rejected the call before the Equals arm ran
-        // (Equals' System.Object parameter is erasing-typed). The operands are consumed by the
-        // value comparison, never laundered — legal.
-        var uasm = TestHelper.CompileToUasm(@"
+        // The receiver and argument are both typed delegates, but Model A
+        // intentionally exposes no CLR value-equality protocol.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class MinD1 : UdonSharpBehaviour {
@@ -320,14 +320,14 @@ public class MinD1 : UdonSharpBehaviour {
     int Check(Func<int, int> a, Func<int, int> b) { return a.Equals(b) ? 1 : 0; }
     public int AddK(int x) { return x + k; }
     public int Dbl(int x) { return x * 2; }
-}", "MinD1");
-        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+}", "MinD1"));
+        Assert.Contains("callable-only", error.Message);
     }
 
     [Fact]
     public void DelegateEquals_NonDelegateArgument_StaysLoud()
     {
-        // [X8] control: the round-4 loud surface is unchanged — only the guard ORDER moved.
+        // Non-delegate arguments receive the same public-surface diagnosis.
         var ex = Assert.Throws<NotSupportedException>(() => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
@@ -337,7 +337,7 @@ public class W9R5EqLoud : UdonSharpBehaviour {
     public int Inc(int x) { return x + 1; }
     void Start() { f = Inc; result = f.Equals(3) ? 1 : 0; }
 }", "W9R5EqLoud"));
-        Assert.Contains("non-delegate argument", ex.Message);
+        Assert.Contains("callable-only", ex.Message);
     }
 
     // ── [X9] weak param-copy taint tier ──
@@ -373,12 +373,12 @@ public class MinF1Fold : UdonSharpBehaviour {
     // ── [X12] static object.Equals on delegate bundles ──
 
     [Fact]
-    public void StaticObjectEquals_DelegateBundles_UsesValueEquality()
+    public void StaticObjectEquals_DelegateBundles_Rejects()
     {
-        // DB01: pre-fix this fell through to the SystemObject.__Equals extern, comparing the two
-        // bundle object[] REFERENCES (DiffFuzz ref eqSame=1 vs 0). Now it goes through the same
-        // (target, method) comparison as `==`.
-        var uasm = TestHelper.CompileToUasm(@"
+        // The former partial value comparison disagreed with CLR multicast and
+        // variance semantics. Model A exposes no object equality protocol.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class DB01Min : UdonSharpBehaviour {
@@ -392,9 +392,8 @@ public class DB01Min : UdonSharpBehaviour {
         g = Inc;
         eqSame = Equals(f, g) ? 1 : 0;
     }
-}", "DB01Min");
-        Assert.DoesNotContain("SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean", uasm);
-        Assert.Contains("SystemObjectArray.__Get__SystemInt32__SystemObject", uasm);
+}", "DB01Min"));
+        Assert.Contains("object.Equals", error.Message);
     }
 
     [Fact]
