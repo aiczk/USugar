@@ -1,0 +1,15 @@
+[nodes]
+NestedTupleDeconstruct.Make() @143..195
+NestedTupleDeconstruct.Start() @198..287
+[recursive-edges]
+[cycle-edges]
+[this-field-touches]
+NestedTupleDeconstruct.Make() @143..195 -> NestedTupleDeconstruct.p
+NestedTupleDeconstruct.Make() @143..195 -> NestedTupleDeconstruct.q
+NestedTupleDeconstruct.Make() @143..195 -> NestedTupleDeconstruct.r
+NestedTupleDeconstruct.Start() @198..287 -> NestedTupleDeconstruct.p
+NestedTupleDeconstruct.Start() @198..287 -> NestedTupleDeconstruct.q
+NestedTupleDeconstruct.Start() @198..287 -> NestedTupleDeconstruct.r
+NestedTupleDeconstruct.Start() @198..287 -> NestedTupleDeconstruct.result
+[reentrant-dispatch-sites]
+[tail-spared-direct-call-sites]

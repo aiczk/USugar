@@ -1123,9 +1123,12 @@ internal sealed class LoweringServices
     void AssignNestedTupleElements(ITupleOperation tuple, CLeaf arrValue,
         Dictionary<IOperation, LValuePlan> preparedStores = null)
     {
+        var layout = _state.Aggregates.GetLayout(
+            (INamedTypeSymbol)ResolveType(tuple.Type));
         for (int i = 0; i < tuple.Elements.Length; i++)
         {
-            var elemVal = AggregateAbi.ReadSlot(_builder, arrValue, i, StorageTypes.Object);
+            var elemVal = AggregateAbi.ReadSlot(
+                _builder, arrValue, layout.Fields[i].Index, StorageTypes.Object);
             var toAssign = AggregateAbi.CloneIfAggregate(_builder, elemVal,
                 ResolveType(tuple.Elements[i].Type),
                 _state.Aggregates.GetLayout, IsAggregateValue);

@@ -471,6 +471,18 @@ public class VirtualAccessorChain : UdonSharpBehaviour {
     result = viaRead + viaIdx + viaTag + viaThis + viaDevirt + c.Score;
   }
 }"),
+
+        ("nested_tuple_deconstruct", "NestedTupleDeconstruct",
+@"using UdonSharp;
+public class NestedTupleDeconstruct : UdonSharpBehaviour {
+  public int p; public int q; public int r;
+  public int result;
+  (int, (int, int)) Make() => (p + 1, (q - 2, r * 3));
+  void Start() {
+    var (a, (b, c)) = Make();
+    result = a * 1000000 + b * 1000 + c;
+  }
+}"),
     };
 
     public static (string Name, string ClassName, string Source) ByName(string name)
