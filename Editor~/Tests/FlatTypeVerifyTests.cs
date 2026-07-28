@@ -81,4 +81,24 @@ public class FlatTypeVerifyTests
 
         FlatVerify.Verify(module);
     }
+
+    [Fact]
+    public void ModuleVerifier_RejectsUnknownFunctionReference()
+    {
+        var module = new FlatModule();
+        var function = module.AddFunction("caller");
+        function.NewSlot(StorageTypes.UInt32, SlotClass.Scratch);
+        MakeFlat(function, Block(0,
+            new List<IFlatInstruction>
+            {
+                new CAssign(0, new CFuncRef("missing")),
+            },
+            new CRet()));
+
+        var ex = Assert.Throws<VerificationException>(
+            () => FlatVerify.Verify(module));
+
+        Assert.Contains("unknown function", ex.Message);
+        Assert.Contains("missing", ex.Message);
+    }
 }

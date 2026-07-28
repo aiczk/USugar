@@ -26,6 +26,45 @@ public class CoreFlatOptimizerTests
         new(new CExternCall(
             TestHelper.BindExtern(sig), args, new StorageType(retType), dest));
 
+    [Fact]
+    public void InsertRecursionSpills_MarksEveryProtectedSite()
+    {
+        var module = new FlatModule(
+            abiCatalog: TestHelper.RegistryFacts,
+            className: "RecursionPostcondition");
+        module.AddField(new FieldDecl(
+            RecurStack.StackId,
+            StorageTypes.ObjectArray,
+            StorageDomain.Generated));
+        module.AddField(new FieldDecl(
+            RecurStack.SpId,
+            StorageTypes.Int32,
+            StorageDomain.Generated));
+        var function = module.AddFunction("recursive");
+        function.AddRecursiveCallee("recursive");
+        var block = function.NewBlock();
+        block.Instructions.Add(new CExprStmt(new CInternalCall(
+            "recursive", new List<CLeaf>(), StorageTypes.Void)));
+        block.Terminator = new CRet();
+
+        CoreFlatOptimizer.InsertRecursionSpills(module);
+
+        Assert.True(function.RecursionSpillsProcessed);
+        Assert.Equal(1, function.ProtectedRecursionSiteCount);
+        Assert.Contains(
+            block.Instructions,
+            instruction => instruction is CExprStmt
+            {
+                Expr: CInternalCall
+                {
+                    FuncName: "recursive",
+                    FrameState: RecursionFrameState.Protected
+                }
+            });
+        FlatVerify.Verify(module);
+        FlatVerify.VerifySpillsInserted(module);
+    }
+
     // ========================================================================
     // Slot Coalescing
     // ========================================================================

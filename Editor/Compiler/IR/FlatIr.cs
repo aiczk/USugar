@@ -71,6 +71,8 @@ public sealed class FlatFunction
     int _nextBlockId;
     StorageType? _returnType;
     int _reentrantSiteCount;
+    bool _recursionSpillsProcessed;
+    int _protectedRecursionSiteCount;
     readonly HashSet<string> _recursiveCalleeNames =
         new(StringComparer.Ordinal);
 
@@ -110,6 +112,11 @@ public sealed class FlatFunction
         }
     }
 
+    public bool RecursionSpillsProcessed
+        => _recursionSpillsProcessed;
+    public int ProtectedRecursionSiteCount
+        => _protectedRecursionSiteCount;
+
     public FlatFunction(string name, string exportName = null)
     {
         Name = name ?? throw new ArgumentNullException(nameof(name));
@@ -138,6 +145,20 @@ public sealed class FlatFunction
         ThrowIfFrozen();
         _recursiveCalleeNames.Add(
             name ?? throw new ArgumentNullException(nameof(name)));
+    }
+
+    internal void MarkRecursionSpillsProcessed(
+        int protectedSiteCount)
+    {
+        ThrowIfFrozen();
+        if (_recursionSpillsProcessed)
+            throw new InvalidOperationException(
+                $"CFG function '{Name}' had recursion spills processed twice.");
+        if (protectedSiteCount < 0)
+            throw new ArgumentOutOfRangeException(
+                nameof(protectedSiteCount));
+        _protectedRecursionSiteCount = protectedSiteCount;
+        _recursionSpillsProcessed = true;
     }
 
     public FlatBlock Entry => Blocks.Count > 0 ? Blocks[0] : null;

@@ -205,9 +205,17 @@ internal static class CoreFlatOptimizer
     {
         // Spill work exists when the function has named recursive callees OR Reentrant-flagged
         // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
-        if ((func.RecursiveCalleeNames.Count == 0 && func.ReentrantSiteCount == 0) || func.Blocks.Count == 0) return;
+        if (func.RecursiveCalleeNames.Count == 0
+            && func.ReentrantSiteCount == 0)
+            return;
+        if (func.Blocks.Count == 0)
+        {
+            func.MarkRecursionSpillsProcessed(0);
+            return;
+        }
 
         var firstSpillSlot = func.Slots.Count; // [X4] every slot from here on is a fresh spill temp
+        var protectedSiteCount = 0;
 
         // PRECISE per-instruction live-out: the slots whose value AFTER an instruction is still read before
         // being overwritten. A single [firstDef,lastUse] interval is wrong here — CoalesceSlots reuses one
@@ -220,7 +228,8 @@ internal static class CoreFlatOptimizer
             var newStmts = new List<IFlatInstruction>(block.Instructions.Count + 8);
             foreach (var inst in block.Instructions)
             {
-                if (IsSpillSite(inst, func.RecursiveCalleeNames))
+                if (RequiresRecursionFrame(
+                    inst, func.RecursiveCalleeNames))
                 {
                     // Spill the slots live across the call (live-out) EXCEPT the call's own result slot — that
                     // is written by the call (not clobbered by the recursion), so it must not be saved/restored.
@@ -269,7 +278,8 @@ internal static class CoreFlatOptimizer
                             func, newStmts,
                             func.RecursionSpillFields, liveSlots, abi);
                     }
-                    newStmts.Add(inst);
+                    newStmts.Add(WithProtectedRecursionFrame(inst));
+                    protectedSiteCount++;
                     EmitReload(func, newStmts, func.RecursionSpillFields, liveSlots, abi);
                 }
                 else
@@ -287,6 +297,7 @@ internal static class CoreFlatOptimizer
         // byte-identical; FlatVerify still runs after this pass).
         if (func.Slots.Count - firstSpillSlot > SpillTempCoalesceThreshold)
             CoalesceSlotsFunc(func, firstSpillSlot);
+        func.MarkRecursionSpillsProcessed(protectedSiteCount);
     }
 
     /// <summary>Live-out of a block: the union of its successors' live-in, plus the terminator's own reads.
@@ -358,9 +369,23 @@ internal static class CoreFlatOptimizer
     // A spill site is a named recursive-edge internal call OR a Reentrant-flagged delegate-dispatch
     // arm (__indirect / SendCustomEvent — design §4.3): both can re-enter the containing function and
     // clobber its frame, so both get the same spill/reload wrap.
-    static bool IsSpillSite(
+    internal static bool RequiresRecursionFrame(
         IFlatInstruction inst, IReadOnlyCollection<string> names)
         => IsRecursiveCall(inst, names) || IsReentrantFlagged(inst);
+
+    static IFlatInstruction WithProtectedRecursionFrame(
+        IFlatInstruction inst) => inst switch
+    {
+        CExprStmt { Expr: CExternCall call } =>
+            new CExprStmt(call.WithFrameState(
+                RecursionFrameState.Protected)),
+        CExprStmt { Expr: CInternalCall call } =>
+            new CExprStmt(call.WithFrameState(
+                RecursionFrameState.Protected)),
+        _ => throw new VerificationException(
+            "Only flat call instructions can carry a recursion frame: "
+            + StmtKind(inst)),
+    };
 
     // Round-9 [Y3]: a TailSpared instruction is a recursive-edge call SITE in tail position — the
     // frame reads nothing after it, so it is exempt from the per-callee-name wrap (one non-tail

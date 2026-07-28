@@ -76,6 +76,15 @@ public sealed class CFuncRef : CLeaf
     public override string ToString() => $"funcref({FuncName})";
 }
 
+/// <summary>
+/// Post-optimizer proof carried by a recursive/reentrant call site.
+/// </summary>
+public enum RecursionFrameState
+{
+    Unprotected,
+    Protected,
+}
+
 /// <summary>Call an extern (Udon VM native) function.</summary>
 public sealed class CExternCall : CValue
 {
@@ -97,22 +106,48 @@ public sealed class CExternCall : CValue
     /// reentrant cross dispatch / cross setter pair; copied by the same rebuild sites as
     /// <see cref="Reentrant"/>.</summary>
     public readonly int PreSpillStmts;
+    public readonly RecursionFrameState FrameState;
 
     public CExternCall(BoundExtern sig, List<CLeaf> args, StorageType retType,
-        int? destSlot = null, bool reentrant = false, int preSpillStmts = 0) : base(retType)
+        int? destSlot = null, bool reentrant = false,
+        int preSpillStmts = 0)
+        : this(
+            sig, args, retType, destSlot, reentrant, preSpillStmts,
+            RecursionFrameState.Unprotected)
+    {
+    }
+
+    CExternCall(
+        BoundExtern sig,
+        List<CLeaf> args,
+        StorageType retType,
+        int? destSlot,
+        bool reentrant,
+        int preSpillStmts,
+        RecursionFrameState frameState)
+        : base(retType)
     {
         Sig = sig ?? throw new ArgumentNullException(nameof(sig));
         Args = (args ?? new List<CLeaf>()).AsReadOnly();
         DestSlot = destSlot;
         Reentrant = reentrant;
         PreSpillStmts = preSpillStmts;
+        FrameState = frameState;
     }
 
     /// <summary>Clone with new args/destSlot, copying Sig/Type/Reentrant/PreSpillStmts by construction —
     /// call-rebuild sites route through this
     /// instead of hand-copying the constructor argument list, so a new field can never drift out of sync.</summary>
     public CExternCall With(List<CLeaf> args, int? destSlot)
-        => new CExternCall(Sig, args, Type, destSlot, Reentrant, PreSpillStmts);
+        => new CExternCall(
+            Sig, args, Type, destSlot, Reentrant, PreSpillStmts,
+            FrameState);
+
+    internal CExternCall WithFrameState(
+        RecursionFrameState frameState)
+        => new CExternCall(
+            Sig, new List<CLeaf>(Args), Type, DestSlot, Reentrant,
+            PreSpillStmts, frameState);
 
     public override string ToString()
     {
@@ -136,20 +171,46 @@ public sealed class CInternalCall : CValue
     /// overflowing the 8192-entry __recurStack on deep mixed tail/non-tail recursion). Must be copied
     /// by every site that reconstructs the instruction, like <see cref="Reentrant"/>.</summary>
     public readonly bool TailSpared;
+    public readonly RecursionFrameState FrameState;
 
     public CInternalCall(string funcName, List<CLeaf> args, StorageType retType, int? destSlot = null,
-        bool reentrant = false, bool tailSpared = false) : base(retType)
+        bool reentrant = false, bool tailSpared = false)
+        : this(
+            funcName, args, retType, destSlot, reentrant, tailSpared,
+            RecursionFrameState.Unprotected)
+    {
+    }
+
+    CInternalCall(
+        string funcName,
+        List<CLeaf> args,
+        StorageType retType,
+        int? destSlot,
+        bool reentrant,
+        bool tailSpared,
+        RecursionFrameState frameState)
+        : base(retType)
     {
         FuncName = funcName ?? throw new ArgumentNullException(nameof(funcName));
         Args = (args ?? new List<CLeaf>()).AsReadOnly();
         DestSlot = destSlot;
         Reentrant = reentrant;
         TailSpared = tailSpared;
+        FrameState = frameState;
     }
 
     /// <summary>Clone with new args/destSlot, copying FuncName/Type/Reentrant/TailSpared by construction —
     /// see <see cref="CExternCall.With"/> for why the two rebuild sites route through this.</summary>
-    public CInternalCall With(List<CLeaf> args, int? destSlot) => new CInternalCall(FuncName, args, Type, destSlot, Reentrant, TailSpared);
+    public CInternalCall With(List<CLeaf> args, int? destSlot)
+        => new CInternalCall(
+            FuncName, args, Type, destSlot, Reentrant, TailSpared,
+            FrameState);
+
+    internal CInternalCall WithFrameState(
+        RecursionFrameState frameState)
+        => new CInternalCall(
+            FuncName, new List<CLeaf>(Args), Type, DestSlot, Reentrant,
+            TailSpared, frameState);
 
     public override string ToString()
     {

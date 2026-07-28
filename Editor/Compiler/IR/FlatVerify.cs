@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 // ============================================================================
 // FlatVerify — post-condition verifier for a flattened Core function. Re-arms, as a checked
@@ -141,8 +142,28 @@ internal static class FlatVerify
             VerifyTerminator(b.Terminator, blockIds, f.Name);
         }
 
+        VerifyTailSparedMembership(f);
         VerifyReentrantConservation(f);
         VerifyPreSpillStmtsShape(f);
+    }
+
+    static void VerifyTailSparedMembership(FlatFunction function)
+    {
+        foreach (var block in function.Blocks)
+            foreach (var instruction in block.Instructions)
+                if (instruction is CExprStmt
+                    {
+                        Expr: CInternalCall
+                        {
+                            TailSpared: true
+                        } call
+                    }
+                    && !function.RecursiveCalleeNames.Contains(
+                        call.FuncName))
+                    throw new VerificationException(
+                        $"{function.Name}: TailSpared call to "
+                        + $"'{call.FuncName}' is not a member of "
+                        + "RecursiveCalleeNames.");
     }
 
     sealed class TypeContext
@@ -383,7 +404,13 @@ internal static class FlatVerify
                 ctx.AssertField(field.FieldName, field.Type, context);
                 break;
             case CConst:
-            case CFuncRef:
+                break;
+            case CFuncRef functionRef:
+                if (!ctx.Functions.ContainsKey(functionRef.FuncName))
+                    throw new VerificationException(
+                        $"{context} references unknown function "
+                        + $"'{functionRef.FuncName}' "
+                        + $"(function '{ctx.Function.Name}')");
                 break;
             default:
                 throw new VerificationException(
@@ -432,25 +459,81 @@ internal static class FlatVerify
             out var recurEnsureFunction);
         foreach (var f in module.Functions)
         {
-            var needsFrame = false;
-            var hasFrame = false;
+            var requiredSites = 0;
+            var protectedSites = 0;
+            var ensureCalls = 0;
             foreach (var b in f.Blocks)
+            {
+                var unmatchedEnsures = 0;
                 foreach (var inst in b.Instructions)
                 {
-                    if (CoreFlatOptimizer.IsRecursiveCall(inst, f.RecursiveCalleeNames)
-                        || inst is CExprStmt { Expr: CExternCall { Reentrant: true } }
-                        || inst is CExprStmt { Expr: CInternalCall { Reentrant: true } })
-                        needsFrame = true;
                     if (inst is CExprStmt { Expr: CInternalCall ensure }
                         && ensure.FuncName == recurEnsureFunction)
-                        hasFrame = true;
+                    {
+                        ensureCalls++;
+                        unmatchedEnsures++;
+                    }
+
+                    var frameState = RecursionFrameStateOf(inst);
+                    if (frameState == RecursionFrameState.Protected)
+                        protectedSites++;
+
+                    if (CoreFlatOptimizer.RequiresRecursionFrame(
+                        inst, f.RecursiveCalleeNames))
+                    {
+                        requiredSites++;
+                        if (frameState != RecursionFrameState.Protected)
+                            throw new VerificationException(
+                                $"{f.Name}: recursive/reentrant call site "
+                                + $"{requiredSites} is not marked as protected "
+                                + "by InsertRecursionSpills.");
+                        if (unmatchedEnsures == 0)
+                            throw new VerificationException(
+                                $"{f.Name}: protected recursive/reentrant "
+                                + $"call site {requiredSites} has no preceding "
+                                + "recursion-capacity ensure in its block.");
+                        unmatchedEnsures--;
+                    }
+                    else if (frameState
+                             == RecursionFrameState.Protected)
+                    {
+                        throw new VerificationException(
+                            $"{f.Name}: a non-recursive call site is marked "
+                            + "as recursion-frame protected.");
+                    }
                 }
-            if (needsFrame && !hasFrame)
-                throw new InvalidOperationException(
-                    $"{f.Name}: a recursive or reentrant call site survived without a recursion "
-                    + "frame save — InsertRecursionSpills did not run after CoalesceSlots.");
+                if (unmatchedEnsures != 0)
+                    throw new VerificationException(
+                        $"{f.Name}: {unmatchedEnsures} recursion-capacity "
+                        + "ensure call(s) have no protected call site in "
+                        + $"block {b.Id}.");
+            }
+
+            if (requiredSites != 0
+                && !f.RecursionSpillsProcessed)
+                throw new VerificationException(
+                    $"{f.Name}: recursion spill sites exist but "
+                    + "InsertRecursionSpills did not record its postcondition.");
+            if (f.RecursionSpillsProcessed
+                && (f.ProtectedRecursionSiteCount != requiredSites
+                    || protectedSites != requiredSites
+                    || ensureCalls != requiredSites))
+                throw new VerificationException(
+                    $"{f.Name}: recursion-spill postcondition mismatch: "
+                    + $"required={requiredSites}, "
+                    + $"protected={protectedSites}, "
+                    + $"recorded={f.ProtectedRecursionSiteCount}, "
+                    + $"ensures={ensureCalls}.");
         }
     }
+
+    static RecursionFrameState RecursionFrameStateOf(
+        IFlatInstruction instruction) => instruction switch
+    {
+        CExprStmt { Expr: CExternCall call } => call.FrameState,
+        CExprStmt { Expr: CInternalCall call } => call.FrameState,
+        _ => RecursionFrameState.Unprotected,
+    };
 
     static bool IsVoidSetProgramVariableCopyIn(IFlatInstruction stmt)
         => stmt is CExprStmt { Expr: CExternCall { DestSlot: null } call }

@@ -122,6 +122,85 @@ public class FlatVerifyTests
         FlatVerify.Verify(f); // no throw
     }
 
+    [Fact]
+    public void TailSparedCallOutsideRecursiveCalleeSet_Throws()
+    {
+        var f = Flat(Block(0,
+            new List<IFlatInstruction>
+            {
+                new CExprStmt(new CInternalCall(
+                    "callee",
+                    new List<CLeaf>(),
+                    StorageTypes.Void,
+                    tailSpared: true)),
+            },
+            new CRet()));
+
+        var ex = Assert.Throws<VerificationException>(
+            () => FlatVerify.Verify(f));
+
+        Assert.Contains("TailSpared", ex.Message);
+        Assert.Contains("RecursiveCalleeNames", ex.Message);
+    }
+
+    [Fact]
+    public void SpillVerifier_RejectsSecondUnprotectedSite()
+    {
+        var module = new FlatModule();
+        var ensureName = module.AllocateGeneratedSymbol(
+            CoreFlatOptimizer.RecurEnsureFunctionRole,
+            "__recurEnsure");
+        var function = module.AddFunction("recursive");
+        function.AddRecursiveCallee("recursive");
+        var block = function.NewBlock();
+        block.Instructions.Add(new CExprStmt(new CInternalCall(
+            ensureName, new List<CLeaf>(), StorageTypes.Void)));
+        block.Instructions.Add(new CExprStmt(
+            new CInternalCall(
+                "recursive",
+                new List<CLeaf>(),
+                StorageTypes.Void)
+            .WithFrameState(RecursionFrameState.Protected)));
+        block.Instructions.Add(new CExprStmt(new CInternalCall(
+            "recursive", new List<CLeaf>(), StorageTypes.Void)));
+        block.Terminator = new CRet();
+        function.MarkRecursionSpillsProcessed(2);
+
+        var ex = Assert.Throws<VerificationException>(
+            () => FlatVerify.VerifySpillsInserted(module));
+
+        Assert.Contains("call site 2", ex.Message);
+        Assert.Contains("not marked as protected", ex.Message);
+    }
+
+    [Fact]
+    public void SpillVerifier_RequiresOneEnsurePerProtectedSite()
+    {
+        var module = new FlatModule();
+        var ensureName = module.AllocateGeneratedSymbol(
+            CoreFlatOptimizer.RecurEnsureFunctionRole,
+            "__recurEnsure");
+        var function = module.AddFunction("recursive");
+        function.AddRecursiveCallee("recursive");
+        var block = function.NewBlock();
+        block.Instructions.Add(new CExprStmt(new CInternalCall(
+            ensureName, new List<CLeaf>(), StorageTypes.Void)));
+        for (var i = 0; i < 2; i++)
+            block.Instructions.Add(new CExprStmt(
+                new CInternalCall(
+                    "recursive",
+                    new List<CLeaf>(),
+                    StorageTypes.Void)
+                .WithFrameState(RecursionFrameState.Protected)));
+        block.Terminator = new CRet();
+        function.MarkRecursionSpillsProcessed(2);
+
+        var ex = Assert.Throws<VerificationException>(
+            () => FlatVerify.VerifySpillsInserted(module));
+
+        Assert.Contains("no preceding", ex.Message);
+    }
+
     // ── PreSpillStmts positional contract (wave-12 r2 [V1], CExternCall.PreSpillStmts) ──
     // A Reentrant SendCustomEvent's PreSpillStmts=N claims the N immediately-preceding statements are
     // its own void SetProgramVariable copy-ins (same flat block by construction), so
