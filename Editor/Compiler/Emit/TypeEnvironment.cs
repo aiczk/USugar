@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Collections.Generic;
 using System.Linq;
 using Microsoft.CodeAnalysis;
@@ -5,6 +6,24 @@ using Microsoft.CodeAnalysis;
 /// <summary>Single authority for closing Roslyn types and methods under a monomorphization environment.</summary>
 public static class TypeEnvironment
 {
+    /// <summary>
+    /// Canonical specialization vector for a method: every containing-type argument from the
+    /// outermost owner to the innermost owner, followed by the method's own arguments.
+    /// Roslyn exposes a nested type's own arguments separately from its containing type, so reading
+    /// only <c>method.ContainingType.TypeArguments</c> aliases distinct outer-owner specializations.
+    /// </summary>
+    internal static ImmutableArray<ITypeSymbol> SpecializationArguments(IMethodSymbol method)
+    {
+        if (method == null)
+            throw new System.ArgumentNullException(nameof(method));
+        var result = ImmutableArray.CreateBuilder<ITypeSymbol>();
+        foreach (var owner in ContainingTypes(method.ContainingType))
+            result.AddRange(owner.TypeArguments);
+        if (method.IsGenericMethod)
+            result.AddRange(method.TypeArguments);
+        return result.ToImmutable();
+    }
+
     public static ITypeSymbol CloseType(Compilation compilation, ITypeSymbol type,
         IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> map)
     {
@@ -64,19 +83,42 @@ public static class TypeEnvironment
     public static IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> ForMethod(
         IMethodSymbol method, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> parent = null)
     {
-        var bindings = new List<(IReadOnlyList<ITypeParameterSymbol>, IReadOnlyList<ITypeSymbol>)>(2);
+        if (method == null)
+            throw new System.ArgumentNullException(nameof(method));
+        var bindings = ContainingTypeBindings(method.ContainingType).ToList();
         if (method.IsGenericMethod)
             bindings.Add((method.OriginalDefinition.TypeParameters, method.TypeArguments));
-        if (method.ContainingType.IsGenericType)
-            bindings.Add((method.ContainingType.OriginalDefinition.TypeParameters, method.ContainingType.TypeArguments));
         return TypeParamScope.Compose(parent, true, bindings);
     }
 
     public static IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> ForContainingType(
         INamedTypeSymbol type, IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> parent = null)
-        => !type.IsGenericType ? parent : TypeParamScope.Compose(parent, true, new[]
+    {
+        if (type == null) return parent;
+        var bindings = ContainingTypeBindings(type).ToList();
+        return bindings.Count == 0
+            ? parent
+            : TypeParamScope.Compose(parent, true, bindings);
+    }
+
+    static IEnumerable<INamedTypeSymbol> ContainingTypes(INamedTypeSymbol type)
+    {
+        var owners = new Stack<INamedTypeSymbol>();
+        for (var current = type; current != null; current = current.ContainingType)
+            owners.Push(current);
+        while (owners.Count > 0)
+            yield return owners.Pop();
+    }
+
+    static IEnumerable<(
+        IReadOnlyList<ITypeParameterSymbol> Parameters,
+        IReadOnlyList<ITypeSymbol> Arguments)> ContainingTypeBindings(INamedTypeSymbol type)
+    {
+        foreach (var owner in ContainingTypes(type))
         {
-            ((IReadOnlyList<ITypeParameterSymbol>)type.OriginalDefinition.TypeParameters,
-             (IReadOnlyList<ITypeSymbol>)type.TypeArguments)
-        });
+            var parameters = owner.OriginalDefinition.TypeParameters;
+            if (parameters.Length == 0) continue;
+            yield return (parameters, owner.TypeArguments);
+        }
+    }
 }

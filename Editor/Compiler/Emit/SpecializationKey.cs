@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Immutable;
-using System.Linq;
 using Microsoft.CodeAnalysis;
 
 /// <summary>
@@ -22,15 +21,9 @@ public readonly struct SpecializationKey : IEquatable<SpecializationKey>
     public static SpecializationKey ForMethod(IMethodSymbol method)
     {
         if (method == null) throw new ArgumentNullException(nameof(method));
-        var containingArguments = method.ContainingType?.IsGenericType == true
-            ? method.ContainingType.TypeArguments
-            : ImmutableArray<ITypeSymbol>.Empty;
-        var methodArguments = method.IsGenericMethod
-            ? method.TypeArguments
-            : ImmutableArray<ITypeSymbol>.Empty;
         return new SpecializationKey(
             method.OriginalDefinition,
-            containingArguments.Concat(methodArguments).ToImmutableArray());
+            TypeEnvironment.SpecializationArguments(method));
     }
 
     public bool Equals(SpecializationKey other)

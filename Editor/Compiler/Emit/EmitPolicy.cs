@@ -203,6 +203,32 @@ public static class EmitPolicy
         return null;
     }
 
+    /// <summary>
+    /// The implicit user callable introduced by a using resource declaration. Roslyn does not
+    /// represent this as an invocation operation, so reachability and closed-specialization census
+    /// consume this shared classifier rather than independently walking declaration shapes.
+    /// </summary>
+    internal static IEnumerable<IMethodSymbol> UsingDisposeMethods(IOperation operation)
+    {
+        var resources = operation is IUsingOperation usingOperation
+            ? usingOperation.Resources
+            : operation is IUsingDeclarationOperation usingDeclaration
+                ? usingDeclaration.DeclarationGroup
+                : null;
+        if (resources is IVariableDeclarationGroupOperation group)
+        {
+            foreach (var declaration in group.Declarations)
+                foreach (var declarator in declaration.Declarators)
+                    if (declarator.Symbol.Type is INamedTypeSymbol named
+                        && FindStructDisposeMethod(named) is { } dispose)
+                        yield return dispose;
+            yield break;
+        }
+        if (resources?.Type is INamedTypeSymbol resourceType
+            && FindStructDisposeMethod(resourceType) is { } resourceDispose)
+            yield return resourceDispose;
+    }
+
     // ── Constant parsing (moved from VariableTable) ──
 
     /// <summary>Parse a string constant value to a typed CLR object.</summary>

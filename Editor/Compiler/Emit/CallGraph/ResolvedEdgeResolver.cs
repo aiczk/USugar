@@ -231,7 +231,7 @@ public sealed class ResolvedEdgeResolver
         // computed property / subpattern / operator / conversion) plus the implicit using-Dispose.
         foreach (var m in EnumerateStructMemberRefs(op))
             yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
-        foreach (var m in EnumerateUsingDispose(op))
+        foreach (var m in EmitPolicy.UsingDisposeMethods(op))
             yield return new ResolvedTarget(m, TargetRole.ReachStructMember);
 
         // ReachForeignStatic: a closed, non-generic foreign static reached by call / method-group / static
@@ -353,18 +353,6 @@ public sealed class ResolvedEdgeResolver
             && mref.Instance is IInstanceReferenceOperation { Syntax: BaseExpressionSyntax }
             && UasmEmitter.IsBaseInstanceMethod(mref.Method, _emitter.ClassSymbol))
             yield return mref.Method;
-    }
-
-    static IEnumerable<IMethodSymbol> EnumerateUsingDispose(IOperation op)
-    {
-        var resources = op is IUsingOperation uo ? uo.Resources
-            : op is IUsingDeclarationOperation ud ? ud.DeclarationGroup
-            : null;
-        if (resources is IVariableDeclarationGroupOperation g)
-            foreach (var decl in g.Declarations)
-                foreach (var d in decl.Declarators)
-                    if (d.Symbol.Type is INamedTypeSymbol dnt && EmitPolicy.FindStructDisposeMethod(dnt) is { } dispose)
-                        yield return dispose;
     }
 
     // ── C4 (M5d): the CallEdge classifier core, relocated verbatim from UasmEmitter (pure move — the
@@ -761,8 +749,8 @@ public sealed class ResolvedEdgeResolver
     /// computed-property/subpattern-property/operator/conversion), yielded as-observed (constructed
     /// symbol, ungated) — consumed by ReachEdges' ReachStructMember arm (the registration gate
     /// IsCollectibleStructMember and the recursion/capture-root .OriginalDefinition projection are
-    /// consumer-side). `using`-resource dispose is NOT included here — EnumerateUsingDispose handles
-    /// that resource shape separately and the two must not be merged.</summary>
+    /// consumer-side). `using`-resource dispose is NOT included here —
+    /// EmitPolicy.UsingDisposeMethods handles that resource shape separately.</summary>
     IEnumerable<IMethodSymbol> EnumerateStructMemberRefs(IOperation op)
     {
         // Parameterized user-struct / v1-class constructor: new V(...) / new C(...).

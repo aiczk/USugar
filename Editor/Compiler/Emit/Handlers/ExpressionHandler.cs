@@ -162,8 +162,15 @@ internal sealed class ExpressionHandler
                 var arrExpr = _lowering.LoadInstanceRaw(fieldRef.Instance);
                 var getVal = AggregateAbi.ReadSlot(_lowering.Builder, arrExpr, elemIndex, StorageTypes.Object);
                 // A struct-typed element read AS A VALUE is copied (value semantics); scalar elements are immutable boxes.
-                return fieldRef.Field.Type is INamedTypeSymbol elemAgg && _lowering.IsAggregateValue(elemAgg)
-                    ? AggregateAbi.DeepClone(_lowering.Builder, getVal, elemAgg, _lowering.State.Aggregates.GetLayout) : getVal;
+                var elemAggregate = _lowering.ResolveAggregateValueType(
+                    fieldRef.Field.Type);
+                return elemAggregate != null
+                    ? AggregateAbi.DeepClone(
+                        _lowering.Builder,
+                        getVal,
+                        elemAggregate,
+                        _lowering.State.Aggregates.GetLayout)
+                    : getVal;
             }
             throw new System.NotSupportedException(
                 $"Cannot access '{fieldRef.Field.Name}' on aggregate type '{aggContaining.Name}'.");
@@ -171,10 +178,21 @@ internal sealed class ExpressionHandler
 
         // this.field → direct variable name → LoadField (struct-typed field copied on value read)
         if (fieldRef.Instance is IInstanceReferenceOperation)
-            return fieldRef.Field.Type is INamedTypeSymbol thisFieldAgg && _lowering.IsAggregateValue(thisFieldAgg)
-                ? AggregateAbi.DeepClone(_lowering.Builder, _lowering.LoadField(_lowering.State.SourceStorageName(fieldRef.Field), new StorageType(AggregateAbi.ArrayType)),
-                    thisFieldAgg, _lowering.State.Aggregates.GetLayout)
-                : _lowering.LoadField(_lowering.State.SourceStorageName(fieldRef.Field), _lowering.GetStorageType(fieldRef.Field.Type));
+        {
+            var fieldAggregate = _lowering.ResolveAggregateValueType(
+                fieldRef.Field.Type);
+            return fieldAggregate != null
+                ? AggregateAbi.DeepClone(
+                    _lowering.Builder,
+                    _lowering.LoadField(
+                        _lowering.State.SourceStorageName(fieldRef.Field),
+                        new StorageType(AggregateAbi.ArrayType)),
+                    fieldAggregate,
+                    _lowering.State.Aggregates.GetLayout)
+                : _lowering.LoadField(
+                    _lowering.State.SourceStorageName(fieldRef.Field),
+                    _lowering.GetStorageType(fieldRef.Field.Type));
+        }
         // cross-behaviour field → GetProgramVariable
         if (ExternResolver.IsUdonSharpBehaviour(fieldRef.Field.ContainingType))
         {

@@ -198,6 +198,18 @@ internal sealed class LoweringServices
     internal string GetStorageTypeName(ITypeSymbol type) => GetStorageType(type).Name;
     internal ITypeSymbol ResolveType(ITypeSymbol type)
         => _state.ResolveSourceType(type);
+    /// <summary>
+    /// Resolve through the active specialization before asking whether a source value has aggregate
+    /// semantics. Generic members expose their declaration type (for example T) even while lowering
+    /// Box&lt;Inner&gt;, so raw-symbol shape checks are not authoritative.
+    /// </summary>
+    internal INamedTypeSymbol ResolveAggregateValueType(ITypeSymbol type)
+    {
+        var resolved = ResolveType(type) as INamedTypeSymbol;
+        return resolved != null && IsAggregateValue(resolved)
+            ? resolved
+            : null;
+    }
     internal bool IsFoldedEnum(ITypeSymbol type)
         => _state.Types.IsFoldedEnum(ResolveType(type));
     internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);

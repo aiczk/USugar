@@ -165,6 +165,11 @@ internal sealed class GenericTypeSpecCensus
                 foreach (var concrete in _dispatchTypes)
                     EnqueueDispatchTarget(site.Target, map, methodTrace, concrete);
             }
+            // `using` Dispose is an executable call without an invocation operation. Consume the
+            // same classifier as definition reach so generic owner arguments are closed and the
+            // concrete Dispose specialization enters the registry before BoundProgram publication.
+            foreach (var dispose in EmitPolicy.UsingDisposeMethods(op))
+                EnqueueIfClosed(dispose, map, methodTrace);
             switch (op)
             {
                 case IObjectCreationOperation oc when oc.Type is INamedTypeSymbol ct:
