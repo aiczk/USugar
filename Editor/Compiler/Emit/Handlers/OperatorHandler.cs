@@ -90,8 +90,8 @@ internal sealed class OperatorHandler
         if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals
             && (DelegateAbi.IsDelegateType(op.LeftOperand.Type) || DelegateAbi.IsDelegateType(op.RightOperand.Type)))
         {
-            bool leftIsNull = IsNullLiteral(op.LeftOperand);
-            bool rightIsNull = IsNullLiteral(op.RightOperand);
+            bool leftIsNull = NullableAbi.IsNullLiteral(op.LeftOperand);
+            bool rightIsNull = NullableAbi.IsNullLiteral(op.RightOperand);
             bool isNotEquals = op.OperatorKind == BinaryOperatorKind.NotEquals;
 
             // d == null / d != null → reference null check on the BUNDLE itself (P4: delegate-null is
@@ -137,19 +137,12 @@ internal sealed class OperatorHandler
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
-        if (op.OperatorKind is BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals)
+        if (NullableAbi.IsNullLiteralComparison(op, out var nullableOperand))
         {
-            bool leftNullable = EmitPolicy.IsNullableT(op.LeftOperand.Type, out _);
-            bool rightNullable = EmitPolicy.IsNullableT(op.RightOperand.Type, out _);
-            bool leftNull = IsNullLiteral(op.LeftOperand);
-            bool rightNull = IsNullLiteral(op.RightOperand);
-            if ((leftNullable && rightNull) || (rightNullable && leftNull))
-            {
-                var nv = _lowering.VisitExpression(leftNullable ? op.LeftOperand : op.RightOperand);
-                if (op.OperatorKind == BinaryOperatorKind.NotEquals)
-                    return NullableAbi.HasValue(_lowering.Builder, nv); // != null  ⇔  HasValue
-                return NullableAbi.IsNull(_lowering.Builder, nv);
-            }
+            var nv = _lowering.VisitExpression(nullableOperand);
+            if (op.OperatorKind == BinaryOperatorKind.NotEquals)
+                return NullableAbi.HasValue(_lowering.Builder, nv); // != null  ⇔  HasValue
+            return NullableAbi.IsNull(_lowering.Builder, nv);
         }
 
         // ── Nullable bool & / | : C# three-valued logic (false & null = false, true | null = true) ──
@@ -955,12 +948,5 @@ internal sealed class OperatorHandler
     // Delegate comparison helpers moved to DelegateAbi (wave-9
     // round-4 [X1]: the .Equals METHOD spelling of delegate equality reuses the same value
     // comparison from InvocationHandler — one knowledge source).
-
-    bool IsNullLiteral(IOperation op)
-    {
-        var unwrapped = op;
-        while (unwrapped is IConversionOperation conv) unwrapped = conv.Operand;
-        return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
-    }
 
 }

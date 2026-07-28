@@ -287,6 +287,9 @@ internal sealed class AbiDemandPlanner
                 operation, operation.OperatorMethod, scope))
             return;
 
+        if (NullableAbi.IsNullLiteralComparison(operation, out _))
+            return;
+
         var resultName = TypeName(operation.Type);
         if (operation.OperatorKind == BinaryOperatorKind.Remainder
             && LoweringServices.RemainderNeedsPolyfill(resultName))

@@ -10,6 +10,28 @@ public static class NullableAbi
 {
     public const string StorageType = "SystemObject";
 
+    public static bool IsNullLiteral(IOperation operation)
+    {
+        var unwrapped = operation;
+        while (unwrapped is IConversionOperation conversion) unwrapped = conversion.Operand;
+        return unwrapped is ILiteralOperation { ConstantValue: { HasValue: true, Value: null } };
+    }
+
+    public static bool IsNullLiteralComparison(
+        IBinaryOperation operation, out IOperation nullableOperand)
+    {
+        nullableOperand = null;
+        if (operation.OperatorKind is not (BinaryOperatorKind.Equals or BinaryOperatorKind.NotEquals))
+            return false;
+        if (EmitPolicy.IsNullableT(operation.LeftOperand.Type, out _)
+            && IsNullLiteral(operation.RightOperand))
+            nullableOperand = operation.LeftOperand;
+        else if (EmitPolicy.IsNullableT(operation.RightOperand.Type, out _)
+            && IsNullLiteral(operation.LeftOperand))
+            nullableOperand = operation.RightOperand;
+        return nullableOperand != null;
+    }
+
     public static CLeaf IsNull(CoreBuilder builder, CLeaf nullableValue)
         => builder.ExternCall(
             UdonAbi.ObjectEquality,
