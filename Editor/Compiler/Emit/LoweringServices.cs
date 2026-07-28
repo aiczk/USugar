@@ -1819,8 +1819,7 @@ internal sealed class LoweringServices
     internal INamedTypeSymbol PlanClassToStringDemand(ITypeSymbol type)
     {
         var resolved = ResolveType(type) as INamedTypeSymbol;
-        if (resolved == null || resolved.IsRecord
-            || !IsUserClass(resolved))
+        if (resolved == null || !IsUserClass(resolved))
             return null;
         _state.SyntheticDemandPlanner.RegisterClassToString(resolved);
         return resolved;
@@ -1856,14 +1855,12 @@ internal sealed class LoweringServices
         var shape = SourceShape(type);
         if (!shape.IsBundle) return;
         if (shape.Bundle == RuntimeBundleKind.Class
-            && type is INamedTypeSymbol classType
-            && !classType.IsRecord)
+            && type is INamedTypeSymbol classType)
         {
             PlanClassToStringDemand(classType);
             return;
         }
-        if (shape.Bundle != RuntimeBundleKind.Aggregate
-            && type is not INamedTypeSymbol { IsRecord: true })
+        if (shape.Bundle != RuntimeBundleKind.Aggregate)
             return;
         if (type is not INamedTypeSymbol aggregate) return;
 
@@ -2825,9 +2822,6 @@ internal sealed class LoweringServices
             throw new InvalidOperationException(
                 $"'{type}' is not a compiler-owned bundle.");
 
-        if (type is INamedTypeSymbol record
-            && record.IsRecord)
-            return EmitAggregateString(value, record);
         if (shape.Bundle == RuntimeBundleKind.Class
             && type is INamedTypeSymbol classType)
             return EmitClassToStringDispatch(
@@ -2874,8 +2868,7 @@ internal sealed class LoweringServices
     {
         var layout = _state.Aggregates.GetLayout(type);
         if (!type.IsTupleType
-            && !type.IsAnonymousType
-            && !type.IsRecord)
+            && !type.IsAnonymousType)
             return Const(
                 ClassAbi.RuntimeTypeName(type),
                 StorageTypes.String);
@@ -2893,10 +2886,9 @@ internal sealed class LoweringServices
             closing = " }";
         }
         else
-        {
-            opening = type.Name + " { ";
-            closing = " }";
-        }
+            throw new InvalidOperationException(
+                $"Aggregate string formatting has no protocol for "
+                + $"'{type.ToDisplayString()}'.");
 
         CLeaf result = Const(opening, StorageTypes.String);
         for (var i = 0; i < layout.Fields.Count; i++)
@@ -3018,9 +3010,8 @@ internal sealed class LoweringServices
             var fieldShape = SourceShape(fieldType);
             CLeaf equal;
             if (fieldType is INamedTypeSymbol nested
-                && (fieldShape.Bundle
-                        == RuntimeBundleKind.Aggregate
-                    || nested.IsRecord))
+                && fieldShape.Bundle
+                    == RuntimeBundleKind.Aggregate)
                 equal = EmitBundleValueEquality(
                     leftValue, rightValue, nested);
             else if (fieldType
@@ -3263,9 +3254,8 @@ internal sealed class LoweringServices
                         isNotEquals: false));
             else if (resolved
                          is INamedTypeSymbol aggregate
-                     && (shape.Bundle
-                             == RuntimeBundleKind.Aggregate
-                         || aggregate.IsRecord))
+                     && shape.Bundle
+                         == RuntimeBundleKind.Aggregate)
                 EmitCandidate(
                     runtimeTypeId,
                     () => EmitBundleValueEquality(

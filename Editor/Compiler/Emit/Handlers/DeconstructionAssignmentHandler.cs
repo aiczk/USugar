@@ -125,8 +125,7 @@ internal sealed class DeconstructionAssignmentHandler
             if (callValue is not IInvocationOperation
                 && _lowering.ResolveType(callValue.Type)
                     is INamedTypeSymbol valAggType
-                && (_lowering.IsAggregateValue(valAggType)
-                    || valAggType.IsRecord))
+                && _lowering.IsAggregateValue(valAggType))
             {
                 var arrVal = _lowering.LoadInstanceRaw(callValue);
                 var valueLayout =

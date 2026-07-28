@@ -14,7 +14,7 @@ public static class ExternResolver
         return true;
     }
 
-    // Loud reject for a source class outside class ABI v1: a native base, a record, or another
+    // Loud reject for a source class outside class ABI v1: a native base or another
     // unsupported source shape. Foreign SDK types are identified semantically by their assembly/namespace,
     // never by a coincidentally matching extern owner name.
     static void RejectIfUnsupportedUserClass(ITypeSymbol type, string udonName)
@@ -28,10 +28,6 @@ public static class ExternResolver
                 + "System.Object. Class ABI v1 supports only a class with no explicit base — a UdonSharpBehaviour "
                 + "subclass is a behaviour (reference it through a scene object), and an SDK/native base type is "
                 + "not supported on a plain class.");
-        if (named.IsRecord)
-            throw new NotSupportedException(
-                $"Record type '{named.Name}' is not supported. User-defined reference types have no Udon heap "
-                + "representation in this compiler (class ABI v1). Use a struct (value type) instead.");
         throw new NotSupportedException(
             $"User-defined reference types (class '{named.Name}') are not supported yet: the Udon VM has no heap "
             + "representation for a user class in this compiler (class ABI v1). Convert it to a struct (value "

@@ -1317,16 +1317,17 @@ public class SelfDelegateTest : UdonSharpBehaviour {
     // ── Record type diagnostic ──
 
     [Fact]
-    public void RecordClass_CompilesWithValueSemantics()
+    public void RecordClass_IsRejectedInsteadOfPartiallyLowered()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 public record MyRecord(int Value);
 public class Dummy : UdonSharp.UdonSharpBehaviour {
     public int result;
     void Start() { var a = new MyRecord(1); var b = a with { Value = 2 }; result = b.Value; }
 }
-", "Dummy");
-        Assert.NotNull(uasm);
+", "Dummy"));
+        Assert.Contains("Record type", error.Message);
     }
 
     // ── Delegate value as argument: ordinary bundle value (design §2.4, fcd15/16) ──

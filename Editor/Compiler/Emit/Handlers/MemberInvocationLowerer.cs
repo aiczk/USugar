@@ -583,41 +583,6 @@ internal sealed class MemberInvocationLowerer
             instance => AggregateAbi.DefaultInitialize(_lowering.Builder, instance, layout, _lowering.State.Aggregates.GetLayout, _lowering.GetStorageTypeName),
             instance =>
             {
-                if (classTy.IsRecord
-                    && constructor != null)
-                {
-                    var arguments =
-                        new CLeaf[constructor.Parameters.Length];
-                    foreach (var argument in op.Arguments)
-                    {
-                        var parameter = argument.Parameter
-                                        ?? throw new InvalidOperationException(
-                                            $"Record constructor argument "
-                                            + $"'{argument.Syntax}' has no "
-                                            + "bound parameter.");
-                        arguments[parameter.Ordinal] =
-                            _lowering.VisitExpression(argument.Value);
-                    }
-                    foreach (var parameter in
-                             constructor.Parameters)
-                    {
-                        if (!layout.TryGetIndex(
-                                parameter.Name, out var fieldSlot))
-                            throw new InvalidOperationException(
-                                $"Record constructor parameter "
-                                + $"'{parameter.Name}' has no backing "
-                                + $"slot on '{classTy.Name}'.");
-                        AggregateAbi.WriteSlot(
-                            _lowering.Builder, instance,
-                            fieldSlot,
-                            arguments[parameter.Ordinal]
-                            ?? InvocationHandler.DefaultConst(
-                                _lowering.Builder,
-                                _lowering.GetStorageType(
-                                    parameter.Type)));
-                    }
-                    return;
-                }
                 // CA-v2 M1: an explicit ctor runs the full chain (field inits + base call + body) inside
                 // its own function; a class with no explicit ctor runs the implicit chain (field inits
                 // derived->base) inline here.
@@ -650,23 +615,11 @@ internal sealed class MemberInvocationLowerer
 
     internal CLeaf VisitWithExpression(IWithOperation operation)
     {
-        var type = _lowering.ResolveType(operation.Type)
-                   as INamedTypeSymbol
-                   ?? throw new NotSupportedException(
-                       $"with-expression type '{operation.Type}' "
-                       + "is not a named record type.");
-        if (!type.IsRecord)
-            throw new NotSupportedException(
-                $"with-expression receiver '{type.Name}' is not "
-                + "a record.");
-        var layout = _lowering.State.Aggregates.GetLayout(type);
-        var source = _lowering.VisitExpression(operation.Operand);
-        var clone = AggregateAbi.CloneRecord(
-            _lowering.Builder, source, layout,
-            _lowering.State.Aggregates.GetLayout);
-        _lowering.EmitAggregateObjectInitializer(
-            clone, layout, operation.Initializer);
-        return clone;
+        SourceSemanticProfile.RequireSupportedType(
+            _lowering.ResolveType(operation.Type));
+        throw new NotSupportedException(
+            $"with-expression on '{operation.Type}' is not supported "
+            + "by the C# 9 USugar language profile.");
     }
 
     /// <summary>CA-v2b-1: the bundle[0]=typeobj write action for a minted concrete class. We are AT a mint

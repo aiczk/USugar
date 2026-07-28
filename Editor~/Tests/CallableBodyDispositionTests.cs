@@ -1,4 +1,3 @@
-using System;
 using System.Linq;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Operations;
@@ -8,38 +7,6 @@ namespace USugar.Tests;
 
 public class CallableBodyDispositionTests
 {
-    [Fact]
-    public void RecordPrimaryConstructor_DedicatedLoweringDoesNotEmitCallable()
-    {
-        TestHelper.CompileToUasm(@"
-using UdonSharp;
-public record BodyDispositionRecord(int Value);
-public class BodyDispositionHost : UdonSharpBehaviour
-{
-    public int result;
-    void Start()
-    {
-        var left = new BodyDispositionRecord(7);
-        var right = new BodyDispositionRecord(7);
-        result = left == right ? left.Value : 0;
-    }
-}", "BodyDispositionHost", out var emitter);
-
-        Assert.DoesNotContain(
-            emitter.FlatModule.Functions,
-            function => function.Name.Contains(
-                "BodyDispositionRecord",
-                StringComparison.Ordinal));
-        Assert.DoesNotContain(
-            emitter.FlatModule.Functions,
-            function => function.Name.Contains(
-                "op_Equality",
-                StringComparison.Ordinal)
-                || function.Name.Contains(
-                    "EqualityContract",
-                    StringComparison.Ordinal));
-    }
-
     [Fact]
     public void Materializer_ClassifiesEveryBodyDisposition()
     {
@@ -53,7 +20,9 @@ public abstract class BodyDispositionKinds
     [System.Runtime.InteropServices.DllImport(""native"")]
     public static extern int Native();
 }
-public record DedicatedRecord(int Value);
+public class DedicatedClass
+{
+}
 ", "BodyDispositionKinds", out var type);
         var materializer =
             new BoundMethodBodyTable.Materializer(
@@ -67,14 +36,10 @@ public record DedicatedRecord(int Value);
             .OfType<IMethodSymbol>().Single();
         var native = type.GetMembers("Native")
             .OfType<IMethodSymbol>().Single();
-        var record = compilation.GetTypeByMetadataName(
-            "DedicatedRecord");
-        var recordConstructor = record.InstanceConstructors
-            .Single(constructor =>
-                constructor.Parameters.Length == 1
-                && constructor.Parameters[0].Type
-                    .SpecialType
-                    == SpecialType.System_Int32);
+        var dedicatedClass = compilation.GetTypeByMetadataName(
+            "DedicatedClass");
+        var implicitConstructor = dedicatedClass
+            .InstanceConstructors.Single();
 
         Assert.Equal(
             CallableBodyDisposition.SourceBody,
@@ -91,7 +56,7 @@ public record DedicatedRecord(int Value);
             materializer.Get(native).Disposition);
         Assert.Equal(
             CallableBodyDisposition.DedicatedLowering,
-            materializer.Get(recordConstructor)
+            materializer.Get(implicitConstructor)
                 .Disposition);
     }
 

@@ -7,8 +7,7 @@ using Xunit;
 
 namespace USugar.Tests;
 
-// Language-surface census (2026-07-11, owner-ordered): makes the claim "everything outside VM
-// constraints is writable" MACHINE-CHECKABLE. Every Roslyn OperationKind must land in exactly one
+// Language-surface routing census (2026-07-11, owner-ordered). Every Roslyn OperationKind lands in exactly one
 // bucket: HANDLED (the live pipeline's declared operation kinds, plus the internal-arm list),
 // VM_FUNDAMENTAL (documented loud reject rooted in a missing VM capability), OUT_OF_SCOPE (VB-only,
 // CFG-lowered-only, above the C# 9 Unity LCD, or metadata-only), DOCUMENTED_REJECT (designed
@@ -82,11 +81,9 @@ public class LanguageSurfaceTests
         // VB-only:
         OperationKind.Stop, OperationKind.End, OperationKind.RaiseEvent, OperationKind.OmittedArgument,
         OperationKind.ReDim, OperationKind.ReDimClause,
-        OperationKind.TranslatedQuery,
         // > C# 9 (Unity 2022.3 LCD):
         OperationKind.ListPattern, OperationKind.SlicePattern, OperationKind.Utf8String,
         OperationKind.InterpolatedStringHandlerCreation, OperationKind.InterpolatedStringAddition,
-        OperationKind.ImplicitIndexerReference,
         OperationKind.InterpolatedStringAppendFormatted, OperationKind.InterpolatedStringAppendLiteral,
         OperationKind.InterpolatedStringAppendInvalid, OperationKind.InterpolatedStringHandlerArgumentPlaceholder, // C# 10 handler lowering
         OperationKind.Parenthesized,            // VB-practical (C# elides parens in IOperation)
@@ -97,10 +94,11 @@ public class LanguageSurfaceTests
     // this list to EMPTY is the machine-checkable definition of "complete outside VM constraints".
     static readonly OperationKind[] KnownGaps =
     {
-        // EMPTY (2026-07-11): every C# 9 OperationKind is now HANDLED, VM_FUNDAMENTAL, DOCUMENTED_REJECT,
-        // or OUT_OF_SCOPE. "Everything outside VM constraints is writable" is now machine-checked at the
-        // kind level. Remaining capability holes are SUB-kind (guarded by loud per-arm rejects): v2b
-        // (typeobj/is-cast/virtual) and interface method groups.
+        // These are C# operations, not VB/newer-language nodes. They currently
+        // reach the generic loud reject; listing them here keeps the census
+        // honest without claiming semantic support from routing coverage.
+        OperationKind.TranslatedQuery,
+        OperationKind.ImplicitIndexerReference,
     };
 
     [Fact]

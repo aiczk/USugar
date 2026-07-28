@@ -101,51 +101,6 @@ internal sealed class InvocationHandler
                 + "type identity of program-local classes, structs, records, "
                 + "or delegates.");
 
-        if (op.Instance != null
-            && _lowering.ResolveType(op.Instance.Type)
-                is INamedTypeSymbol { IsRecord: true }
-                    recordType)
-        {
-            if (target.Name == "Equals"
-                && op.Arguments.Length == 1)
-            {
-                var left =
-                    _lowering.VisitExpression(op.Instance);
-                var right =
-                    _lowering.VisitExpression(
-                        op.Arguments[0].Value);
-                var argumentType = _lowering.ResolveType(
-                    op.Arguments[0].Value.Type);
-                if (argumentType
-                    is INamedTypeSymbol argumentRecord
-                    && argumentRecord.IsRecord)
-                    return _lowering.EmitBundleValueEquality(
-                        left, right, recordType);
-
-                var result = _lowering.Builder
-                    .AllocScratch(StorageTypes.Boolean);
-                var isRecord = _lowering.EmitTypeCheck(
-                    right, recordType);
-                _lowering.Builder.EmitIf(
-                    isRecord,
-                    _ => _lowering.EmitAssign(
-                        result,
-                        _lowering.EmitBundleValueEquality(
-                            left, right, recordType)),
-                    _ => _lowering.EmitAssign(
-                        result,
-                        _lowering.Const(
-                            false,
-                            StorageTypes.Boolean)));
-                return _lowering.SlotRef(result);
-            }
-            if (target.Name == "GetHashCode"
-                && target.Parameters.Length == 0)
-                return _lowering.EmitBundleValueHash(
-                    _lowering.VisitExpression(op.Instance),
-                    recordType);
-        }
-
         // B67: user-enum.ToString() → synthesized value→name helper (the inherited Enum.ToString would
         // resolve to the underlying integer's ToString and print the number). Flags enums reject inside.
         if (target.Name == "ToString" && target.Parameters.Length == 0 && op.Instance != null
@@ -254,10 +209,7 @@ internal sealed class InvocationHandler
                     is var instanceShape
                 && instanceShape.IsBundle
                 && (instanceShape.Bundle
-                        != RuntimeBundleKind.Class
-                    || instanceType
-                        is INamedTypeSymbol
-                            { IsRecord: true }))
+                        != RuntimeBundleKind.Class))
                 return _lowering.EmitKnownBundleToString(
                     _lowering.VisitExpression(op.Instance),
                     instanceType,

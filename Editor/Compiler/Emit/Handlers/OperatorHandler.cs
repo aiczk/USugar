@@ -32,26 +32,6 @@ internal sealed class OperatorHandler
 
         LoweringServices.RejectChecked(op.IsChecked);
 
-        if (op.OperatorKind
-                is BinaryOperatorKind.Equals
-                or BinaryOperatorKind.NotEquals
-            && _lowering.ResolveType(op.LeftOperand.Type)
-                is INamedTypeSymbol { IsRecord: true }
-                    recordType)
-        {
-            var equal = _lowering.EmitBundleValueEquality(
-                _lowering.VisitExpression(op.LeftOperand),
-                _lowering.VisitExpression(op.RightOperand),
-                recordType);
-            return op.OperatorKind
-                    == BinaryOperatorKind.NotEquals
-                ? _lowering.ExternCall(
-                    UdonAbi.BooleanNot,
-                    new List<CLeaf> { equal },
-                    StorageTypes.Boolean)
-                : equal;
-        }
-
         // Short-circuit evaluation for && and ||
         if (op.OperatorKind == BinaryOperatorKind.ConditionalAnd)
             return VisitConditionalAnd(op);

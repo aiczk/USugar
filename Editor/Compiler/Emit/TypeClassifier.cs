@@ -1,5 +1,8 @@
+using System;
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Operations;
 
 /// <summary>
 /// Centralized semantic type classification used by emit-time policy. This intentionally sits above
@@ -71,6 +74,7 @@ public static class TypeClassifier
     public static RuntimeShape ShapeOf(ITypeSymbol type, TypeClassifierContext ctx)
     {
         type = Resolve(type, ctx);
+        SourceSemanticProfile.RequireSupportedType(type);
         RequireSupportedArrayRank(type);
         var contents = ContentsOf(type, ctx.TypeParamMap,
             new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default));
@@ -229,5 +233,206 @@ public static class TypeClassifier
         foreach (var argument in named.TypeArguments)
             contents |= ContentsOf(argument, typeParameterMap, visited);
         return contents;
+    }
+}
+
+/// <summary>
+/// Source-language features whose CLR semantics cannot be represented by the
+/// Udon execution model. This is intentionally separate from storage-shape
+/// classification: a type must first belong to the supported semantic profile
+/// before the compiler chooses a physical carrier for it.
+/// </summary>
+internal static class SourceSemanticProfile
+{
+    const string ModuleInitializerMetadataName =
+        "System.Runtime.CompilerServices.ModuleInitializerAttribute";
+
+    public static void RequireSupportedCompilation(
+        Compilation compilation)
+    {
+        if (compilation == null)
+            throw new ArgumentNullException(nameof(compilation));
+
+        foreach (var tree in compilation.SyntaxTrees)
+        {
+            var model = compilation.GetSemanticModel(tree);
+            foreach (var declaration in tree.GetRoot()
+                         .DescendantNodes()
+                         .OfType<Microsoft.CodeAnalysis.CSharp.Syntax
+                             .MethodDeclarationSyntax>())
+            {
+                if (model.GetDeclaredSymbol(declaration)
+                    is not IMethodSymbol method)
+                    continue;
+                if (!method.GetAttributes().Any(attribute =>
+                        attribute.AttributeClass?.ToDisplayString()
+                        == ModuleInitializerMetadataName))
+                    continue;
+                throw new NotSupportedException(
+                    $"Module initializer '{method.ToDisplayString()}' is "
+                    + "not supported: Udon programs have no CLR module-load "
+                    + "hook. Move the initialization into an explicit "
+                    + "UdonSharpBehaviour event or method.");
+            }
+        }
+    }
+
+    public static void RequireSupportedBehaviour(
+        INamedTypeSymbol behaviour)
+    {
+        for (var type = behaviour;
+             type != null
+             && type.DeclaringSyntaxReferences.Length > 0;
+             type = type.BaseType)
+        {
+            RequireSupportedNamedType(type);
+            var constructor = type.InstanceConstructors
+                .FirstOrDefault(candidate =>
+                    !candidate.IsImplicitlyDeclared);
+            if (constructor == null)
+                continue;
+            throw new NotSupportedException(
+                $"Constructor '{constructor.ToDisplayString()}' is not "
+                + "supported on UdonSharpBehaviour types: Udon does not "
+                + "execute CLR instance constructors for behaviour "
+                + "programs. Use field initializers and an explicit "
+                + "Udon event such as Start instead.");
+        }
+    }
+
+    public static void RequireSupportedType(ITypeSymbol type)
+        => RequireSupportedType(
+            type,
+            new HashSet<ITypeSymbol>(
+                SymbolEqualityComparer.Default));
+
+    public static void RequireSupportedProgram(
+        IEnumerable<BoundMethodBody> bodies,
+        IEnumerable<IOperation> initializerRoots)
+    {
+        foreach (var body in bodies
+                     ?? Enumerable.Empty<BoundMethodBody>())
+        {
+            RequireSupportedMethod(body.MethodDefinition);
+            RequireSupportedOperation(body.AnalysisRoot);
+        }
+        foreach (var root in initializerRoots
+                     ?? Enumerable.Empty<IOperation>())
+            RequireSupportedOperation(root);
+    }
+
+    static void RequireSupportedOperation(IOperation root)
+    {
+        if (root == null)
+            return;
+        foreach (var operation in root.DescendantsAndSelf())
+        {
+            RequireSupportedType(operation.Type);
+            switch (operation)
+            {
+                case IInvocationOperation invocation:
+                    RequireSupportedMethod(
+                        invocation.TargetMethod);
+                    break;
+                case IObjectCreationOperation creation:
+                    RequireSupportedMethod(creation.Constructor);
+                    break;
+                case IMethodReferenceOperation reference:
+                    RequireSupportedMethod(reference.Method);
+                    break;
+                case IFieldReferenceOperation field:
+                    RequireSupportedType(
+                        field.Field.ContainingType);
+                    RequireSupportedType(field.Field.Type);
+                    break;
+                case IPropertyReferenceOperation property:
+                    RequireSupportedType(
+                        property.Property.ContainingType);
+                    RequireSupportedType(
+                        property.Property.Type);
+                    break;
+                case IEventReferenceOperation eventReference:
+                    RequireSupportedType(
+                        eventReference.Event.ContainingType);
+                    RequireSupportedType(
+                        eventReference.Event.Type);
+                    break;
+            }
+        }
+    }
+
+    static void RequireSupportedMethod(IMethodSymbol method)
+    {
+        if (method == null)
+            return;
+        RequireSupportedType(method.ContainingType);
+        RequireSupportedType(method.ReturnType);
+        foreach (var parameter in method.Parameters)
+            RequireSupportedType(parameter.Type);
+        foreach (var argument in method.TypeArguments)
+            RequireSupportedType(argument);
+    }
+
+    static void RequireSupportedType(
+        ITypeSymbol type,
+        HashSet<ITypeSymbol> visited)
+    {
+        if (type == null || !visited.Add(type))
+            return;
+        switch (type)
+        {
+            case IArrayTypeSymbol array:
+                RequireSupportedType(
+                    array.ElementType, visited);
+                return;
+            case IPointerTypeSymbol pointer:
+                RequireSupportedType(
+                    pointer.PointedAtType, visited);
+                return;
+            case INamedTypeSymbol named:
+                RequireSupportedNamedType(named);
+                foreach (var argument in named.TypeArguments)
+                    RequireSupportedType(argument, visited);
+                return;
+        }
+    }
+
+    static void RequireSupportedNamedType(
+        INamedTypeSymbol type)
+    {
+        if (type.DeclaringSyntaxReferences.Length == 0)
+            return;
+        if (type.IsRecord)
+            throw new NotSupportedException(
+                $"Record type '{type.ToDisplayString()}' is not supported: "
+                + "Udon cannot preserve the CLR record contracts for "
+                + "runtime type identity, equality, hashing, cloning, and "
+                + "printing. Use a class for reference semantics or a "
+                + "struct with explicit equality and copy operations for "
+                + "value semantics.");
+
+        var staticConstructor = type.GetMembers()
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(method =>
+                method.MethodKind
+                    == MethodKind.StaticConstructor
+                && !method.IsImplicitlyDeclared);
+        if (staticConstructor != null)
+            throw new NotSupportedException(
+                $"Static constructor "
+                + $"'{staticConstructor.ToDisplayString()}' is not "
+                + "supported: Udon has no CLR type-initialization hook. "
+                + "Use a storage-free static expression or initialize "
+                + "state explicitly from a UdonSharpBehaviour event.");
+
+        var destructor = type.GetMembers()
+            .OfType<IMethodSymbol>()
+            .FirstOrDefault(method =>
+                method.MethodKind == MethodKind.Destructor);
+        if (destructor != null)
+            throw new NotSupportedException(
+                $"Destructor '{destructor.ToDisplayString()}' is not "
+                + "supported: Udon exposes no CLR finalization or "
+                + "garbage-collection callback.");
     }
 }

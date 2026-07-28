@@ -327,9 +327,6 @@ internal sealed class BoundMethodBodyTable
                 && method.IsImplicitlyDeclared)
                 return CallableBodyDisposition.DedicatedLowering;
 
-            if (IsRecordLoweredMember(method, declaration))
-                return CallableBodyDisposition.DedicatedLowering;
-
             if (method.AssociatedSymbol is IPropertySymbol property
                 && HasCompilerBackingField(property))
                 return CallableBodyDisposition
@@ -346,21 +343,6 @@ internal sealed class BoundMethodBodyTable
                 return CallableBodyDisposition.NoBody;
 
             return CallableBodyDisposition.Unsupported;
-        }
-
-        static bool IsRecordLoweredMember(
-            IMethodSymbol method,
-            SyntaxNode declaration)
-        {
-            if (method.ContainingType is not
-                { IsRecord: true })
-                return false;
-            if (declaration is RecordDeclarationSyntax
-                || method.IsImplicitlyDeclared)
-                return true;
-            return method.AssociatedSymbol
-                    is IPropertySymbol property
-                && HasCompilerBackingField(property);
         }
 
         static bool HasCompilerBackingField(

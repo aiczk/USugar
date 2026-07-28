@@ -47,7 +47,7 @@ USugar integrates with the existing UdonSharp pipeline and requires no SDK modif
 
 ## Supported C#
 
-USugar supports user-defined classes, structs, records, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, and recursion.
+USugar supports user-defined classes and structs, interfaces, inheritance, virtual dispatch, generic types and methods, delegates, closures, events, tuples, nullable values, pattern matching, switch expressions, local functions, and recursion.
 
 It also supports common language constructs such as `ref` and `out` parameters, `using`, user-defined operators and conversions, ranges, index-from-end expressions, and string interpolation.
 
@@ -84,8 +84,9 @@ USugar reports a compile error when the Udon VM cannot preserve the source progr
 - `foreach` supports arrays, not `IEnumerable` or `List<T>`.
 - Multidimensional arrays are unsupported; use one-dimensional or jagged arrays.
 - Runtime construction of `UdonSharpBehaviour` instances is unsupported.
-- `GetType()` is unsupported when a value can contain a USugar class, struct, record, or delegate bundle.
-- Delegate signatures containing `ref` or `out` parameters are unsupported.
+- Records are unsupported. Their CLR contracts combine runtime type identity, equality, hashing, cloning, and printing; USugar rejects them instead of implementing only a subset. Use a class for reference semantics or a struct with explicit equality and copy operations for value semantics.
+- Static constructors, module initializers, destructors, and explicit constructors on `UdonSharpBehaviour` types are unsupported because Udon has no matching CLR lifetime hooks.
+- `GetType()` is unsupported when a value can contain a USugar class, struct, or delegate bundle.
 - User classes can cross program boundaries through typed fields, methods, and interfaces, but erasure to `object`, network sync, and `[NetworkCallable]` are restricted.
 - Delegates whose signatures contain user classes are limited to private, same-program use.
 - Mutable static fields, auto-properties, and events are unsupported. Constants, compile-time-foldable `static readonly` values, static methods, and computed static properties are supported.

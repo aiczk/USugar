@@ -121,7 +121,6 @@ public class NativeCarrierHost : UdonSharpBehaviour {
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
-public record DynamicRecord(int Value);
 public class DynamicEqualsHost : UdonSharpBehaviour {
     public object left;
     public object right;

@@ -1107,7 +1107,7 @@ static class USugarCompilationOrchestrator
                 + string.Join("\n", defines.OrderBy(
                     define => define, StringComparer.Ordinal));
             var parseOptions =
-                new CSharpParseOptions(LanguageVersion.Latest)
+                new CSharpParseOptions(LanguageVersion.CSharp9)
                     .WithPreprocessorSymbols(defines);
             var sourceText = File.ReadAllText(path);
             if (_treeCache.TryGetValue(path, out var cached)

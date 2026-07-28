@@ -322,34 +322,6 @@ public static class AggregateAbi
         Func<INamedTypeSymbol, AggregateLayout> getLayout)
         => DeepClone(builder, source, getLayout(aggregateType), getLayout);
 
-    /// <summary>Record clone semantics: allocate a fresh outer object, copy reference fields, and
-    /// value-copy object[]-backed struct fields. This is the common clone used by class-record and
-    /// record-struct with-expressions.</summary>
-    public static CLeaf CloneRecord(
-        CoreBuilder builder, CLeaf source,
-        AggregateLayout layout,
-        Func<INamedTypeSymbol, AggregateLayout> getLayout)
-    {
-        var destination = builder.AllocScratch(
-            new StorageType(ArrayType));
-        builder.EmitAssign(
-            destination, AllocateBundle(builder, layout));
-        foreach (var field in layout.Fields)
-        {
-            var value = ReadSlot(
-                builder, source, field.Index,
-                new StorageType(ElementType));
-            if (field.Type is INamedTypeSymbol aggregate
-                && field.Bundle == RuntimeBundleKind.Aggregate)
-                value = DeepClone(
-                    builder, value, aggregate, getLayout);
-            WriteSlot(
-                builder, builder.SlotRef(destination),
-                field.Index, value);
-        }
-        return builder.SlotRef(destination);
-    }
-
     /// <summary>Allocate and default-initialize a fresh aggregate bundle.</summary>
     public static CLeaf MintDefault(CoreBuilder builder, AggregateLayout layout,
         Func<INamedTypeSymbol, AggregateLayout> getLayout, Func<ITypeSymbol, string> getUdonType)

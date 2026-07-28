@@ -95,6 +95,10 @@ public sealed class UasmEmitter
     {
         if (session == null) throw new ArgumentNullException(nameof(session));
         CompilerDiagnosticPolicy.RequireSupported(session);
+        SourceSemanticProfile.RequireSupportedCompilation(
+            session.Compilation);
+        SourceSemanticProfile.RequireSupportedBehaviour(
+            classSymbol);
         _session = session;
         var layouts =
             planner ?? new LayoutPlanBuilder(session).Build();
@@ -290,6 +294,12 @@ public sealed class UasmEmitter
         var methods = ComputeMethods();
         var reachable = BuildReachableBodiesViaResolver(
             methods, fieldInitializers, sourceBodies);
+        SourceSemanticProfile.RequireSupportedProgram(
+            reachable.BodyByDef.Values
+                .Concat(
+                    reachable.GenericForeignStaticBodies
+                        .Values),
+            fieldInitializers);
         var methodSet = new HashSet<IMethodSymbol>(
             methods, SymbolEqualityComparer.Default);
         var programMethods = ExecutableProjection(
@@ -422,7 +432,7 @@ public sealed class UasmEmitter
 
     IEnumerable<IMethodSymbol> EnumerateAdditionalCallableDefinitions()
         => _planner.Census.Classes
-            .Where(type => IsUserClass(type))
+            .Where(TypeClassifier.IsUserClassLeaf)
             .SelectMany(type => type.GetMembers().OfType<IMethodSymbol>());
 
     // CA call-graph rewrite (M5a cutover): the reach fixpoint now runs through the unified resolver-driven
@@ -1116,7 +1126,7 @@ public sealed class UasmEmitter
 
         _userClassDefaultMethods = new HashSet<IMethodSymbol>(
             _planner.Census.Classes
-                .Where(type => IsUserClass(type))
+                .Where(TypeClassifier.IsUserClassLeaf)
                 .SelectMany(type => type.AllInterfaces
                     .Where(iface =>
                         _planner.AllLayouts.ContainsKey(iface))

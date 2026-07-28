@@ -43,14 +43,18 @@ public sealed class CompilationTypeCensus
         var roots = Classes.Where(ExternResolver.IsUdonSharpBehaviour)
             .SelectMany(PortableSurfaceTypes).SelectMany(ExpandPortableTypes)
             .OfType<INamedTypeSymbol>().ToArray();
-        var classRoots = roots.Where(TypeClassifier.IsUserClass).ToArray();
+        // The census is descriptive, not an emit-time semantic use. Keep
+        // unsupported but unrelated source declarations from poisoning a
+        // different behaviour program; SourceSemanticProfile rejects them
+        // when a program actually consumes their type.
+        var classRoots = roots.Where(TypeClassifier.IsUserClassLeaf).ToArray();
         var interfaceRoots = roots.Where(t => t.TypeKind == TypeKind.Interface).ToArray();
         var portable = new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
         foreach (var root in classRoots)
             if (!root.IsAbstract && !ClassTypeObjectContext.ContainsTypeParameter(root)) portable.Add(root);
         foreach (var type in Classes)
             if (!type.IsAbstract && !ClassTypeObjectContext.ContainsTypeParameter(type)
-                && TypeClassifier.IsUserClass(type)
+                && TypeClassifier.IsUserClassLeaf(type)
                 && (classRoots.Any(root => VirtualDispatch.IsAssignable(type, root))
                     || interfaceRoots.Any(iface => type.AllInterfaces.Any(i =>
                         SymbolEqualityComparer.Default.Equals(i, iface)))))
