@@ -219,8 +219,12 @@ public sealed class UasmEmitter
         var fields = DiscoverFields();
         var fieldInitializers =
             fields.InitializerOperations.ToArray();
+        var sourceBodies =
+            new BoundMethodBodyTable.Materializer(_compilation);
+        sourceBodies.RegisterNestedCallables(fieldInitializers);
         var (callables, reach) =
-            DiscoverCallablesAndReach(fieldInitializers);
+            DiscoverCallablesAndReach(
+                fieldInitializers, sourceBodies);
         // Stage 2: closure-scope analysis feeding real codegen — EnvEmit's alloc/read/write and every
         // IsCapturingClosure call site (LoweringServices, InvocationHandler.Extern, this file) key off it.
         // Its roots are the reach definition projection (ComputeCaptureRoots); root bodies come from the
@@ -238,9 +242,10 @@ public sealed class UasmEmitter
         var initializerRoots = fieldInitializers
             .Concat(CollectConstructedClassInitializerRoots(reach))
             .ToArray();
+        sourceBodies.RegisterNestedCallables(initializerRoots);
         var bodyGraph = new RecursionNodeWalk(
             EdgeResolver, reach, initializerRoots,
-            callables.Definitions).Run();
+            callables.Definitions, sourceBodies).Run();
         var closureIdentities = ClosureIdentityPlan.Build(bodyGraph.AllNodes);
         var captureRoots = ComputeCaptureRoots(reach);
         var captures = CaptureScopeAnalysis.Build(
@@ -254,7 +259,8 @@ public sealed class UasmEmitter
             fieldInitializers,
             bodyGraph,
             closureIdentities,
-            captures);
+            captures,
+            sourceBodies);
         _builder.Complete();
         FlatVerify.Verify(_module);
         CoreFlatOptimizer.CoalesceSlots(_module);
@@ -269,14 +275,15 @@ public sealed class UasmEmitter
 
     (CallableDefinitionPlan Callables, ReachabilityPlan Reach)
         DiscoverCallablesAndReach(
-            IReadOnlyList<IOperation> fieldInitializers)
+            IReadOnlyList<IOperation> fieldInitializers,
+            BoundMethodBodyTable.Materializer sourceBodies)
     {
         // Build the single ReachableBodies fixpoint once after field discovery, but before any field
         // declaration reaches Structured IR. Initializers are semantic roots for the plan.
         // BuildRecursionInfo roots, and CaptureScope roots (all in EmitMethods / injected below).
         var methods = ComputeMethods();
         var reachable = BuildReachableBodiesViaResolver(
-            methods, fieldInitializers);
+            methods, fieldInitializers, sourceBodies);
         var methodSet = new HashSet<IMethodSymbol>(
             methods, SymbolEqualityComparer.Default);
         var baseInstanceMethods = reachable.BaseCopies
@@ -303,7 +310,7 @@ public sealed class UasmEmitter
             .ToArray();
         var census = new GenericTypeSpecCensus(
             _compilation,
-            GetMethodBodyOperation,
+            sourceBodies.GetOperation,
             EnumerateClassFieldInitOps,
             _classSymbol).Build(
                 methods
@@ -364,8 +371,10 @@ public sealed class UasmEmitter
     // (ReachableBodies.OpenGenericBaseRoots) and reach the recursion graph through BodyByDef, so the former
     // legacy _openGenericBaseDefs side-effect field is gone — the recursion node source is the reach result.
     ReachableBodies BuildReachableBodiesViaResolver(
-        IMethodSymbol[] methods, IReadOnlyList<IOperation> fieldInitializers)
-        => new ResolverDrivenReach(EdgeResolver, GetMethodBodyOperation,
+        IMethodSymbol[] methods,
+        IReadOnlyList<IOperation> fieldInitializers,
+        BoundMethodBodyTable.Materializer sourceBodies)
+        => new ResolverDrivenReach(EdgeResolver, sourceBodies.Get,
             () => fieldInitializers, IsCollectibleStructMember, StableOrdinalKey).Build(methods);
 
     void SetReflectionValues()
@@ -1081,7 +1090,8 @@ public sealed class UasmEmitter
         IReadOnlyList<IOperation> fieldInitializers,
         CallableBodyGraph bodyGraph,
         ClosureIdentityPlan closureIdentities,
-        CaptureScopeAnalysis captures)
+        CaptureScopeAnalysis captures,
+        BoundMethodBodyTable.Materializer sourceBodies)
     {
         RegisterProgram(
             callables, reach, fieldInitializers);
@@ -1106,8 +1116,7 @@ public sealed class UasmEmitter
         _state.Methods.FreezeCallableRegistry();
         var callableBodies =
             _state.Methods.RegisteredBodies.ToArray();
-        var methodBodies = BoundMethodBodyTable.Materialize(
-            _compilation,
+        var methodBodies = sourceBodies.Freeze(
             callableBodies.Select(
                 body => body.Method.OriginalDefinition));
         var abiBuilder = new BoundAbiPlanBuilder(
@@ -1688,6 +1697,8 @@ public sealed class UasmEmitter
     {
         var exports = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
         foreach (var root in reach.BodyByDef.Values
+                     .Select(body => body?.AnalysisRoot)
+                     .Where(body => body != null)
                      .Concat(fieldInitializers))
             foreach (var operation in root.DescendantsAndSelf())
             {
@@ -2229,14 +2240,6 @@ public sealed class UasmEmitter
     /// <summary>The single ReachableBodies fixpoint result (design §1), built once in Emit() before
     /// CaptureScopeAnalysis and consumed by the Phase-1 registration regimes, BuildRecursionInfo roots,
     /// and CaptureScope roots. Carries each reachable DEFINITION's body fetched EXACTLY ONCE.</summary>
-
-    IOperation GetMethodBodyOperation(IMethodSymbol method)
-    {
-        var syntaxRef = method?.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return null;
-        var syntax = syntaxRef.GetSyntax();
-        return _compilation.GetSemanticModel(syntax.SyntaxTree).GetOperation(syntax);
-    }
 
     // C4 retirement dedup: the ONE IsForeignStatic (InvocationHandler carried a byte-identical
     // open-coded copy) — static, parameterized by the compiled class. Extension methods: ReducedFrom

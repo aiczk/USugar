@@ -13,14 +13,14 @@ using Microsoft.CodeAnalysis;
 internal sealed class ResolverDrivenReach
 {
     readonly ResolvedEdgeResolver _resolver;
-    readonly Func<IMethodSymbol, IOperation> _bodyOf;
+    readonly Func<IMethodSymbol, BoundMethodBody> _bodyOf;
     readonly Func<IEnumerable<IOperation>> _fieldInitOps;
     readonly Func<IMethodSymbol, bool> _isCollectibleStructMember;
     readonly Func<ISymbol, string> _stableKey;
 
     public ResolverDrivenReach(
         ResolvedEdgeResolver resolver,
-        Func<IMethodSymbol, IOperation> bodyOf,
+        Func<IMethodSymbol, BoundMethodBody> bodyOf,
         Func<IEnumerable<IOperation>> fieldInitOps,
         Func<IMethodSymbol, bool> isCollectibleStructMember,
         Func<ISymbol, string> stableKey)
@@ -109,7 +109,7 @@ internal sealed class ResolverDrivenReach
                 var def = queue.Dequeue();
                 var body = _bodyOf(def);
                 result.BodyByDef[def] = body;
-                Walk(body);
+                Walk(body?.AnalysisRoot);
                 EnqueueDiscovered();
             }
         }
@@ -135,7 +135,7 @@ internal sealed class ResolverDrivenReach
             if (result.GenericForeignStaticBodies.ContainsKey(def)) continue;
             var suppBody = _bodyOf(def);
             result.GenericForeignStaticBodies[def] = suppBody;
-            Walk(suppBody);
+            Walk(suppBody?.AnalysisRoot);
             EnqueueDiscovered();
             DrainMain();
             EnqueueSupp();

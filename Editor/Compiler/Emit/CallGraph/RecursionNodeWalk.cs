@@ -15,7 +15,7 @@ internal sealed class CallableBodyGraph
     public HashSet<IMethodSymbol> CallableDefinitions;
     /// <summary>Every recursion-graph node (roots, local functions, lambdas), deduped.</summary>
     public IMethodSymbol[] AllNodes;
-    public Dictionary<IMethodSymbol, IOperation> Bodies;
+    public Dictionary<IMethodSymbol, BoundMethodBody> Bodies;
     public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> Edges;
     public Dictionary<IMethodSymbol, HashSet<IFieldSymbol>> DirectThisTouches;
     public Dictionary<IMethodSymbol, HashSet<IMethodSymbol>> AccessorEdges;
@@ -58,15 +58,18 @@ internal sealed class RecursionNodeWalk
     readonly ReachabilityPlan _reach;
     readonly IEnumerable<IOperation> _initializerRoots;
     readonly IEnumerable<IMethodSymbol> _plannedCallables;
+    readonly BoundMethodBodyTable.Materializer _sourceBodies;
 
     public RecursionNodeWalk(ResolvedEdgeResolver resolver, ReachabilityPlan reach,
         IEnumerable<IOperation> initializerRoots,
-        IEnumerable<IMethodSymbol> plannedCallables)
+        IEnumerable<IMethodSymbol> plannedCallables,
+        BoundMethodBodyTable.Materializer sourceBodies)
     {
         _resolver = resolver;
         _reach = reach;
         _initializerRoots = initializerRoots;
         _plannedCallables = plannedCallables;
+        _sourceBodies = sourceBodies;
     }
 
     public CallableBodyGraph Run()
@@ -82,7 +85,7 @@ internal sealed class RecursionNodeWalk
         // unique by dictionary construction — both legs only ever served the deleted supp-key concat.
         var roots = _reach.BodyByDef.Keys.ToList();
 
-        var bodies = new Dictionary<IMethodSymbol, IOperation>(cmp);
+        var bodies = new Dictionary<IMethodSymbol, BoundMethodBody>(cmp);
         var rawTargets = new Dictionary<IMethodSymbol, HashSet<IMethodSymbol>>(cmp);
         var rawEscapes = new HashSet<IMethodSymbol>(cmp);
         var rawVariantSigs = new List<(IMethodSymbol Method, string Sig)>();
@@ -95,7 +98,7 @@ internal sealed class RecursionNodeWalk
         // Every node is registered UNCONDITIONALLY, null body included — an auto-property accessor's
         // operation is a bodyless null yet must still be a graph node (empty edge/touch sets); dropping
         // null-body nodes would lose them from RecursionGraphNodes.
-        void AddNode(IMethodSymbol sym, IOperation body)
+        void AddNode(IMethodSymbol sym, BoundMethodBody body)
         {
             if (bodies.ContainsKey(sym)) return;
             bodies[sym] = body;
@@ -125,7 +128,7 @@ internal sealed class RecursionNodeWalk
                     // a foreign static lands in the supp dict as an ILocalFunctionOperation; discovered
                     // use-before-declaration it would otherwise seed wrapped and lose its edges.
                     // Pinned by facet_foreign_generic_static_local_function.
-                    AddNode(d, (suppBody as ILocalFunctionOperation)?.Body ?? suppBody);
+                    AddNode(d, suppBody);
                 }
             if (op is ILocalFunctionOperation lf)
             {
@@ -133,7 +136,10 @@ internal sealed class RecursionNodeWalk
                 {
                     var def = lf.Symbol.OriginalDefinition;
                     localFuncs.Add(def);
-                    AddNode(def, lf.Body);
+                    AddNode(
+                        def,
+                        _sourceBodies.RegisterNestedCallable(
+                            def, lf));
                     return; // own node — the worklist walks its body
                 }
                 node = null;
@@ -142,7 +148,10 @@ internal sealed class RecursionNodeWalk
             {
                 if (af.Symbol != null && af.Body != null)
                 {
-                    AddNode(af.Symbol, af.Body);
+                    AddNode(
+                        af.Symbol,
+                        _sourceBodies.RegisterNestedCallable(
+                            af.Symbol, af));
                     return; // own node — the worklist walks its body
                 }
                 node = null;
@@ -189,14 +198,14 @@ internal sealed class RecursionNodeWalk
             // key and returns without walking, silently dropping the LF's edges (a self-recursive local
             // function lost its spill edge). Pinned by facet_foreign_static_local_function.
             var body = _reach.BodyByDef[m]; // seed roots are exactly BodyByDef keys
-            AddNode(m, (body as ILocalFunctionOperation)?.Body ?? body);
+            AddNode(m, body);
         }
         foreach (var initOp in _initializerRoots)
             Visit(initOp, null);
         while (queue.Count > 0)
         {
             var node = queue.Dequeue();
-            Visit(bodies[node], node);
+            Visit(bodies[node]?.CallableRoot, node);
         }
 
         var methodSet = new HashSet<IMethodSymbol>(roots, cmp);

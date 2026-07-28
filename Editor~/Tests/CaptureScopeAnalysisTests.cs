@@ -33,6 +33,21 @@ public class CaptureScopeAnalysisTests
         return roots;
     }
 
+    static System.Collections.Generic.IReadOnlyDictionary<
+        IMethodSymbol, BoundMethodBody> Bodies(
+        Compilation compilation,
+        System.Collections.Generic.IReadOnlyList<IMethodSymbol> roots)
+    {
+        var materializer =
+            new BoundMethodBodyTable.Materializer(compilation);
+        var result = new System.Collections.Generic.Dictionary<
+            IMethodSymbol, BoundMethodBody>(
+            SymbolEqualityComparer.Default);
+        foreach (var method in roots)
+            result.Add(method, materializer.Get(method));
+        return result;
+    }
+
     static CaptureScope OwnerScope(CaptureScopeAnalysis a, string capturedName)
         => a.CapturedSlots.Single(kv => kv.Key.Name == capturedName).Value.Scope;
 
@@ -454,7 +469,10 @@ public class CurryClass : UdonSharpBehaviour {
     }
 }", "CurryClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
+        var roots = Roots(classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(
+            comp, classSymbol, roots, Bodies(comp, roots),
+            System.Array.Empty<IOperation>());
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         Assert.Equal(2, lambdas.Length);
         var outer = lambdas[0];
@@ -493,7 +511,10 @@ public class NestedParamClass : UdonSharpBehaviour {
     }
 }", "NestedParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
+        var roots = Roots(classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(
+            comp, classSymbol, roots, Bodies(comp, roots),
+            System.Array.Empty<IOperation>());
         var lambdas = LambdaScopesInEncounterOrder(analysis);
         var outer = lambdas[0];
         var inner = lambdas[1];
@@ -527,7 +548,10 @@ public class NestedLfParamClass : UdonSharpBehaviour {
     }
 }", "NestedLfParamClass", out var classSymbol);
 
-        var analysis = CaptureScopeAnalysis.Build(comp, classSymbol, Roots(classSymbol), null, System.Array.Empty<IOperation>());
+        var roots = Roots(classSymbol);
+        var analysis = CaptureScopeAnalysis.Build(
+            comp, classSymbol, roots, Bodies(comp, roots),
+            System.Array.Empty<IOperation>());
         // `b` is the nested local function's param — not a capture of the outer lambda.
         Assert.False(IsCaptured(analysis, "b"));
         Assert.True(IsCaptured(analysis, "a"));
@@ -602,8 +626,14 @@ public class DeterminismClass : UdonSharpBehaviour {
     }
 }", "DeterminismClass", out var emitter);
 
-        var a1 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null, System.Array.Empty<IOperation>());
-        var a2 = CaptureScopeAnalysis.Build(emitter.Compilation, emitter.ClassSymbol, Roots(emitter.ClassSymbol), null, System.Array.Empty<IOperation>());
+        var roots = Roots(emitter.ClassSymbol);
+        var bodies = Bodies(emitter.Compilation, roots);
+        var a1 = CaptureScopeAnalysis.Build(
+            emitter.Compilation, emitter.ClassSymbol, roots, bodies,
+            System.Array.Empty<IOperation>());
+        var a2 = CaptureScopeAnalysis.Build(
+            emitter.Compilation, emitter.ClassSymbol, roots, bodies,
+            System.Array.Empty<IOperation>());
 
         Assert.Equal(a1.Scopes.Count, a2.Scopes.Count);
         Assert.Equal(a1.Scopes.Select(s => s.Kind), a2.Scopes.Select(s => s.Kind));

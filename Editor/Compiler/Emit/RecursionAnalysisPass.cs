@@ -144,15 +144,17 @@ internal sealed class RecursionAnalysisPass
         foreach (var node in allNodes)
         {
             if (!bodies.TryGetValue(node, out var nodeBody) || nodeBody == null) continue;
+            var nodeRoot = nodeBody.CallableRoot;
+            if (nodeRoot == null) continue;
             var dispatchSites = new List<IOperation>();
-            CollectDelegateDispatchSites(nodeBody, dispatchSites);
+            CollectDelegateDispatchSites(nodeRoot, dispatchSites);
             if (dispatchSites.Count == 0) continue;
             var nodeSigs = new List<string>();
             var nodeEdges = edges[node];
             foreach (var site in dispatchSites)
             {
                 if (site is not IInvocationOperation dinv || dinv.TargetMethod == null) continue;
-                if (TryResolvePreciseDispatchTargets(nodeBody, dinv, out var preciseTargets))
+                if (TryResolvePreciseDispatchTargets(nodeRoot, dinv, out var preciseTargets))
                 {
                     preciseDispatchTargets[site] = preciseTargets;
                     foreach (var t in preciseTargets)
@@ -244,7 +246,8 @@ internal sealed class RecursionAnalysisPass
             bool sccReenterable = reenterSigs.Count > 0;
             foreach (var caller in scc)
             {
-                bodies.TryGetValue(caller, out var callerBody);
+                bodies.TryGetValue(caller, out var callerSnapshot);
+                var callerBody = callerSnapshot?.CallableRoot;
                 // Wave-9 round-8 [Y3]: the UNFILTERED in-SCC edge set feeds the ref/out re-chain
                 // guard (IsCycleEdge) — a tail `return M(m-1, ref w);` re-chain corrupts exactly
                 // like the non-tail statement form, so the guard must not ride the tail filter.

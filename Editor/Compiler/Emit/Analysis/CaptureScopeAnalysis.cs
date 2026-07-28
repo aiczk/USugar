@@ -204,12 +204,16 @@ public sealed class CaptureScopeAnalysis
     /// null fallback: the former own-class-instance-only re-collection silently dropped base and
     /// auto-property initializer closures (B50), so any caller that omitted the list would silently
     /// reproduce that miscompile. Callers with no emitter pass an explicit list (empty when the class has
-    /// no field initializers). Unlike <paramref name="reachBodies"/> (whose null arm self-fetches the SAME
-    /// roots, yielding identical bodies), an incomplete field-init list changes CONTENT, not just provenance.</param>
-    public static CaptureScopeAnalysis Build(Compilation compilation, INamedTypeSymbol classSymbol,
-        IReadOnlyList<IMethodSymbol> reachRoots, IReadOnlyDictionary<IMethodSymbol, IOperation> reachBodies,
+    /// no field initializers). The source-body map is authoritative; an incomplete field-init list
+    /// changes CONTENT, not just provenance.</param>
+    internal static CaptureScopeAnalysis Build(Compilation compilation, INamedTypeSymbol classSymbol,
+        IReadOnlyList<IMethodSymbol> reachRoots,
+        IReadOnlyDictionary<IMethodSymbol, BoundMethodBody> reachBodies,
         IReadOnlyList<IOperation> initializerRoots)
     {
+        if (reachBodies == null)
+            throw new ArgumentNullException(nameof(reachBodies),
+                "CaptureScopeAnalysis requires the shared source-body snapshot.");
         if (initializerRoots == null)
             throw new ArgumentNullException(nameof(initializerRoots),
                 "CaptureScopeAnalysis.Build requires the emitted field-initializer list (empty is fine) — "
@@ -227,18 +231,14 @@ public sealed class CaptureScopeAnalysis
         var rootBodies = new List<(IMethodSymbol Root, IOperation Body)>();
         foreach (var root in reachRoots)
         {
-            // C2: when a reach body map is injected (production), it is AUTHORITATIVE — every root came from
-            // its keys, so a miss is an invariant violation, not a fetch to paper over. Only the analysis-
-            // only / test path (reachBodies == null, no reach fixpoint) fetches the body itself.
-            IOperation body;
-            if (reachBodies != null)
-            {
-                if (!reachBodies.TryGetValue(root, out body))
-                    throw new InvalidOperationException(
-                        $"CaptureScopeAnalysis: reach root '{root?.ToDisplayString()}' is absent from the "
-                      + "injected ReachableBodies map (BodyByDef authoritativeness invariant violation).");
-            }
-            else body = GetOperationBody(compilation, root);
+            // C2: the source-body snapshot is AUTHORITATIVE — every root came from its keys,
+            // so a miss is an invariant violation, not a fetch to paper over.
+            if (!reachBodies.TryGetValue(
+                    root, out var bodySnapshot))
+                throw new InvalidOperationException(
+                    $"CaptureScopeAnalysis: reach root '{root?.ToDisplayString()}' is absent from the "
+                  + "injected source-body snapshot (authoritativeness invariant violation).");
+            var body = bodySnapshot?.CallableRoot;
             if (body != null) rootBodies.Add((root, body));
         }
 
@@ -267,13 +267,6 @@ public sealed class CaptureScopeAnalysis
         }
 
         return builder.Finish();
-    }
-
-    static IOperation GetOperationBody(Compilation compilation, IMethodSymbol method)
-    {
-        var syntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
-        if (syntaxRef == null) return null;
-        return compilation.GetSemanticModel(syntaxRef.SyntaxTree).GetOperation(syntaxRef.GetSyntax());
     }
 
     /// <summary>Miniature standalone twin of UasmEmitter.BuildRecursionInfo's [K2] fixpoint: a local
