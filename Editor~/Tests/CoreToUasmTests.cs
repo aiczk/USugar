@@ -95,6 +95,76 @@ public class CoreToUasmTests
     }
 
     [Fact]
+    public void VerifiedFlatModule_RejectsReservedUasmFieldName()
+    {
+        var module = new FlatModule(className: "ReservedField");
+        module.AddField(new FieldDecl(
+            "PUSH", StorageTypes.Int32, StorageDomain.User));
+        var function = module.AddFunction("main");
+        function.NewBlock().Terminator = new CRet();
+
+        var ex = Assert.Throws<VerificationException>(
+            () => VerifiedFlatModule.VerifyAndFreeze(module));
+
+        Assert.Contains("reserved UASM token", ex.Message);
+        Assert.Contains("PUSH", ex.Message);
+    }
+
+    [Fact]
+    public void CoreToUasm_FreshensGeneratedVariableAgainstUserField()
+    {
+        const string infrastructure =
+            "__intnl_returnJump_SystemUInt32_0";
+        var module = new FlatModule(className: "GeneratedCollision");
+        module.AddField(new FieldDecl(
+            infrastructure,
+            StorageTypes.UInt32,
+            StorageDomain.User));
+        var function = module.AddFunction("main");
+        function.NewBlock().Terminator = new CRet();
+
+        var result = CoreToUasm.Generate(
+            VerifiedFlatModule.VerifyAndFreeze(module));
+
+        Assert.Contains(
+            $"{infrastructure}: %SystemUInt32",
+            result.Uasm);
+        Assert.Contains(
+            $"{infrastructure}_1: %SystemUInt32",
+            result.Uasm);
+        Assert.Contains(
+            $"JUMP_INDIRECT, {infrastructure}_1",
+            result.Uasm);
+        UasmValidator.Validate(result.Uasm);
+    }
+
+    [Fact]
+    public void CoreToUasm_FreshensGeneratedLabelAgainstFixedHint()
+    {
+        var module = new FlatModule(className: "GeneratedLabelCollision");
+        var first = module.AddFunction("first");
+        first.NewBlock().Terminator = new CRet();
+
+        var second = module.AddFunction("second");
+        second.Slots.Add(new SlotDecl(
+            0, StorageTypes.Int32, SlotClass.Scratch));
+        var secondEntry = second.NewBlock();
+        var fixedLabel = second.NewBlock();
+        fixedLabel.Hint = "__first";
+        secondEntry.Instructions.Add(new CAssign(
+            0, new CConst(1, StorageTypes.Int32)));
+        secondEntry.Terminator = new CJump(fixedLabel.Id);
+        fixedLabel.Terminator = new CRet();
+
+        var result = CoreToUasm.Generate(
+            VerifiedFlatModule.VerifyAndFreeze(module));
+
+        Assert.Contains("    __first_1:", result.Uasm);
+        Assert.Contains("    __first:", result.Uasm);
+        UasmValidator.Validate(result.Uasm);
+    }
+
+    [Fact]
     public void ConstKey_DistinguishesClrKindsCollapsedToSystemObject()
     {
         Assert.NotEqual(ConstFormat.Key("SystemObject", null), ConstFormat.Key("SystemObject", "null"));

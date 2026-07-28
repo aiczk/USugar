@@ -174,6 +174,9 @@ public sealed class FlatModule
 {
     bool _frozen;
     BoundAbiPlan _abi;
+    readonly GeneratedNameAllocator _generatedSymbols = new();
+    readonly Dictionary<string, string> _generatedSymbolsByRole =
+        new(StringComparer.Ordinal);
 
     public IList<FlatFunction> Functions { get; private set; } =
         new List<FlatFunction>();
@@ -227,6 +230,43 @@ public sealed class FlatModule
     {
         ThrowIfFrozen();
         Fields.Add(field ?? throw new ArgumentNullException(nameof(field)));
+    }
+
+    /// <summary>
+    /// Allocate one stable compiler-owned symbol against every symbol already present
+    /// in this module. Roles make repeated requests idempotent across optimizer and
+    /// verification phases.
+    /// </summary>
+    internal string AllocateGeneratedSymbol(
+        string role, string preferredName)
+    {
+        ThrowIfFrozen();
+        if (_generatedSymbolsByRole.TryGetValue(role, out var existing))
+            return existing;
+
+        ReserveCurrentSymbols();
+        var allocated = _generatedSymbols.Allocate(preferredName);
+        _generatedSymbolsByRole.Add(role, allocated);
+        return allocated;
+    }
+
+    internal bool TryGetGeneratedSymbol(
+        string role, out string symbol)
+        => _generatedSymbolsByRole.TryGetValue(role, out symbol);
+
+    void ReserveCurrentSymbols()
+    {
+        foreach (var field in Fields)
+            _generatedSymbols.Reserve(field.Name);
+        foreach (var function in Functions)
+        {
+            _generatedSymbols.Reserve(function.Name);
+            _generatedSymbols.Reserve(function.ExportName);
+            foreach (var returnSlot in function.ReturnSlots)
+                _generatedSymbols.Reserve(returnSlot.Id);
+            foreach (var block in function.Blocks)
+                _generatedSymbols.Reserve(block.Hint);
+        }
     }
 
     internal FlatFunction RequireFunction(string name)

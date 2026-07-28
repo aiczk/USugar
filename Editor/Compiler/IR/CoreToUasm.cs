@@ -62,6 +62,8 @@ internal static class CoreToUasm
         readonly HashSet<string> _externs = new();
         readonly Dictionary<ConstKey, string> _constPool = new();
         readonly Dictionary<string, FlatFunction> _funcByName = new();
+        readonly GeneratedNameAllocator _generatedVariables = new();
+        readonly GeneratedNameAllocator _generatedLabels = new();
 
         // Slot → UASM variable name: keyed by (funcIndex, slotId) for global uniqueness.
         readonly Dictionary<(int funcIdx, int slotId), string> _slotVars = new();
@@ -75,11 +77,14 @@ internal static class CoreToUasm
         readonly List<(string VarName, string LabelName)> _retaddrConsts = new();
         readonly List<(string VarName, string LabelName)> _funcRefConsts = new();
         readonly Dictionary<string, string> _funcRefVars = new();
+        readonly Dictionary<FlatFunction, string> _bodyLabels = new();
 
         int _constIdx;
         int _retaddrIdx;
         int _intnlIdx;
         int _funcRefIdx;
+        string _returnJumpVar;
+        string _sentinelVar;
 
         struct VarDecl
         {
@@ -118,6 +123,8 @@ internal static class CoreToUasm
         public Generator(VerifiedFlatModule module)
         {
             _module = module;
+            foreach (var field in module.Fields)
+                _generatedVariables.Reserve(field.Name);
             foreach (var func in module.Functions)
             {
                 // Module-level uniqueness gate (2026-07-11 audit): a duplicate name would silently
@@ -127,13 +134,27 @@ internal static class CoreToUasm
                     throw new InvalidOperationException(
                         $"FlatModule contains two functions named '{func.Name}' — function names must be "
                         + "module-unique (emit-side index allocation bug).");
+
+                foreach (var returnSlot in func.ReturnSlots)
+                    _generatedVariables.Reserve(returnSlot.Id);
+                if (func.ExportName != null)
+                    _generatedLabels.Reserve(func.ExportName);
+                foreach (var block in func.Blocks)
+                    if (block != func.Entry && block.Hint != null)
+                        _generatedLabels.Reserve(block.Hint);
             }
         }
 
         public CodeGenResult Run()
         {
             // Phase 1: Infrastructure variable
-            DeclareVar("__intnl_returnJump_SystemUInt32_0", "SystemUInt32", "0xFFFFFFFF", FieldFlags.None);
+            _returnJumpVar = _generatedVariables.Allocate(
+                "__intnl_returnJump_SystemUInt32_0");
+            DeclareVar(
+                _returnJumpVar,
+                "SystemUInt32",
+                "0xFFFFFFFF",
+                FieldFlags.None);
 
             // Phase 2: Field declarations
             foreach (var field in _module.Fields)
@@ -198,8 +219,10 @@ internal static class CoreToUasm
 
         (string RetaddrVar, string RetLabel) AllocateReturnAddress(FlatFunction func)
         {
-            var retLabel = LabelNames.CallReturn(func.Name, _retaddrIdx);
-            var retaddrVar = $"__const_retaddr_SystemUInt32_{_retaddrIdx}";
+            var retLabel = _generatedLabels.Allocate(
+                LabelNames.CallReturn(func.Name, _retaddrIdx));
+            var retaddrVar = _generatedVariables.Allocate(
+                $"__const_retaddr_SystemUInt32_{_retaddrIdx}");
             _retaddrIdx++;
             _retaddrConsts.Add((retaddrVar, retLabel));
             return (retaddrVar, retLabel);
@@ -228,6 +251,7 @@ internal static class CoreToUasm
         void DeclareVar(string id, string udonType, string defaultValue, FieldFlags flags,
             string syncMode = null, object constValue = null, string purpose = "internal")
         {
+            UasmSymbolRules.RequireIdentifier(id, "UASM variable");
             var requested = new VarDescriptor(
                 udonType, defaultValue, flags, syncMode, constValue, purpose);
             if (_declaredVars.TryGetValue(id, out var existing))
@@ -286,7 +310,8 @@ internal static class CoreToUasm
             }
             else
             {
-                id = $"__intnl_{slot.Type}_{_intnlIdx++}";
+                id = _generatedVariables.Allocate(
+                    $"__intnl_{slot.Type}_{_intnlIdx++}");
                 DeclareVar(id, slot.Type.Name, null, FieldFlags.None);
             }
 
@@ -313,7 +338,8 @@ internal static class CoreToUasm
             var key = ConstFormat.Key(c.Type.Name, c.Value);
             if (_constPool.TryGetValue(key, out var existing))
                 return existing;
-            var id = $"__const_{c.Type}_{_constIdx++}";
+            var id = _generatedVariables.Allocate(
+                $"__const_{c.Type}_{_constIdx++}");
             _constPool[key] = id;
             DeclareVar(id, c.Type.Name, null, FieldFlags.None,
                 constValue: c.Value, purpose: "constant");
@@ -324,7 +350,8 @@ internal static class CoreToUasm
         {
             if (_funcRefVars.TryGetValue(fr.FuncName, out var existing))
                 return existing;
-            var varName = $"__const_funcaddr_SystemUInt32_{_funcRefIdx++}";
+            var varName = _generatedVariables.Allocate(
+                $"__const_funcaddr_SystemUInt32_{_funcRefIdx++}");
 
             // Find the target function to determine the right label
             if (!_funcByName.TryGetValue(fr.FuncName, out var target))
@@ -332,7 +359,7 @@ internal static class CoreToUasm
 
             // For exported functions, jump to body label (skip sentinel)
             var targetLabel = target.ExportName != null
-                ? NameAllocator.BodyLabel(target.Name)
+                ? _bodyLabels[target]
                 : _blockLabels[(FindFuncIndex(target), target.Entry.Id)];
 
             _funcRefConsts.Add((varName, targetLabel));
@@ -356,13 +383,22 @@ internal static class CoreToUasm
             {
                 string labelName;
                 if (block == func.Entry)
-                    labelName = func.ExportName ?? LabelNames.FunctionEntry(func.Name);
+                    labelName = func.ExportName
+                        ?? _generatedLabels.Allocate(
+                            LabelNames.FunctionEntry(func.Name));
                 else if (block.Hint != null)
                     labelName = block.Hint;
                 else
-                    labelName = LabelNames.Block(func.Name, block.Id);
+                    labelName = _generatedLabels.Allocate(
+                        LabelNames.Block(func.Name, block.Id));
                 _blockLabels[(funcIdx, block.Id)] = labelName;
             }
+
+            if (func.ExportName != null)
+                _bodyLabels.Add(
+                    func,
+                    _generatedLabels.Allocate(
+                        NameAllocator.BodyLabel(func.Name)));
 
             // Slot variables are declared lazily by GetSlotVar on first use.
             // This avoids declaring UASM variables for slots coalesced away by the register allocator.
@@ -397,11 +433,25 @@ internal static class CoreToUasm
             _externs.Add(sig);
         }
 
-        void AddLabel(string name) =>
-            _code.Add(new CodeLine { Kind = CodeKind.Label, LabelName = name });
+        void AddLabel(string name)
+        {
+            UasmSymbolRules.RequireIdentifier(name, "UASM label");
+            _code.Add(new CodeLine
+            {
+                Kind = CodeKind.Label,
+                LabelName = name
+            });
+        }
 
-        void AddExport(string name) =>
-            _code.Add(new CodeLine { Kind = CodeKind.Export, LabelName = name });
+        void AddExport(string name)
+        {
+            UasmSymbolRules.RequireIdentifier(name, "UASM export");
+            _code.Add(new CodeLine
+            {
+                Kind = CodeKind.Export,
+                LabelName = name
+            });
+        }
 
         void AddCopyPair(string src, string dst)
         {
@@ -437,10 +487,16 @@ internal static class CoreToUasm
                 AddLabel(_blockLabels[(funcIdx, func.Entry.Id)]);
                 // Sentinel: push 0xFFFFFFFF onto stack. The callee's RET will POP
                 // this into returnJump, causing JUMP_INDIRECT to halt (address > program size).
-                var sentinelVar = "__const_SystemUInt32_sentinel";
-                DeclareVar(sentinelVar, "SystemUInt32", null, FieldFlags.None, constValue: 0xFFFFFFFF);
-                AddPush(sentinelVar);
-                AddLabel(NameAllocator.BodyLabel(func.Name));
+                _sentinelVar ??= _generatedVariables.Allocate(
+                    "__const_SystemUInt32_sentinel");
+                DeclareVar(
+                    _sentinelVar,
+                    "SystemUInt32",
+                    null,
+                    FieldFlags.None,
+                    constValue: 0xFFFFFFFF);
+                AddPush(_sentinelVar);
+                AddLabel(_bodyLabels[func]);
             }
             else
             {
@@ -554,7 +610,7 @@ internal static class CoreToUasm
 
             var targetFuncIdx = FindFuncIndex(target);
             var bodyLabel = target.ExportName != null
-                ? NameAllocator.BodyLabel(target.Name)
+                ? _bodyLabels[target]
                 : _blockLabels[(targetFuncIdx, target.Entry.Id)];
             AddJump(bodyLabel);
 
@@ -574,7 +630,8 @@ internal static class CoreToUasm
             var ptrVar = ResolveOperand(call.Args[0], funcIdx, func);
 
             // Copy method pointer to a temp to keep stack balanced
-            var tempVar = $"__intnl_dlgptr_SystemUInt32_{_intnlIdx++}";
+            var tempVar = _generatedVariables.Allocate(
+                $"__intnl_dlgptr_SystemUInt32_{_intnlIdx++}");
             DeclareVar(tempVar, "SystemUInt32", null, FieldFlags.None);
             AddCopyPair(ptrVar, tempVar);
 
@@ -639,9 +696,9 @@ internal static class CoreToUasm
 
             // Stack-based return protocol: POP return address from stack into returnJump, then jump.
             // The caller (or sentinel preamble) pushed the return address onto the stack.
-            AddPush("__intnl_returnJump_SystemUInt32_0");
+            AddPush(_returnJumpVar);
             AddCopy();
-            AddJumpIndirect("__intnl_returnJump_SystemUInt32_0");
+            AddJumpIndirect(_returnJumpVar);
         }
 
         // ── Address computation ──

@@ -33,4 +33,45 @@ public class NameAllocatorTests
         Assert.Equal("__2_urlStr__param", NameAllocator.FormatId("urlStr__param", 2));
     }
 
+    [Theory]
+    [InlineData("_name")]
+    [InlineData("名前2")]
+    [InlineData("value<SystemInt32>[]")]
+    public void UasmSymbolRules_AcceptsScannerIdentifierGrammar(
+        string symbol)
+    {
+        Assert.True(UasmSymbolRules.IsIdentifier(symbol));
+    }
+
+    [Theory]
+    [InlineData("2name")]
+    [InlineData("name.dot")]
+    [InlineData("PUSH")]
+    [InlineData("null")]
+    public void UasmSymbolRules_RejectsNonIdentifiersAndReservedTokens(
+        string symbol)
+    {
+        Assert.False(UasmSymbolRules.IsIdentifier(symbol));
+    }
+
+    [Fact]
+    public void GeneratedNameAllocator_PreservesPreferredThenAllocatesFresh()
+    {
+        var allocator = new GeneratedNameAllocator(
+            new[] { "__generated", "__generated_1" });
+
+        Assert.Equal(
+            "__generated_2",
+            allocator.Allocate("__generated"));
+        Assert.Equal(
+            "__other",
+            allocator.Allocate("__other"));
+    }
+
+    [Fact]
+    public void Sanitize_RepairsAnInvalidLeadingCharacter()
+    {
+        Assert.Equal("_2name", NameAllocator.Sanitize("2name"));
+    }
+
 }

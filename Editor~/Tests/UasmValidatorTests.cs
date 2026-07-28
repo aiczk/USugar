@@ -329,4 +329,32 @@ public class UasmValidatorTests
         var ex = Assert.Throws<UasmValidationException>(() => UasmValidator.Validate(uasm));
         Assert.Contains("duplicate", ex.Message.ToLower());
     }
+
+    [Fact]
+    public void ReservedKeywordVariable_Throws()
+    {
+        var uasm = @".data_start
+    PUSH: %SystemInt32, null
+.data_end
+.code_start
+.code_end
+";
+        var ex = Assert.Throws<UasmValidationException>(
+            () => UasmValidator.Validate(uasm));
+        Assert.Contains("reserved UASM token", ex.Message);
+    }
+
+    [Fact]
+    public void ReservedKeywordLabel_Throws()
+    {
+        var uasm = @".data_start
+.data_end
+.code_start
+    PUSH:
+.code_end
+";
+        var ex = Assert.Throws<UasmValidationException>(
+            () => UasmValidator.Validate(uasm));
+        Assert.Contains("reserved UASM token", ex.Message);
+    }
 }

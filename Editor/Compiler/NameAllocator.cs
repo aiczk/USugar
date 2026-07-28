@@ -1,4 +1,95 @@
+using System;
 using System.Collections.Generic;
+
+/// <summary>
+/// The identifier token accepted by VRC's UAssembly scanner. Keep this as the single
+/// compiler/test authority: the scanner accepts a wider continuation set than its
+/// start set, and promotes these exact spellings to non-identifier keyword tokens.
+/// </summary>
+public static class UasmSymbolRules
+{
+    static readonly HashSet<string> ReservedWords =
+        new(StringComparer.Ordinal)
+        {
+            "this", "null", "true", "false",
+            "NOP", "PUSH", "POP", "JUMP_IF_FALSE", "JUMP",
+            "EXTERN", "ANNOTATION", "JUMP_INDIRECT", "COPY",
+        };
+
+    public static bool IsIdentifierStart(char c)
+        => char.IsLetter(c) || c == '_';
+
+    public static bool IsIdentifierPart(char c)
+        => char.IsLetterOrDigit(c) || c == '_'
+           || c == '<' || c == '>' || c == '[' || c == ']';
+
+    public static string WhyInvalidIdentifier(string name)
+    {
+        if (string.IsNullOrEmpty(name))
+            return "the symbol is empty";
+        if (!IsIdentifierStart(name[0]))
+            return $"'{name[0]}' is not legal at the start of a UASM identifier";
+        for (var i = 1; i < name.Length; i++)
+            if (!IsIdentifierPart(name[i]))
+                return $"'{name[i]}' is not legal in a UASM identifier";
+        if (ReservedWords.Contains(name))
+            return $"'{name}' is a reserved UASM token";
+        return null;
+    }
+
+    public static bool IsIdentifier(string name)
+        => WhyInvalidIdentifier(name) == null;
+
+    public static void RequireIdentifier(string name, string context)
+    {
+        var why = WhyInvalidIdentifier(name);
+        if (why != null)
+            throw new InvalidOperationException(
+                $"{context} '{name}' is not a legal UASM symbol: {why}.");
+    }
+}
+
+/// <summary>
+/// Fresh-name allocator for one complete UASM namespace. Fixed/user-authored names
+/// are reserved up front; compiler-generated names retain their historical spelling
+/// unless that spelling is already occupied.
+/// </summary>
+internal sealed class GeneratedNameAllocator
+{
+    readonly HashSet<string> _used = new(StringComparer.Ordinal);
+
+    public GeneratedNameAllocator()
+    {
+    }
+
+    public GeneratedNameAllocator(IEnumerable<string> reservedNames)
+    {
+        if (reservedNames == null) return;
+        foreach (var name in reservedNames)
+            Reserve(name);
+    }
+
+    public void Reserve(string name)
+    {
+        if (!string.IsNullOrEmpty(name))
+            _used.Add(name);
+    }
+
+    public string Allocate(string preferredName)
+    {
+        UasmSymbolRules.RequireIdentifier(
+            preferredName, "Generated symbol");
+        if (_used.Add(preferredName))
+            return preferredName;
+
+        for (var suffix = 1; ; suffix++)
+        {
+            var candidate = preferredName + "_" + suffix;
+            if (_used.Add(candidate))
+                return candidate;
+        }
+    }
+}
 
 /// <summary>
 /// Manages counter-based unique ID allocation for UASM variable naming.
@@ -38,14 +129,13 @@ public class NameAllocator
         if (string.IsNullOrEmpty(name)) return name;
         var chars = name.ToCharArray();
         for (var i = 0; i < chars.Length; i++)
-            if (!IsAssemblerIdentifierChar(chars[i]))
+            if (!UasmSymbolRules.IsIdentifierPart(chars[i]))
                 chars[i] = '_';
-        return new string(chars);
+        var sanitized = new string(chars);
+        return UasmSymbolRules.IsIdentifierStart(sanitized[0])
+            ? sanitized
+            : "_" + sanitized;
     }
-
-    static bool IsAssemblerIdentifierChar(char c)
-        => char.IsLetterOrDigit(c) || c == '_'
-           || c == '<' || c == '>' || c == '[' || c == ']';
 
     // The method-layout naming contract (LayoutPlanBuilder exports + every synthetic bridge): allocator
     // keys "{name}__param"/"{name}__ret", counter-qualified slot ids "__N_{name}__param"/

@@ -84,23 +84,11 @@ public static class UasmValidator
                 $"UASM variable reference errors:\n{string.Join("\n", errors)}");
     }
 
-    static bool IsAssemblerSymbol(string name)
-    {
-        if (string.IsNullOrEmpty(name)) return false;
-        if (!char.IsLetter(name[0]) && name[0] != '_') return false;
-        foreach (var c in name)
-            if (!char.IsLetterOrDigit(c) && c != '_'
-                && c != '<' && c != '>' && c != '[' && c != ']')
-                return false;
-        return true;
-    }
-
     static void ValidateSymbolGrammar(string uasm, Dictionary<string, string> declaredVars)
     {
         var errors = new List<string>();
         foreach (var name in declaredVars.Keys)
-            if (!IsAssemblerSymbol(name))
-                errors.Add($"heap variable '{name}' is not a legal assembler symbol");
+            AddSymbolError(errors, name, "heap variable");
 
         var inCode = false;
         foreach (var line in uasm.Split('\n'))
@@ -108,23 +96,48 @@ public static class UasmValidator
             var trimmed = line.Trim();
             if (trimmed == ".code_start") { inCode = true; continue; }
             if (trimmed == ".code_end") { inCode = false; continue; }
-            if (!inCode || !IsLabel(trimmed)) continue;
-            var label = trimmed.Substring(0, trimmed.Length - 1).Trim();
-            if (label.StartsWith(".export")) continue;
-            if (!IsAssemblerSymbol(label))
-                errors.Add($"label '{label}' is not a legal assembler symbol");
+
+            if (trimmed.StartsWith(".export "))
+                AddSymbolError(
+                    errors,
+                    trimmed.Substring(".export ".Length).Trim(),
+                    "export");
+            else if (trimmed.StartsWith(".sync "))
+            {
+                var comma = trimmed.IndexOf(',');
+                var symbol = comma < 0
+                    ? trimmed.Substring(".sync ".Length).Trim()
+                    : trimmed.Substring(
+                        ".sync ".Length,
+                        comma - ".sync ".Length).Trim();
+                AddSymbolError(errors, symbol, "sync target");
+            }
+
+            if (inCode && IsLabel(trimmed))
+                AddSymbolError(
+                    errors,
+                    trimmed.Substring(
+                        0, trimmed.Length - 1).Trim(),
+                    "label");
         }
 
         if (errors.Count > 0)
-            throw new Exception(
+            throw new UasmValidationException(
                 "UASM symbols outside the assembler grammar (the LexIdentifier set), so the real "
                 + "UAssembly parser rejects the program:\n  " + string.Join("\n  ", errors));
     }
 
-    static bool IsLabel(string trimmed) =>
-        trimmed.EndsWith(":") && !trimmed.StartsWith("PUSH") && !trimmed.StartsWith("JUMP")
-        && !trimmed.StartsWith("COPY") && !trimmed.StartsWith("POP") && !trimmed.StartsWith("EXTERN")
-        && !trimmed.StartsWith("NOP");
+    static void AddSymbolError(
+        List<string> errors,
+        string name,
+        string context)
+    {
+        var why = UasmSymbolRules.WhyInvalidIdentifier(name);
+        if (why != null)
+            errors.Add($"{context} '{name}' is not a legal assembler symbol: {why}");
+    }
+
+    static bool IsLabel(string trimmed) => trimmed.EndsWith(":");
 
     static void ValidateJumpTargets(string uasm)
     {

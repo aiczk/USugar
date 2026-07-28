@@ -29,8 +29,11 @@ internal static class CoreFlatOptimizer
 
     const string RecurStackId = RecurStack.StackId;
     const string RecurSpId = RecurStack.SpId;
-    internal const string RecurEnsureFunction = "__recurEnsure";
-    const string RecurEnsureNeed = "__recurEnsureNeed";
+    internal const string RecurEnsureFunctionRole =
+        "recursion.ensure.function";
+    const string RecurEnsureNeedRole = "recursion.ensure.need";
+    const string RecurEnsureFunctionBase = "__recurEnsure";
+    const string RecurEnsureNeedBase = "__recurEnsureNeed";
 
     /// <summary>
     /// Wrap each recursive-edge internal call with a software-stack spill/reload of the frame values it would
@@ -47,27 +50,31 @@ internal static class CoreFlatOptimizer
                            || func.ReentrantSiteCount != 0)
             .ToArray();
         if (spillFunctions.Length == 0) return;
-        EmitRecursionCapacityFunction(module);
+        var ensureFunction = module.AllocateGeneratedSymbol(
+            RecurEnsureFunctionRole, RecurEnsureFunctionBase);
+        var ensureNeed = module.AllocateGeneratedSymbol(
+            RecurEnsureNeedRole, RecurEnsureNeedBase);
+        EmitRecursionCapacityFunction(
+            module, ensureFunction, ensureNeed);
         foreach (var func in spillFunctions)
-            InsertRecursionSpillsFunc(func, abi);
+            InsertRecursionSpillsFunc(func, abi, ensureFunction);
     }
 
-    static void EmitRecursionCapacityFunction(FlatModule module)
+    static void EmitRecursionCapacityFunction(
+        FlatModule module,
+        string ensureFunction,
+        string ensureNeed)
     {
-        if (!module.Fields.Any(field =>
-                string.Equals(
-                    field.Name, RecurEnsureNeed,
-                    StringComparison.Ordinal)))
-            module.AddField(new FieldDecl(
-                RecurEnsureNeed, StorageTypes.Int32,
-                StorageDomain.Generated)
-            {
-                DefaultValue = 0
-            });
+        module.AddField(new FieldDecl(
+            ensureNeed, StorageTypes.Int32,
+            StorageDomain.Generated)
+        {
+            DefaultValue = 0
+        });
 
         var builder = new CoreBuilder(module);
-        var function = builder.BeginFunction(RecurEnsureFunction);
-        function.ParamFieldNames.Add(RecurEnsureNeed);
+        var function = builder.BeginFunction(ensureFunction);
+        function.ParamFieldNames.Add(ensureNeed);
 
         var stack = builder.LoadField(
             RecurStackId, StorageTypes.ObjectArray);
@@ -78,7 +85,7 @@ internal static class CoreFlatOptimizer
         var sp = builder.LoadField(
             RecurSpId, StorageTypes.Int32);
         var need = builder.LoadField(
-            RecurEnsureNeed, StorageTypes.Int32);
+            ensureNeed, StorageTypes.Int32);
         var required = builder.ExternCall(
             UdonAbi.Int32Add,
             new List<CLeaf> { sp, need },
@@ -191,7 +198,10 @@ internal static class CoreFlatOptimizer
     // __intnl_ vars in total).
     const int SpillTempCoalesceThreshold = 64;
 
-    static void InsertRecursionSpillsFunc(FlatFunction func, BoundAbiPlan abi)
+    static void InsertRecursionSpillsFunc(
+        FlatFunction func,
+        BoundAbiPlan abi,
+        string ensureFunction)
     {
         // Spill work exists when the function has named recursive callees OR Reentrant-flagged
         // delegate-dispatch sites (design §4.3 — flag count is tracked on the function).
@@ -241,7 +251,8 @@ internal static class CoreFlatOptimizer
                         EmitEnsureCapacity(
                             saveStmts,
                             func.RecursionSpillFields.Count
-                            + liveSlots.Count);
+                            + liveSlots.Count,
+                            ensureFunction);
                         EmitSpill(
                             func, saveStmts,
                             func.RecursionSpillFields, liveSlots, abi);
@@ -252,7 +263,8 @@ internal static class CoreFlatOptimizer
                         EmitEnsureCapacity(
                             newStmts,
                             func.RecursionSpillFields.Count
-                            + liveSlots.Count);
+                            + liveSlots.Count,
+                            ensureFunction);
                         EmitSpill(
                             func, newStmts,
                             func.RecursionSpillFields, liveSlots, abi);
@@ -411,10 +423,11 @@ internal static class CoreFlatOptimizer
 
     static void EmitEnsureCapacity(
         List<IFlatInstruction> output,
-        int frameSize)
+        int frameSize,
+        string ensureFunction)
     {
         output.Add(new CExprStmt(new CInternalCall(
-            RecurEnsureFunction,
+            ensureFunction,
             new List<CLeaf>
             {
                 new CConst(frameSize, StorageTypes.Int32)

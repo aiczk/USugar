@@ -22,6 +22,7 @@ internal static class FlatVerify
     {
         if (module == null) throw new ArgumentNullException(nameof(module));
 
+        VerifyUasmSymbols(module);
         var fields = BuildFieldIndex(module);
         var functions = new Dictionary<string, FlatFunction>(StringComparer.Ordinal);
         foreach (var function in module.Functions)
@@ -34,6 +35,73 @@ internal static class FlatVerify
             Verify(function);
             VerifyTypes(function, module.TypeFacts, fields, functions);
         }
+    }
+
+    static void VerifyUasmSymbols(FlatModule module)
+    {
+        foreach (var field in module.Fields)
+            RequireUasmSymbol(field.Name, "Field");
+
+        var fixedLabels = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var function in module.Functions)
+        {
+            foreach (var returnSlot in function.ReturnSlots)
+                RequireUasmSymbol(returnSlot.Id, "Return field");
+
+            foreach (var block in function.Blocks)
+            {
+                if (block == function.Entry)
+                {
+                    if (function.ExportName != null)
+                        RequireUniqueFixedLabel(
+                            function.ExportName,
+                            fixedLabels,
+                            function.Name);
+                    else
+                        RequireUasmSymbol(
+                            LabelNames.FunctionEntry(function.Name),
+                            "Generated code label");
+                }
+                else if (block.Hint != null)
+                {
+                    RequireUniqueFixedLabel(
+                        block.Hint,
+                        fixedLabels,
+                        function.Name);
+                }
+                else
+                {
+                    RequireUasmSymbol(
+                        LabelNames.Block(function.Name, block.Id),
+                        "Generated code label");
+                }
+            }
+
+            if (function.ExportName != null)
+                RequireUasmSymbol(
+                    NameAllocator.BodyLabel(function.Name),
+                    "Generated function-body label");
+        }
+    }
+
+    static void RequireUasmSymbol(string name, string context)
+    {
+        var why = UasmSymbolRules.WhyInvalidIdentifier(name);
+        if (why != null)
+            throw new VerificationException(
+                $"{context} '{name}' cannot be emitted as a UASM identifier: {why}.");
+    }
+
+    static void RequireUniqueFixedLabel(
+        string label,
+        HashSet<string> labels,
+        string functionName)
+    {
+        RequireUasmSymbol(label, "Fixed code label");
+        if (!labels.Add(label))
+            throw new VerificationException(
+                $"Duplicate UASM label '{label}' while verifying "
+                + $"function '{functionName}'.");
     }
 
     static Dictionary<string, StorageType> BuildFieldIndex(FlatModule module)
@@ -359,6 +427,9 @@ internal static class FlatVerify
 
     internal static void VerifySpillsInserted(FlatModule module)
     {
+        module.TryGetGeneratedSymbol(
+            CoreFlatOptimizer.RecurEnsureFunctionRole,
+            out var recurEnsureFunction);
         foreach (var f in module.Functions)
         {
             var needsFrame = false;
@@ -371,7 +442,7 @@ internal static class FlatVerify
                         || inst is CExprStmt { Expr: CInternalCall { Reentrant: true } })
                         needsFrame = true;
                     if (inst is CExprStmt { Expr: CInternalCall ensure }
-                        && ensure.FuncName == CoreFlatOptimizer.RecurEnsureFunction)
+                        && ensure.FuncName == recurEnsureFunction)
                         hasFrame = true;
                 }
             if (needsFrame && !hasFrame)
