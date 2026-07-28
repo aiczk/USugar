@@ -15,6 +15,7 @@ public sealed class UasmEmitter
     readonly SyntheticBridgeBuilder _bridge;
     readonly DelegateConventionStorage _delegateConvention;
     readonly LoweringServices _lowering;
+    readonly InitializerOperationTable _initializerOperations;
     FieldDiscoveryPlanBuilder _fieldDiscovery;
     RecursionAnalysisPass _recursionAnalysis;
     VirtualDispatch _virtualDispatch;
@@ -108,6 +109,8 @@ public sealed class UasmEmitter
         _lowering = _operations.Services;
         _bridge = new SyntheticBridgeBuilder(_state.Builder);
         _delegateConvention = new DelegateConventionStorage(_state);
+        _initializerOperations =
+            new InitializerOperationTable(session.Compilation);
     }
 
     static CompilationSession CreateSession(
@@ -2324,9 +2327,22 @@ public sealed class UasmEmitter
         return Array.AsReadOnly(roots.ToArray());
     }
 
-    IEnumerable<(IFieldSymbol Field, IOperation Operation)>
+    internal IEnumerable<(IFieldSymbol Field, IOperation Operation)>
         EnumerateClassFieldInitializers(INamedTypeSymbol classTy)
+        => EnumerateClassFieldInitializers(
+            classTy, _initializerOperations);
+
+    internal static IEnumerable<(
+        IFieldSymbol Field,
+        IOperation Operation)> EnumerateClassFieldInitializers(
+            INamedTypeSymbol classTy,
+            InitializerOperationTable initializerOperations)
     {
+        if (classTy == null)
+            throw new ArgumentNullException(nameof(classTy));
+        if (initializerOperations == null)
+            throw new ArgumentNullException(
+                nameof(initializerOperations));
         foreach (var member in classTy.GetMembers())
         {
             if (member is not IFieldSymbol { IsStatic: false, IsConst: false } f) continue;
@@ -2341,12 +2357,8 @@ public sealed class UasmEmitter
                 _ => null,
             };
             if (initializer == null) continue;
-            var model = _compilation.GetSemanticModel(
-                initializer.SyntaxTree);
-            var initOp =
-                (model.GetOperation(initializer)
-                    as ISymbolInitializerOperation)?.Value
-                ?? model.GetOperation(initializer.Value);
+            var initOp = initializerOperations.Get(
+                initializer.Value);
             if (initOp != null) yield return (f, initOp);
         }
     }

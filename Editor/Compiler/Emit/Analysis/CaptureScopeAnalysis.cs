@@ -113,10 +113,9 @@ public sealed class CaptureScopeAnalysis
 
     // (introducing SYNTAX node, scope kind) → scope. The kind disambiguates a for-loop, which
     // introduces TWO scopes at the SAME construct (ForInit + Iteration); a plain node map would
-    // collide there. Keyed on IOperation.Syntax, NOT the IOperation: the analysis and the emitter
-    // obtain their operation trees from SEPARATE GetSemanticModel calls, so IOperation reference
-    // identity does NOT hold across them — SyntaxNode red-tree instances ARE shared per SyntaxTree
-    // within one Compilation, so syntax identity does.
+    // collide there. Keyed on IOperation.Syntax, NOT the IOperation: source snapshots currently
+    // preserve operation identity across the pipeline, but syntax identity is the durable lookup
+    // contract if a Roslyn operation wrapper is reconstructed at an API boundary.
     readonly Dictionary<(SyntaxNode, CaptureScopeKind), CaptureScope> _scopeByNodeKind;
 
     internal CaptureScopeAnalysis(
