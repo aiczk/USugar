@@ -47,17 +47,20 @@
     __const_SystemString_10: %SystemString, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __const_SystemString_11: %SystemString, null
-    __intnl_SystemString_c0: %SystemString, null
-    __const_SystemString_12: %SystemString, null
-    __const_SystemString_13: %SystemString, null
-    __intnl_SystemObject_c0: %SystemObject, null
-    __intnl_SystemUInt32_c0: %SystemUInt32, null
-    __const_SystemUInt32_14: %SystemUInt32, null
+    __const_SystemBoolean_12: %SystemBoolean, null
+    __const_SystemType_13: %SystemType, null
     __intnl_SystemBoolean_c1: %SystemBoolean, null
-    __intnl_SystemBoolean_c2: %SystemBoolean, null
+    __intnl_SystemInt32_c4: %SystemInt32, null
+    __intnl_SystemObject_c0: %SystemObject, null
+    __const_SystemType_14: %SystemType, null
+    __intnl_SystemString_c0: %SystemString, null
     __const_SystemString_15: %SystemString, null
     __const_SystemString_16: %SystemString, null
-    __intnl_SystemInt32_c4: %SystemInt32, null
+    __intnl_SystemUInt32_c0: %SystemUInt32, null
+    __const_SystemUInt32_17: %SystemUInt32, null
+    __intnl_SystemBoolean_c2: %SystemBoolean, null
+    __const_SystemString_18: %SystemString, null
+    __const_SystemString_19: %SystemString, null
     __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
     __intnl_SystemObjectArray_c4: %SystemObjectArray, null
     __intnl_SystemInt32_c5: %SystemInt32, null
@@ -65,9 +68,9 @@
     __intnl_SystemInt32_c6: %SystemInt32, null
     __intnl_SystemObjectArray_c6: %SystemObjectArray, null
     __intnl_SystemBoolean_c3: %SystemBoolean, null
-    __const_SystemString_17: %SystemString, null
+    __const_SystemString_20: %SystemString, null
     __intnl_SystemString_c1: %SystemString, null
-    __const_SystemString_18: %SystemString, null
+    __const_SystemString_21: %SystemString, null
     __intnl_SystemInt32_c7: %SystemInt32, null
     __intnl_SystemObjectArray_c7: %SystemObjectArray, null
     __intnl_SystemBoolean_c4: %SystemBoolean, null
@@ -76,12 +79,16 @@
     __intnl_SystemObjectArray_c8: %SystemObjectArray, null
     __intnl_SystemObjectArray_c9: %SystemObjectArray, null
     __intnl_SystemBoolean_c5: %SystemBoolean, null
+    __const_SystemBoolean_22: %SystemBoolean, null
+    __intnl_SystemBoolean_c6: %SystemBoolean, null
+    __intnl_SystemInt32_c9: %SystemInt32, null
+    __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemString_c3: %SystemString, null
     __intnl_SystemObjectArray_c10: %SystemObjectArray, null
     __intnl_SystemObjectArray_c11: %SystemObjectArray, null
-    __intnl_SystemInt32_c9: %SystemInt32, null
-    __const_SystemString_19: %SystemString, null
+    __const_SystemString_23: %SystemString, null
     __intnl_SystemInt32_c10: %SystemInt32, null
+    __const_SystemBoolean_24: %SystemBoolean, null
     __intnl_SystemObjectArray_c12: %SystemObjectArray, null
     __intnl_SystemInt32_c11: %SystemInt32, null
     __intnl_SystemInt32_c12: %SystemInt32, null
@@ -90,61 +97,61 @@
     __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c1: %VRCUdonCommonInterfacesIUdonEventReceiver, null
     __intnl_SystemInt32_c13: %SystemInt32, null
     __intnl_SystemInt32_c14: %SystemInt32, null
-    __intnl_SystemObject_c1: %SystemObject, null
     __intnl_SystemObjectArray_c15: %SystemObjectArray, null
     __intnl_SystemObjectArray_c16: %SystemObjectArray, null
     __intnl_SystemInt32_c15: %SystemInt32, null
-    __intnl_SystemBoolean_c6: %SystemBoolean, null
-    __const_SystemString_20: %SystemString, null
+    __intnl_SystemBoolean_c7: %SystemBoolean, null
+    __const_SystemString_25: %SystemString, null
     __intnl_SystemInt32_c16: %SystemInt32, null
     __intnl_SystemInt32_c17: %SystemInt32, null
     __intnl_SystemObjectArray_c17: %SystemObjectArray, null
     __intnl_SystemInt32_c18: %SystemInt32, null
-    __const_SystemString_21: %SystemString, null
-    __intnl_SystemString_c4: %SystemString, null
-    __const_SystemString_22: %SystemString, null
+    __const_SystemString_26: %SystemString, null
+    __const_SystemBoolean_27: %SystemBoolean, null
+    __intnl_SystemBoolean_c8: %SystemBoolean, null
+    __intnl_SystemInt32_c19: %SystemInt32, null
     __intnl_SystemObject_c2: %SystemObject, null
+    __intnl_SystemString_c4: %SystemString, null
+    __const_SystemString_28: %SystemString, null
     __intnl_SystemUInt32_c1: %SystemUInt32, null
     __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c2: %VRCUdonCommonInterfacesIUdonEventReceiver, null
-    __intnl_SystemBoolean_c7: %SystemBoolean, null
-    __intnl_SystemBoolean_c8: %SystemBoolean, null
+    __intnl_SystemBoolean_c9: %SystemBoolean, null
     __intnl_SystemObjectArray_c18: %SystemObjectArray, null
-    __intnl_SystemInt32_c19: %SystemInt32, null
     __intnl_SystemInt32_c20: %SystemInt32, null
     __intnl_SystemInt32_c21: %SystemInt32, null
-    __intnl_SystemObjectArray_c19: %SystemObjectArray, null
     __intnl_SystemInt32_c22: %SystemInt32, null
+    __intnl_SystemObjectArray_c19: %SystemObjectArray, null
     __intnl_SystemInt32_c23: %SystemInt32, null
     __intnl_SystemInt32_c24: %SystemInt32, null
-    __intnl_SystemObjectArray_c20: %SystemObjectArray, null
     __intnl_SystemInt32_c25: %SystemInt32, null
+    __intnl_SystemObjectArray_c20: %SystemObjectArray, null
     __intnl_SystemInt32_c26: %SystemInt32, null
     __intnl_SystemInt32_c27: %SystemInt32, null
-    __intnl_SystemObjectArray_c21: %SystemObjectArray, null
     __intnl_SystemInt32_c28: %SystemInt32, null
+    __intnl_SystemObjectArray_c21: %SystemObjectArray, null
     __intnl_SystemInt32_c29: %SystemInt32, null
     __intnl_SystemInt32_c30: %SystemInt32, null
     __intnl_SystemInt32_c31: %SystemInt32, null
     __intnl_SystemInt32_c32: %SystemInt32, null
-    __intnl_SystemObjectArray_c22: %SystemObjectArray, null
     __intnl_SystemInt32_c33: %SystemInt32, null
-    __intnl_SystemObject_c3: %SystemObject, null
+    __intnl_SystemObjectArray_c22: %SystemObjectArray, null
     __intnl_SystemInt32_c34: %SystemInt32, null
+    __intnl_SystemObject_c3: %SystemObject, null
     __intnl_SystemInt32_c35: %SystemInt32, null
-    __intnl_SystemObjectArray_c23: %SystemObjectArray, null
     __intnl_SystemInt32_c36: %SystemInt32, null
-    __intnl_SystemObject_c4: %SystemObject, null
+    __intnl_SystemObjectArray_c23: %SystemObjectArray, null
     __intnl_SystemInt32_c37: %SystemInt32, null
+    __intnl_SystemObject_c4: %SystemObject, null
     __intnl_SystemInt32_c38: %SystemInt32, null
-    __intnl_SystemObjectArray_c24: %SystemObjectArray, null
     __intnl_SystemInt32_c39: %SystemInt32, null
-    __intnl_SystemObject_c5: %SystemObject, null
+    __intnl_SystemObjectArray_c24: %SystemObjectArray, null
     __intnl_SystemInt32_c40: %SystemInt32, null
+    __intnl_SystemObject_c5: %SystemObject, null
     __intnl_SystemInt32_c41: %SystemInt32, null
-    __intnl_SystemObjectArray_c25: %SystemObjectArray, null
     __intnl_SystemInt32_c42: %SystemInt32, null
-    __intnl_SystemObject_c6: %SystemObject, null
+    __intnl_SystemObjectArray_c25: %SystemObjectArray, null
     __intnl_SystemInt32_c43: %SystemInt32, null
+    __intnl_SystemObject_c6: %SystemObject, null
     __intnl_SystemObjectArray_c26: %SystemObjectArray, null
     __intnl_SystemInt32_c44: %SystemInt32, null
     __intnl_SystemInt32_c45: %SystemInt32, null
@@ -178,13 +185,13 @@
     __intnl_SystemInt32_c63: %SystemInt32, null
     __intnl_SystemInt32_c64: %SystemInt32, null
     __intnl_SystemInt32_c65: %SystemInt32, null
-    __intnl_SystemBoolean_c9: %SystemBoolean, null
+    __intnl_SystemBoolean_c10: %SystemBoolean, null
     __intnl_SystemInt32_c66: %SystemInt32, null
     __intnl_SystemInt32_c67: %SystemInt32, null
-    __intnl_SystemBoolean_c10: %SystemBoolean, null
+    __intnl_SystemBoolean_c11: %SystemBoolean, null
     __intnl_SystemObjectArray_c33: %SystemObjectArray, null
     __intnl_SystemInt32_c68: %SystemInt32, null
-    __intnl_SystemBoolean_c11: %SystemBoolean, null
+    __intnl_SystemBoolean_c12: %SystemBoolean, null
     __intnl_SystemObject_c10: %SystemObject, null
     __intnl_SystemInt32_c69: %SystemInt32, null
     __intnl_SystemInt32_c70: %SystemInt32, null
@@ -302,7 +309,7 @@
         PUSH, __dlg_combine_Void__SystemInt32__y
         COPY
         PUSH, __const_retaddr_SystemUInt32_1
-        JUMP, 0x00000b50
+        JUMP, 0x00000c70
     ____1_Run_SystemInt32__callret_1:
         PUSH, __dlg_combine_Void__SystemInt32__ret
         PUSH, __intnl_SystemObjectArray_c3
@@ -346,7 +353,7 @@
         PUSH, __dlg_combine_Void__SystemInt32__y
         COPY
         PUSH, __const_retaddr_SystemUInt32_2
-        JUMP, 0x00000b50
+        JUMP, 0x00000c70
     ____1_Run_SystemInt32__callret_2:
         PUSH, __dlg_combine_Void__SystemInt32__ret
         PUSH, __intnl_SystemObjectArray_c0
@@ -370,24 +377,68 @@
     ____1_Run_SystemInt32_bb3:
         PUSH, __const_SystemString_11
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000007a8
+        JUMP, 0x000008c8
     ____1_Run_SystemInt32_bb2:
+        PUSH, __const_SystemBoolean_12
+        PUSH, __intnl_SystemBoolean_c0
+        COPY
+        PUSH, __const_SystemType_13
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x000004f0
+        JUMP, 0x000004f8
+    ____1_Run_SystemInt32_bb6:
+        JUMP, 0x00000604
+    ____1_Run_SystemInt32_bb5:
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemInt32_c4
+        EXTERN, "SystemObjectArray.__get_Length__SystemInt32"
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_c4
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x00000548
+        JUMP, 0x00000550
+    ____1_Run_SystemInt32_bb9:
+        JUMP, 0x00000604
+    ____1_Run_SystemInt32_bb8:
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObject_c0
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __const_SystemType_14
+        PUSH, __intnl_SystemObject_c0
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x000005a8
+        JUMP, 0x000005b0
+    ____1_Run_SystemInt32_bb12:
+        JUMP, 0x00000604
+    ____1_Run_SystemInt32_bb11:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemString_c0
-        PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __const_SystemString_15
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000004fc
-        JUMP, 0x00000514
-    ____1_Run_SystemInt32_bb6:
-        PUSH, __const_SystemString_13
+        COPY
+    ____1_Run_SystemInt32_bb13:
+        PUSH, __intnl_SystemBoolean_c0
+        JUMP_IF_FALSE, 0x0000061c
+        JUMP, 0x00000634
+    ____1_Run_SystemInt32_bb15:
+        PUSH, __const_SystemString_16
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000007a8
-    ____1_Run_SystemInt32_bb5:
+        JUMP, 0x000008c8
+    ____1_Run_SystemInt32_bb14:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObject_c0
@@ -397,13 +448,13 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x0000056c
-        JUMP, 0x00000584
-    ____1_Run_SystemInt32_bb9:
+        JUMP_IF_FALSE, 0x0000068c
+        JUMP, 0x000006a4
+    ____1_Run_SystemInt32_bb18:
         PUSH, __const_SystemString_11
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000007a8
-    ____1_Run_SystemInt32_bb8:
+        JUMP, 0x000008c8
+    ____1_Run_SystemInt32_bb17:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObjectArray_c1
@@ -427,7 +478,7 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean"
         PUSH, __intnl_SystemUInt32_c0
-        PUSH, __const_SystemUInt32_14
+        PUSH, __const_SystemUInt32_17
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
@@ -435,41 +486,41 @@
         PUSH, __intnl_SystemBoolean_c2
         EXTERN, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c2
-        JUMP_IF_FALSE, 0x00000684
-        JUMP, 0x0000075c
-    ____1_Run_SystemInt32_bb12:
+        JUMP_IF_FALSE, 0x000007a4
+        JUMP, 0x0000087c
+    ____1_Run_SystemInt32_bb21:
         PUSH, __intnl_SystemString_c0
         PUSH, __const_SystemObject_5
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000006bc
-        JUMP, 0x000006d4
-    ____1_Run_SystemInt32_bb15:
+        JUMP_IF_FALSE, 0x000007dc
+        JUMP, 0x000007f4
+    ____1_Run_SystemInt32_bb24:
         PUSH, __const_SystemString_11
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000754
-    ____1_Run_SystemInt32_bb14:
+        JUMP, 0x00000874
+    ____1_Run_SystemInt32_bb23:
         PUSH, __dlgc_Void__SystemInt32__env
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObject_c0
-        PUSH, __const_SystemString_15
+        PUSH, __const_SystemString_18
         PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObject_c0
         PUSH, __intnl_SystemString_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __intnl_SystemObject_c0
-        PUSH, __const_SystemString_16
+        PUSH, __const_SystemString_19
         PUSH, __intnl_SystemInt32_c4
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
         PUSH, __intnl_SystemInt32_c4
         PUSH, __intnl_SystemInt32_c3
         COPY
-    ____1_Run_SystemInt32_bb16:
-        JUMP, 0x000007a8
-    ____1_Run_SystemInt32_bb11:
+    ____1_Run_SystemInt32_bb25:
+        JUMP, 0x000008c8
+    ____1_Run_SystemInt32_bb20:
         PUSH, __intnl_SystemUInt32_c0
         PUSH, __intnl_dlgptr_SystemUInt32_c0
         COPY
@@ -482,7 +533,7 @@
         PUSH, __intnl_SystemInt32_c4
         PUSH, __intnl_SystemInt32_c3
         COPY
-    ____1_Run_SystemInt32_bb13:
+    ____1_Run_SystemInt32_bb22:
         PUSH, __intnl_SystemInt32_c3
         PUSH, __1_Run__ret
         COPY
@@ -529,15 +580,15 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x000008dc
-        JUMP, 0x00000908
+        JUMP_IF_FALSE, 0x000009fc
+        JUMP, 0x00000a28
     ____dlg___2_lambda_bb2:
-        PUSH, __const_SystemString_17
+        PUSH, __const_SystemString_20
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_2
         PUSH, __dlgc_Void__SystemInt32__ret
         COPY
-        JUMP, 0x000009d8
+        JUMP, 0x00000af8
     ____dlg___2_lambda_bb1:
         PUSH, __intnl_SystemObjectArray_c6
         PUSH, __const_SystemInt32_2
@@ -548,21 +599,21 @@
         PUSH, __intnl_SystemBoolean_c3
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c3
-        JUMP_IF_FALSE, 0x00000960
-        JUMP, 0x0000098c
+        JUMP_IF_FALSE, 0x00000a80
+        JUMP, 0x00000aac
     ____dlg___2_lambda_bb5:
-        PUSH, __const_SystemString_18
+        PUSH, __const_SystemString_21
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_2
         PUSH, __dlgc_Void__SystemInt32__ret
         COPY
-        JUMP, 0x000009d8
+        JUMP, 0x00000af8
     ____dlg___2_lambda_bb4:
         PUSH, __intnl_SystemObjectArray_c6
         PUSH, __2_lambda__envp
         COPY
         PUSH, __const_retaddr_SystemUInt32_4
-        JUMP, 0x000007d0
+        JUMP, 0x000008f0
     ____dlg___2_lambda__callret_4:
         PUSH, __2_lambda__ret
         PUSH, __intnl_SystemInt32_c7
@@ -586,15 +637,15 @@
         PUSH, __intnl_SystemBoolean_c4
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c4
-        JUMP_IF_FALSE, 0x00000a40
-        JUMP, 0x00000a6c
+        JUMP_IF_FALSE, 0x00000b60
+        JUMP, 0x00000b8c
     ____dlg___3_lambda_bb2:
-        PUSH, __const_SystemString_17
+        PUSH, __const_SystemString_20
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_2
         PUSH, __dlgc_Void__SystemInt32__ret
         COPY
-        JUMP, 0x00000b3c
+        JUMP, 0x00000c5c
     ____dlg___3_lambda_bb1:
         PUSH, __intnl_SystemObjectArray_c7
         PUSH, __const_SystemInt32_2
@@ -605,21 +656,21 @@
         PUSH, __intnl_SystemBoolean_c4
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c4
-        JUMP_IF_FALSE, 0x00000ac4
-        JUMP, 0x00000af0
+        JUMP_IF_FALSE, 0x00000be4
+        JUMP, 0x00000c10
     ____dlg___3_lambda_bb5:
-        PUSH, __const_SystemString_18
+        PUSH, __const_SystemString_21
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_2
         PUSH, __dlgc_Void__SystemInt32__ret
         COPY
-        JUMP, 0x00000b3c
+        JUMP, 0x00000c5c
     ____dlg___3_lambda_bb4:
         PUSH, __intnl_SystemObjectArray_c7
         PUSH, __3_lambda__envp
         COPY
         PUSH, __const_retaddr_SystemUInt32_5
-        JUMP, 0x0000082c
+        JUMP, 0x0000094c
     ____dlg___3_lambda__callret_5:
         PUSH, __3_lambda__ret
         PUSH, __intnl_SystemInt32_c8
@@ -643,147 +694,208 @@
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000bb0
-        JUMP, 0x000014a8
+        JUMP_IF_FALSE, 0x00000cd0
+        JUMP, 0x00001808
     ____dlg_combine_Void__SystemInt32_bb2:
         PUSH, __intnl_SystemObjectArray_c9
         PUSH, __const_SystemObject_5
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000be8
-        JUMP, 0x00001480
+        JUMP_IF_FALSE, 0x00000d08
+        JUMP, 0x000017e0
     ____dlg_combine_Void__SystemInt32_bb5:
+        PUSH, __const_SystemBoolean_22
+        PUSH, __intnl_SystemBoolean_c5
+        COPY
+        PUSH, __const_SystemType_13
         PUSH, __intnl_SystemObjectArray_c8
-        PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemString_c3
-        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __intnl_SystemString_c3
-        PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemBoolean_c5
-        EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000c40
-        JUMP, 0x00000ca8
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x00000d54
+        JUMP, 0x00000d5c
     ____dlg_combine_Void__SystemInt32_bb8:
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemObjectArray_c10
-        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
-        PUSH, __intnl_SystemObjectArray_c10
-        PUSH, __intnl_SystemObjectArray_c11
-        COPY
-        PUSH, __intnl_SystemObjectArray_c11
-        PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemObjectArray_c8
-        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c9
-        COPY
         JUMP, 0x00000e68
     ____dlg_combine_Void__SystemInt32_bb7:
         PUSH, __intnl_SystemObjectArray_c8
-        PUSH, __const_SystemInt32_6
-        PUSH, __intnl_SystemString_c3
-        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __intnl_SystemString_c3
-        PUSH, __const_SystemString_19
-        PUSH, __intnl_SystemBoolean_c5
-        EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000d00
-        JUMP, 0x00000d68
-    ____dlg_combine_Void__SystemInt32_bb11:
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemObjectArray_c10
-        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
-        PUSH, __intnl_SystemObjectArray_c10
-        PUSH, __intnl_SystemObjectArray_c11
-        COPY
-        PUSH, __intnl_SystemObjectArray_c11
-        PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemObjectArray_c8
-        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c9
-        COPY
+        EXTERN, "SystemObjectArray.__get_Length__SystemInt32"
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_c9
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x00000dac
+        JUMP, 0x00000db4
+    ____dlg_combine_Void__SystemInt32_bb11:
         JUMP, 0x00000e68
     ____dlg_combine_Void__SystemInt32_bb10:
         PUSH, __intnl_SystemObjectArray_c8
-        PUSH, __const_SystemInt32_1
-        PUSH, __intnl_SystemObjectArray_c10
-        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
-        PUSH, __intnl_SystemObjectArray_c10
-        PUSH, __intnl_SystemObjectArray_c11
-        COPY
-        PUSH, __intnl_SystemObjectArray_c11
-        PUSH, __const_SystemObject_5
-        PUSH, __intnl_SystemBoolean_c5
-        EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000dd4
-        JUMP, 0x00000e3c
-    ____dlg_combine_Void__SystemInt32_bb14:
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemObjectArray_c10
-        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
-        PUSH, __intnl_SystemObjectArray_c10
-        PUSH, __intnl_SystemObjectArray_c11
-        COPY
-        PUSH, __intnl_SystemObjectArray_c11
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemObjectArray_c8
-        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c9
-        COPY
+        PUSH, __intnl_SystemObject_c1
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __const_SystemType_14
+        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x00000e0c
+        JUMP, 0x00000e14
+    ____dlg_combine_Void__SystemInt32_bb14:
         JUMP, 0x00000e68
     ____dlg_combine_Void__SystemInt32_bb13:
-        PUSH, __intnl_SystemObjectArray_c11
-        PUSH, __intnl_SystemInt32_c10
-        EXTERN, "SystemArray.__get_Length__SystemInt32"
-        PUSH, __intnl_SystemInt32_c10
-        PUSH, __intnl_SystemInt32_c9
-        COPY
-    ____dlg_combine_Void__SystemInt32_bb15:
-        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __intnl_SystemObjectArray_c8
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemString_c3
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemString_c3
-        PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemBoolean_c5
+        PUSH, __const_SystemString_15
+        PUSH, __intnl_SystemBoolean_c6
         EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000ec0
-        JUMP, 0x00000f28
+        COPY
+    ____dlg_combine_Void__SystemInt32_bb15:
+        PUSH, __intnl_SystemBoolean_c5
+        JUMP_IF_FALSE, 0x00000e80
+        JUMP, 0x00000ee8
     ____dlg_combine_Void__SystemInt32_bb17:
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObjectArray_c10
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __intnl_SystemObjectArray_c10
-        PUSH, __intnl_SystemObjectArray_c12
+        PUSH, __intnl_SystemObjectArray_c11
         COPY
-        PUSH, __intnl_SystemObjectArray_c12
+        PUSH, __intnl_SystemObjectArray_c11
         PUSH, __const_SystemInt32_2
-        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __intnl_SystemObjectArray_c8
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c10
+        PUSH, __intnl_SystemInt32_c9
         COPY
-        JUMP, 0x000010e8
+        JUMP, 0x000010a8
     ____dlg_combine_Void__SystemInt32_bb16:
-        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __intnl_SystemObjectArray_c8
         PUSH, __const_SystemInt32_6
         PUSH, __intnl_SystemString_c3
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemString_c3
-        PUSH, __const_SystemString_19
+        PUSH, __const_SystemString_23
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00000f80
-        JUMP, 0x00000fe8
+        JUMP_IF_FALSE, 0x00000f40
+        JUMP, 0x00000fa8
     ____dlg_combine_Void__SystemInt32_bb20:
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemObjectArray_c10
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __intnl_SystemObjectArray_c10
+        PUSH, __intnl_SystemObjectArray_c11
+        COPY
+        PUSH, __intnl_SystemObjectArray_c11
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObjectArray_c8
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemInt32_c9
+        COPY
+        JUMP, 0x000010a8
+    ____dlg_combine_Void__SystemInt32_bb19:
+        PUSH, __intnl_SystemObjectArray_c8
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemObjectArray_c10
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemObjectArray_c10
+        PUSH, __intnl_SystemObjectArray_c11
+        COPY
+        PUSH, __intnl_SystemObjectArray_c11
+        PUSH, __const_SystemObject_5
+        PUSH, __intnl_SystemBoolean_c5
+        EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c5
+        JUMP_IF_FALSE, 0x00001014
+        JUMP, 0x0000107c
+    ____dlg_combine_Void__SystemInt32_bb23:
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemObjectArray_c10
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __intnl_SystemObjectArray_c10
+        PUSH, __intnl_SystemObjectArray_c11
+        COPY
+        PUSH, __intnl_SystemObjectArray_c11
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObjectArray_c8
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemInt32_c9
+        COPY
+        JUMP, 0x000010a8
+    ____dlg_combine_Void__SystemInt32_bb22:
+        PUSH, __intnl_SystemObjectArray_c11
+        PUSH, __intnl_SystemInt32_c10
+        EXTERN, "SystemArray.__get_Length__SystemInt32"
+        PUSH, __intnl_SystemInt32_c10
+        PUSH, __intnl_SystemInt32_c9
+        COPY
+    ____dlg_combine_Void__SystemInt32_bb24:
+        PUSH, __const_SystemBoolean_24
+        PUSH, __intnl_SystemBoolean_c5
+        COPY
+        PUSH, __const_SystemType_13
+        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x000010f4
+        JUMP, 0x000010fc
+    ____dlg_combine_Void__SystemInt32_bb26:
+        JUMP, 0x00001208
+    ____dlg_combine_Void__SystemInt32_bb25:
+        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __intnl_SystemInt32_c10
+        EXTERN, "SystemObjectArray.__get_Length__SystemInt32"
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_c10
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x0000114c
+        JUMP, 0x00001154
+    ____dlg_combine_Void__SystemInt32_bb29:
+        JUMP, 0x00001208
+    ____dlg_combine_Void__SystemInt32_bb28:
+        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObject_c1
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __const_SystemType_14
+        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        JUMP_IF_FALSE, 0x000011ac
+        JUMP, 0x000011b4
+    ____dlg_combine_Void__SystemInt32_bb32:
+        JUMP, 0x00001208
+    ____dlg_combine_Void__SystemInt32_bb31:
+        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemString_c3
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemString_c3
+        PUSH, __const_SystemString_15
+        PUSH, __intnl_SystemBoolean_c6
+        EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c5
+        COPY
+    ____dlg_combine_Void__SystemInt32_bb33:
+        PUSH, __intnl_SystemBoolean_c5
+        JUMP_IF_FALSE, 0x00001220
+        JUMP, 0x00001288
+    ____dlg_combine_Void__SystemInt32_bb35:
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObjectArray_c10
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
@@ -797,8 +909,35 @@
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c10
         COPY
-        JUMP, 0x000010e8
-    ____dlg_combine_Void__SystemInt32_bb19:
+        JUMP, 0x00001448
+    ____dlg_combine_Void__SystemInt32_bb34:
+        PUSH, __intnl_SystemObjectArray_c9
+        PUSH, __const_SystemInt32_6
+        PUSH, __intnl_SystemString_c3
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __intnl_SystemString_c3
+        PUSH, __const_SystemString_23
+        PUSH, __intnl_SystemBoolean_c5
+        EXTERN, "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c5
+        JUMP_IF_FALSE, 0x000012e0
+        JUMP, 0x00001348
+    ____dlg_combine_Void__SystemInt32_bb38:
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemObjectArray_c10
+        EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
+        PUSH, __intnl_SystemObjectArray_c10
+        PUSH, __intnl_SystemObjectArray_c12
+        COPY
+        PUSH, __intnl_SystemObjectArray_c12
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObjectArray_c9
+        EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
+        PUSH, __const_SystemInt32_4
+        PUSH, __intnl_SystemInt32_c10
+        COPY
+        JUMP, 0x00001448
+    ____dlg_combine_Void__SystemInt32_bb37:
         PUSH, __intnl_SystemObjectArray_c9
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObjectArray_c10
@@ -811,9 +950,9 @@
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00001054
-        JUMP, 0x000010bc
-    ____dlg_combine_Void__SystemInt32_bb23:
+        JUMP_IF_FALSE, 0x000013b4
+        JUMP, 0x0000141c
+    ____dlg_combine_Void__SystemInt32_bb41:
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObjectArray_c10
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
@@ -827,15 +966,15 @@
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c10
         COPY
-        JUMP, 0x000010e8
-    ____dlg_combine_Void__SystemInt32_bb22:
+        JUMP, 0x00001448
+    ____dlg_combine_Void__SystemInt32_bb40:
         PUSH, __intnl_SystemObjectArray_c12
         PUSH, __intnl_SystemInt32_c11
         EXTERN, "SystemArray.__get_Length__SystemInt32"
         PUSH, __intnl_SystemInt32_c11
         PUSH, __intnl_SystemInt32_c10
         COPY
-    ____dlg_combine_Void__SystemInt32_bb24:
+    ____dlg_combine_Void__SystemInt32_bb42:
         PUSH, __intnl_SystemInt32_c9
         PUSH, __intnl_SystemInt32_c10
         PUSH, __intnl_SystemInt32_c11
@@ -852,27 +991,27 @@
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c11
         COPY
-    ____dlg_combine_Void__SystemInt32_bb25:
+    ____dlg_combine_Void__SystemInt32_bb43:
         PUSH, __intnl_SystemInt32_c11
         PUSH, __intnl_SystemInt32_c9
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x00001194
-        JUMP, 0x000013c4
-    ____dlg_combine_Void__SystemInt32_bb28:
+        JUMP_IF_FALSE, 0x000014f4
+        JUMP, 0x00001724
+    ____dlg_combine_Void__SystemInt32_bb46:
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c12
         COPY
-    ____dlg_combine_Void__SystemInt32_bb29:
+    ____dlg_combine_Void__SystemInt32_bb47:
         PUSH, __intnl_SystemInt32_c12
         PUSH, __intnl_SystemInt32_c10
         PUSH, __intnl_SystemBoolean_c5
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c5
-        JUMP_IF_FALSE, 0x000011e0
-        JUMP, 0x00001308
-    ____dlg_combine_Void__SystemInt32_bb32:
+        JUMP_IF_FALSE, 0x00001540
+        JUMP, 0x00001668
+    ____dlg_combine_Void__SystemInt32_bb50:
         PUSH, __intnl_SystemObjectArray_c8
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemString_c3
@@ -896,7 +1035,7 @@
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObjectArray_c14
         PUSH, __const_SystemInt32_6
-        PUSH, __const_SystemString_19
+        PUSH, __const_SystemString_23
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObjectArray_c14
         PUSH, __const_SystemInt32_7
@@ -912,7 +1051,7 @@
         PUSH, __intnl_returnJump_SystemUInt32_0
         COPY
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
-    ____dlg_combine_Void__SystemInt32_bb30:
+    ____dlg_combine_Void__SystemInt32_bb48:
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c12
         PUSH, __intnl_SystemInt32_c13
@@ -929,7 +1068,7 @@
         PUSH, __intnl_SystemInt32_c14
         PUSH, __intnl_SystemObject_c1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-    ____dlg_combine_Void__SystemInt32_bb31:
+    ____dlg_combine_Void__SystemInt32_bb49:
         PUSH, __intnl_SystemInt32_c12
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c13
@@ -937,8 +1076,8 @@
         PUSH, __intnl_SystemInt32_c13
         PUSH, __intnl_SystemInt32_c12
         COPY
-        JUMP, 0x000011a8
-    ____dlg_combine_Void__SystemInt32_bb26:
+        JUMP, 0x00001508
+    ____dlg_combine_Void__SystemInt32_bb44:
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemInt32_c11
         PUSH, __intnl_SystemInt32_c12
@@ -955,7 +1094,7 @@
         PUSH, __intnl_SystemInt32_c13
         PUSH, __intnl_SystemObject_c1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-    ____dlg_combine_Void__SystemInt32_bb27:
+    ____dlg_combine_Void__SystemInt32_bb45:
         PUSH, __intnl_SystemInt32_c11
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemInt32_c12
@@ -963,7 +1102,7 @@
         PUSH, __intnl_SystemInt32_c12
         PUSH, __intnl_SystemInt32_c11
         COPY
-        JUMP, 0x0000115c
+        JUMP, 0x000014bc
     ____dlg_combine_Void__SystemInt32_bb4:
         PUSH, __intnl_SystemObjectArray_c8
         PUSH, __dlg_combine_Void__SystemInt32__ret
@@ -993,15 +1132,15 @@
         COPY
         PUSH, __intnl_SystemObjectArray_c16
         PUSH, __const_SystemObject_5
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x0000154c
-        JUMP, 0x00001564
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x000018ac
+        JUMP, 0x000018c4
     ____dlg_fanout_Void__SystemInt32_bb2:
-        PUSH, __const_SystemString_20
+        PUSH, __const_SystemString_25
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x000015dc
+        JUMP, 0x0000193c
     ____dlg_fanout_Void__SystemInt32_bb1:
         PUSH, __intnl_SystemObjectArray_c16
         PUSH, __intnl_SystemInt32_c16
@@ -1015,11 +1154,11 @@
     ____dlg_fanout_Void__SystemInt32_bb4:
         PUSH, __intnl_SystemInt32_c16
         PUSH, __intnl_SystemInt32_c17
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x000015dc
-        JUMP, 0x00001604
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x0000193c
+        JUMP, 0x00001964
     ____dlg_fanout_Void__SystemInt32_bb7:
         PUSH, __intnl_SystemInt32_c15
         PUSH, __dlgc_Void__SystemInt32__ret
@@ -1040,48 +1179,92 @@
         COPY
         PUSH, __intnl_SystemObjectArray_c17
         PUSH, __const_SystemObject_5
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x00001684
-        JUMP, 0x0000169c
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x000019e4
+        JUMP, 0x000019fc
     ____dlg_fanout_Void__SystemInt32_bb9:
-        PUSH, __const_SystemString_21
+        PUSH, __const_SystemString_26
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00002254
+        JUMP, 0x000026d4
     ____dlg_fanout_Void__SystemInt32_bb8:
+        PUSH, __const_SystemBoolean_27
+        PUSH, __intnl_SystemBoolean_c7
+        COPY
+        PUSH, __const_SystemType_13
+        PUSH, __intnl_SystemObjectArray_c17
+        PUSH, __intnl_SystemBoolean_c8
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c8
+        JUMP_IF_FALSE, 0x00001a48
+        JUMP, 0x00001a50
+    ____dlg_fanout_Void__SystemInt32_bb12:
+        JUMP, 0x00001b5c
+    ____dlg_fanout_Void__SystemInt32_bb11:
+        PUSH, __intnl_SystemObjectArray_c17
+        PUSH, __intnl_SystemInt32_c19
+        EXTERN, "SystemObjectArray.__get_Length__SystemInt32"
+        PUSH, __const_SystemInt32_1
+        PUSH, __intnl_SystemInt32_c19
+        PUSH, __intnl_SystemBoolean_c8
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c8
+        JUMP_IF_FALSE, 0x00001aa0
+        JUMP, 0x00001aa8
+    ____dlg_fanout_Void__SystemInt32_bb15:
+        JUMP, 0x00001b5c
+    ____dlg_fanout_Void__SystemInt32_bb14:
+        PUSH, __intnl_SystemObjectArray_c17
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObject_c2
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __const_SystemType_14
+        PUSH, __intnl_SystemObject_c2
+        PUSH, __intnl_SystemBoolean_c8
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c8
+        JUMP_IF_FALSE, 0x00001b00
+        JUMP, 0x00001b08
+    ____dlg_fanout_Void__SystemInt32_bb18:
+        JUMP, 0x00001b5c
+    ____dlg_fanout_Void__SystemInt32_bb17:
         PUSH, __intnl_SystemObjectArray_c17
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemString_c4
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemString_c4
-        PUSH, __const_SystemString_12
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __const_SystemString_15
+        PUSH, __intnl_SystemBoolean_c8
         EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x000016f4
-        JUMP, 0x0000170c
-    ____dlg_fanout_Void__SystemInt32_bb12:
-        PUSH, __const_SystemString_22
+        PUSH, __intnl_SystemBoolean_c8
+        PUSH, __intnl_SystemBoolean_c7
+        COPY
+    ____dlg_fanout_Void__SystemInt32_bb19:
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x00001b74
+        JUMP, 0x00001b8c
+    ____dlg_fanout_Void__SystemInt32_bb21:
+        PUSH, __const_SystemString_28
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00002254
-    ____dlg_fanout_Void__SystemInt32_bb11:
+        JUMP, 0x000026d4
+    ____dlg_fanout_Void__SystemInt32_bb20:
         PUSH, __intnl_SystemObjectArray_c17
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObject_c2
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c2
         PUSH, __const_SystemObject_5
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x00001764
-        JUMP, 0x0000177c
-    ____dlg_fanout_Void__SystemInt32_bb15:
-        PUSH, __const_SystemString_21
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x00001be4
+        JUMP, 0x00001bfc
+    ____dlg_fanout_Void__SystemInt32_bb24:
+        PUSH, __const_SystemString_26
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00002254
-    ____dlg_fanout_Void__SystemInt32_bb14:
+        JUMP, 0x000026d4
+    ____dlg_fanout_Void__SystemInt32_bb23:
         PUSH, __intnl_SystemObjectArray_c17
         PUSH, __const_SystemInt32_1
         PUSH, __intnl_SystemObjectArray_c15
@@ -1102,32 +1285,32 @@
         COPY
         PUSH, __intnl_SystemObject_c2
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c2
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean"
         PUSH, __intnl_SystemUInt32_c1
-        PUSH, __const_SystemUInt32_14
-        PUSH, __intnl_SystemBoolean_c7
+        PUSH, __const_SystemUInt32_17
+        PUSH, __intnl_SystemBoolean_c8
         EXTERN, "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
         PUSH, __intnl_SystemBoolean_c7
         PUSH, __intnl_SystemBoolean_c8
+        PUSH, __intnl_SystemBoolean_c9
         EXTERN, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c8
-        JUMP_IF_FALSE, 0x0000187c
-        JUMP, 0x00001e48
-    ____dlg_fanout_Void__SystemInt32_bb18:
+        PUSH, __intnl_SystemBoolean_c9
+        JUMP_IF_FALSE, 0x00001cfc
+        JUMP, 0x000022c8
+    ____dlg_fanout_Void__SystemInt32_bb27:
         PUSH, __intnl_SystemString_c4
         PUSH, __const_SystemObject_5
-        PUSH, __intnl_SystemBoolean_c6
+        PUSH, __intnl_SystemBoolean_c7
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c6
-        JUMP_IF_FALSE, 0x000018b4
-        JUMP, 0x000018cc
-    ____dlg_fanout_Void__SystemInt32_bb21:
-        PUSH, __const_SystemString_21
+        PUSH, __intnl_SystemBoolean_c7
+        JUMP_IF_FALSE, 0x00001d34
+        JUMP, 0x00001d4c
+    ____dlg_fanout_Void__SystemInt32_bb30:
+        PUSH, __const_SystemString_26
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00001e40
-    ____dlg_fanout_Void__SystemInt32_bb20:
+        JUMP, 0x000022c0
+    ____dlg_fanout_Void__SystemInt32_bb29:
         PUSH, __dlgc_Void__SystemInt32__env
         PUSH, __intnl_SystemObjectArray_c15
         COPY
@@ -1135,202 +1318,202 @@
         PUSH, __recurEnsureNeed
         COPY
         PUSH, __const_retaddr_SystemUInt32_6
-        JUMP, 0x000022a4
+        JUMP, 0x00002724
     ____dlg_fanout_Void__SystemInt32__callret_6:
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c18
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c19
+        PUSH, __intnl_SystemInt32_c20
         COPY
         PUSH, __intnl_SystemObjectArray_c18
-        PUSH, __intnl_SystemInt32_c19
+        PUSH, __intnl_SystemInt32_c20
         PUSH, __intnl_SystemObjectArray_c16
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c20
+        PUSH, __intnl_SystemInt32_c21
         COPY
-        PUSH, __intnl_SystemInt32_c20
+        PUSH, __intnl_SystemInt32_c21
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c21
+        PUSH, __intnl_SystemInt32_c22
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c21
+        PUSH, __intnl_SystemInt32_c22
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c19
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c22
+        PUSH, __intnl_SystemInt32_c23
         COPY
         PUSH, __intnl_SystemObjectArray_c19
-        PUSH, __intnl_SystemInt32_c22
+        PUSH, __intnl_SystemInt32_c23
         PUSH, __intnl_SystemInt32_c17
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c23
+        PUSH, __intnl_SystemInt32_c24
         COPY
-        PUSH, __intnl_SystemInt32_c23
+        PUSH, __intnl_SystemInt32_c24
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c24
+        PUSH, __intnl_SystemInt32_c25
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c24
+        PUSH, __intnl_SystemInt32_c25
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c20
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c25
+        PUSH, __intnl_SystemInt32_c26
         COPY
         PUSH, __intnl_SystemObjectArray_c20
-        PUSH, __intnl_SystemInt32_c25
+        PUSH, __intnl_SystemInt32_c26
         PUSH, __intnl_SystemInt32_c16
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c26
+        PUSH, __intnl_SystemInt32_c27
         COPY
-        PUSH, __intnl_SystemInt32_c26
+        PUSH, __intnl_SystemInt32_c27
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c27
+        PUSH, __intnl_SystemInt32_c28
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c27
+        PUSH, __intnl_SystemInt32_c28
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c21
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c28
+        PUSH, __intnl_SystemInt32_c29
         COPY
         PUSH, __intnl_SystemObjectArray_c21
-        PUSH, __intnl_SystemInt32_c28
+        PUSH, __intnl_SystemInt32_c29
         PUSH, __intnl_SystemObject_c2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c29
+        PUSH, __intnl_SystemInt32_c30
         COPY
-        PUSH, __intnl_SystemInt32_c29
+        PUSH, __intnl_SystemInt32_c30
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c30
+        PUSH, __intnl_SystemInt32_c31
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c30
+        PUSH, __intnl_SystemInt32_c31
         PUSH, __recurSp
         COPY
         PUSH, __intnl_SystemObject_c2
-        PUSH, __const_SystemString_15
+        PUSH, __const_SystemString_18
         PUSH, __intnl_SystemObjectArray_c15
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObject_c2
         PUSH, __intnl_SystemString_c4
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c31
+        PUSH, __intnl_SystemInt32_c32
         COPY
-        PUSH, __intnl_SystemInt32_c31
+        PUSH, __intnl_SystemInt32_c32
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c32
+        PUSH, __intnl_SystemInt32_c33
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c32
+        PUSH, __intnl_SystemInt32_c33
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c22
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c33
+        PUSH, __intnl_SystemInt32_c34
         COPY
         PUSH, __intnl_SystemObjectArray_c22
-        PUSH, __intnl_SystemInt32_c33
+        PUSH, __intnl_SystemInt32_c34
         PUSH, __intnl_SystemObject_c3
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c3
         PUSH, __intnl_SystemObject_c2
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c34
+        PUSH, __intnl_SystemInt32_c35
         COPY
-        PUSH, __intnl_SystemInt32_c34
+        PUSH, __intnl_SystemInt32_c35
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c35
+        PUSH, __intnl_SystemInt32_c36
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c35
+        PUSH, __intnl_SystemInt32_c36
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c23
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c36
+        PUSH, __intnl_SystemInt32_c37
         COPY
         PUSH, __intnl_SystemObjectArray_c23
-        PUSH, __intnl_SystemInt32_c36
+        PUSH, __intnl_SystemInt32_c37
         PUSH, __intnl_SystemObject_c4
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c4
         PUSH, __intnl_SystemInt32_c16
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c37
+        PUSH, __intnl_SystemInt32_c38
         COPY
-        PUSH, __intnl_SystemInt32_c37
+        PUSH, __intnl_SystemInt32_c38
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c38
+        PUSH, __intnl_SystemInt32_c39
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c38
+        PUSH, __intnl_SystemInt32_c39
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c24
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c39
+        PUSH, __intnl_SystemInt32_c40
         COPY
         PUSH, __intnl_SystemObjectArray_c24
-        PUSH, __intnl_SystemInt32_c39
+        PUSH, __intnl_SystemInt32_c40
         PUSH, __intnl_SystemObject_c5
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c5
         PUSH, __intnl_SystemInt32_c17
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c40
+        PUSH, __intnl_SystemInt32_c41
         COPY
-        PUSH, __intnl_SystemInt32_c40
+        PUSH, __intnl_SystemInt32_c41
         PUSH, __const_SystemInt32_4
-        PUSH, __intnl_SystemInt32_c41
+        PUSH, __intnl_SystemInt32_c42
         EXTERN, "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32"
-        PUSH, __intnl_SystemInt32_c41
+        PUSH, __intnl_SystemInt32_c42
         PUSH, __recurSp
         COPY
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c25
         COPY
         PUSH, __recurSp
-        PUSH, __intnl_SystemInt32_c42
+        PUSH, __intnl_SystemInt32_c43
         COPY
         PUSH, __intnl_SystemObjectArray_c25
-        PUSH, __intnl_SystemInt32_c42
+        PUSH, __intnl_SystemInt32_c43
         PUSH, __intnl_SystemObject_c6
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemObject_c6
         PUSH, __intnl_SystemObjectArray_c16
         COPY
         PUSH, __intnl_SystemObject_c2
-        PUSH, __const_SystemString_16
-        PUSH, __intnl_SystemInt32_c43
+        PUSH, __const_SystemString_19
+        PUSH, __intnl_SystemInt32_c19
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
-        PUSH, __intnl_SystemInt32_c43
+        PUSH, __intnl_SystemInt32_c19
         PUSH, __intnl_SystemInt32_c18
         COPY
-    ____dlg_fanout_Void__SystemInt32_bb22:
-        JUMP, 0x00002254
-    ____dlg_fanout_Void__SystemInt32_bb17:
+    ____dlg_fanout_Void__SystemInt32_bb31:
+        JUMP, 0x000026d4
+    ____dlg_fanout_Void__SystemInt32_bb26:
         PUSH, __const_SystemInt32_7
         PUSH, __recurEnsureNeed
         COPY
         PUSH, __const_retaddr_SystemUInt32_7
-        JUMP, 0x000022a4
+        JUMP, 0x00002724
     ____dlg_fanout_Void__SystemInt32__callret_7:
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c26
@@ -1468,12 +1651,12 @@
         PUSH, __intnl_SystemObjectArray_c16
         COPY
         PUSH, __dlgc_Void__SystemInt32__ret
-        PUSH, __intnl_SystemInt32_c43
+        PUSH, __intnl_SystemInt32_c19
         COPY
-        PUSH, __intnl_SystemInt32_c43
+        PUSH, __intnl_SystemInt32_c19
         PUSH, __intnl_SystemInt32_c18
         COPY
-    ____dlg_fanout_Void__SystemInt32_bb19:
+    ____dlg_fanout_Void__SystemInt32_bb28:
         PUSH, __intnl_SystemInt32_c18
         PUSH, __intnl_SystemInt32_c15
         COPY
@@ -1485,7 +1668,7 @@
         PUSH, __intnl_SystemInt32_c18
         PUSH, __intnl_SystemInt32_c16
         COPY
-        JUMP, 0x000015a4
+        JUMP, 0x00001904
     ____recurEnsure:
         PUSH, __recurStack
         PUSH, __intnl_SystemObjectArray_c32
@@ -1505,13 +1688,13 @@
         EXTERN, "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32"
         PUSH, __intnl_SystemInt32_c62
         PUSH, __intnl_SystemInt32_c65
-        PUSH, __intnl_SystemBoolean_c9
+        PUSH, __intnl_SystemBoolean_c10
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c9
-        JUMP_IF_FALSE, 0x00002350
-        JUMP, 0x00002358
+        PUSH, __intnl_SystemBoolean_c10
+        JUMP_IF_FALSE, 0x000027d0
+        JUMP, 0x000027d8
     ____recurEnsure_bb2:
-        JUMP, 0x0000243c
+        JUMP, 0x000028bc
     ____recurEnsure_bb1:
         PUSH, __intnl_SystemInt32_c62
         PUSH, __const_SystemInt32_6
@@ -1523,11 +1706,11 @@
     ____recurEnsure_bb4:
         PUSH, __intnl_SystemInt32_c67
         PUSH, __intnl_SystemInt32_c65
-        PUSH, __intnl_SystemBoolean_c10
+        PUSH, __intnl_SystemBoolean_c11
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c10
-        JUMP_IF_FALSE, 0x000023c4
-        JUMP, 0x000024cc
+        PUSH, __intnl_SystemBoolean_c11
+        JUMP_IF_FALSE, 0x00002844
+        JUMP, 0x0000294c
     ____recurEnsure_bb6:
         PUSH, __intnl_SystemInt32_c67
         PUSH, __intnl_SystemObjectArray_c33
@@ -1538,11 +1721,11 @@
     ____recurEnsure_bb7:
         PUSH, __intnl_SystemInt32_c68
         PUSH, __intnl_SystemInt32_c62
-        PUSH, __intnl_SystemBoolean_c11
+        PUSH, __intnl_SystemBoolean_c12
         EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
-        PUSH, __intnl_SystemBoolean_c11
-        JUMP_IF_FALSE, 0x00002428
-        JUMP, 0x00002450
+        PUSH, __intnl_SystemBoolean_c12
+        JUMP_IF_FALSE, 0x000028a8
+        JUMP, 0x000028d0
     ____recurEnsure_bb10:
         PUSH, __intnl_SystemObjectArray_c33
         PUSH, __recurStack
@@ -1568,7 +1751,7 @@
         PUSH, __intnl_SystemInt32_c69
         PUSH, __intnl_SystemInt32_c68
         COPY
-        JUMP, 0x000023f0
+        JUMP, 0x00002870
     ____recurEnsure_bb5:
         PUSH, __intnl_SystemInt32_c67
         PUSH, __const_SystemInt32_6
@@ -1577,7 +1760,7 @@
         PUSH, __intnl_SystemInt32_c70
         PUSH, __intnl_SystemInt32_c67
         COPY
-        JUMP, 0x0000238c
+        JUMP, 0x0000280c
 .code_end
 
 # constants
@@ -1598,26 +1781,32 @@
 #   __const_SystemString_9: %SystemString = "__dlg___2_lambda"
 #   __const_SystemString_10: %SystemString = "__dlg___3_lambda"
 #   __const_SystemString_11: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenMulticast.d)"
-#   __const_SystemString_12: %SystemString = "usugar-delegate:"
-#   __const_SystemString_13: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.d)"
-#   __const_SystemUInt32_14: %SystemUInt32 = 0
-#   __const_SystemString_15: %SystemString = "__dlgc_Void__SystemInt32__env"
-#   __const_SystemString_16: %SystemString = "__dlgc_Void__SystemInt32__ret"
-#   __const_SystemString_17: %SystemString = "USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ()"
-#   __const_SystemString_18: %SystemString = "USugar: invalid closure environment — invoked a captured delegate with a non-env payload ()"
-#   __const_SystemString_19: %SystemString = "__dlg_fanout_Void__SystemInt32"
-#   __const_SystemString_20: %SystemString = "USugar: missing invocation list — multicast fan-out invoked with a null list (__dlg_fanout_Void__SystemInt32)"
-#   __const_SystemString_21: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenMulticast.multicast fan-out)"
-#   __const_SystemString_22: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.multicast fan-out)"
+#   __const_SystemBoolean_12: %SystemBoolean = false
+#   __const_SystemType_13: %SystemType = "SystemObjectArray"
+#   __const_SystemType_14: %SystemType = "SystemString"
+#   __const_SystemString_15: %SystemString = "usugar-delegate:"
+#   __const_SystemString_16: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.d)"
+#   __const_SystemUInt32_17: %SystemUInt32 = 0
+#   __const_SystemString_18: %SystemString = "__dlgc_Void__SystemInt32__env"
+#   __const_SystemString_19: %SystemString = "__dlgc_Void__SystemInt32__ret"
+#   __const_SystemString_20: %SystemString = "USugar: missing closure environment — invoked a captured delegate whose bundle carries no env ()"
+#   __const_SystemString_21: %SystemString = "USugar: invalid closure environment — invoked a captured delegate with a non-env payload ()"
+#   __const_SystemBoolean_22: %SystemBoolean = false
+#   __const_SystemString_23: %SystemString = "__dlg_fanout_Void__SystemInt32"
+#   __const_SystemBoolean_24: %SystemBoolean = false
+#   __const_SystemString_25: %SystemString = "USugar: missing invocation list — multicast fan-out invoked with a null list (__dlg_fanout_Void__SystemInt32)"
+#   __const_SystemString_26: %SystemString = "USugar: NullReferenceException — invoked a null delegate (LatticeGenMulticast.multicast fan-out)"
+#   __const_SystemBoolean_27: %SystemBoolean = false
+#   __const_SystemString_28: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (LatticeGenMulticast.multicast fan-out)"
 #   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 136
 #   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 708
 #   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1028
-#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 1920
-#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 2480
-#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 2836
-#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 6404
-#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 7788
-#   __const_retaddr_SystemUInt32_8: %SystemUInt32 = 8256
-#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 2192
-#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 2548
-#   __const_funcaddr_SystemUInt32_2: %SystemUInt32 = 5336
+#   __const_retaddr_SystemUInt32_3: %SystemUInt32 = 2208
+#   __const_retaddr_SystemUInt32_4: %SystemUInt32 = 2768
+#   __const_retaddr_SystemUInt32_5: %SystemUInt32 = 3124
+#   __const_retaddr_SystemUInt32_6: %SystemUInt32 = 7556
+#   __const_retaddr_SystemUInt32_7: %SystemUInt32 = 8940
+#   __const_retaddr_SystemUInt32_8: %SystemUInt32 = 9408
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 2480
+#   __const_funcaddr_SystemUInt32_1: %SystemUInt32 = 2836
+#   __const_funcaddr_SystemUInt32_2: %SystemUInt32 = 6200

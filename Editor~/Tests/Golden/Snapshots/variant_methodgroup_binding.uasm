@@ -28,17 +28,21 @@
     __intnl_SystemObject_c0: %SystemObject, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
     __const_SystemString_10: %SystemString, null
-    __intnl_SystemString_c0: %SystemString, null
-    __const_SystemString_11: %SystemString, null
-    __const_SystemString_12: %SystemString, null
-    __intnl_SystemObject_c1: %SystemObject, null
-    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
-    __intnl_SystemUInt32_c0: %SystemUInt32, null
-    __const_SystemUInt32_13: %SystemUInt32, null
+    __const_SystemBoolean_11: %SystemBoolean, null
+    __const_SystemType_12: %SystemType, null
     __intnl_SystemBoolean_c1: %SystemBoolean, null
-    __intnl_SystemBoolean_c2: %SystemBoolean, null
+    __intnl_SystemInt32_c0: %SystemInt32, null
+    __intnl_SystemObject_c1: %SystemObject, null
+    __const_SystemType_13: %SystemType, null
+    __intnl_SystemString_c0: %SystemString, null
     __const_SystemString_14: %SystemString, null
     __const_SystemString_15: %SystemString, null
+    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
+    __intnl_SystemUInt32_c0: %SystemUInt32, null
+    __const_SystemUInt32_16: %SystemUInt32, null
+    __intnl_SystemBoolean_c2: %SystemBoolean, null
+    __const_SystemString_17: %SystemString, null
+    __const_SystemString_18: %SystemString, null
     __intnl_SystemObject_c2: %SystemObject, null
     __intnl_dlgptr_SystemUInt32_c0: %SystemUInt32, null
     __intnl_SystemString_c1: %SystemString, null
@@ -105,24 +109,68 @@
     ___start_bb3:
         PUSH, __const_SystemString_10
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x0000048c
+        JUMP, 0x000005ac
     ___start_bb2:
+        PUSH, __const_SystemBoolean_11
+        PUSH, __intnl_SystemBoolean_c0
+        COPY
+        PUSH, __const_SystemType_12
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x000001d4
+        JUMP, 0x000001dc
+    ___start_bb6:
+        JUMP, 0x000002e8
+    ___start_bb5:
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __intnl_SystemInt32_c0
+        EXTERN, "SystemObjectArray.__get_Length__SystemInt32"
+        PUSH, __const_SystemInt32_8
+        PUSH, __intnl_SystemInt32_c0
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemInt32.__op_LessThan__SystemInt32_SystemInt32__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x0000022c
+        JUMP, 0x00000234
+    ___start_bb9:
+        JUMP, 0x000002e8
+    ___start_bb8:
+        PUSH, __intnl_SystemObjectArray_c0
+        PUSH, __const_SystemInt32_2
+        PUSH, __intnl_SystemObject_c1
+        EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
+        PUSH, __const_SystemType_13
+        PUSH, __intnl_SystemObject_c1
+        PUSH, __intnl_SystemBoolean_c1
+        EXTERN, "SystemType.__IsInstanceOfType__SystemObject__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
+        JUMP_IF_FALSE, 0x0000028c
+        JUMP, 0x00000294
+    ___start_bb12:
+        JUMP, 0x000002e8
+    ___start_bb11:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_2
         PUSH, __intnl_SystemString_c0
         EXTERN, "SystemObjectArray.__Get__SystemInt32__SystemObject"
         PUSH, __intnl_SystemString_c0
-        PUSH, __const_SystemString_11
-        PUSH, __intnl_SystemBoolean_c0
+        PUSH, __const_SystemString_14
+        PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemString.__StartsWith__SystemString__SystemBoolean"
+        PUSH, __intnl_SystemBoolean_c1
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000001e0
-        JUMP, 0x000001f8
-    ___start_bb6:
-        PUSH, __const_SystemString_12
+        COPY
+    ___start_bb13:
+        PUSH, __intnl_SystemBoolean_c0
+        JUMP_IF_FALSE, 0x00000300
+        JUMP, 0x00000318
+    ___start_bb15:
+        PUSH, __const_SystemString_15
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x0000048c
-    ___start_bb5:
+        JUMP, 0x000005ac
+    ___start_bb14:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_4
         PUSH, __intnl_SystemObject_c1
@@ -132,13 +180,13 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "UnityEngineObject.__op_Inequality__UnityEngineObject_UnityEngineObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x00000250
-        JUMP, 0x00000268
-    ___start_bb9:
+        JUMP_IF_FALSE, 0x00000370
+        JUMP, 0x00000388
+    ___start_bb18:
         PUSH, __const_SystemString_10
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x0000048c
-    ___start_bb8:
+        JUMP, 0x000005ac
+    ___start_bb17:
         PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_8
         PUSH, __intnl_SystemObjectArray_c1
@@ -162,7 +210,7 @@
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "UnityEngineObject.__op_Equality__UnityEngineObject_UnityEngineObject__SystemBoolean"
         PUSH, __intnl_SystemUInt32_c0
-        PUSH, __const_SystemUInt32_13
+        PUSH, __const_SystemUInt32_16
         PUSH, __intnl_SystemBoolean_c1
         EXTERN, "SystemUInt32.__op_Inequality__SystemUInt32_SystemUInt32__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
@@ -170,41 +218,41 @@
         PUSH, __intnl_SystemBoolean_c2
         EXTERN, "SystemBoolean.__op_LogicalAnd__SystemBoolean_SystemBoolean__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c2
-        JUMP_IF_FALSE, 0x00000368
-        JUMP, 0x00000440
-    ___start_bb12:
+        JUMP_IF_FALSE, 0x00000488
+        JUMP, 0x00000560
+    ___start_bb21:
         PUSH, __intnl_SystemString_c0
         PUSH, __const_SystemObject_9
         PUSH, __intnl_SystemBoolean_c0
         EXTERN, "SystemObject.__op_Inequality__SystemObject_SystemObject__SystemBoolean"
         PUSH, __intnl_SystemBoolean_c0
-        JUMP_IF_FALSE, 0x000003a0
-        JUMP, 0x000003b8
-    ___start_bb15:
+        JUMP_IF_FALSE, 0x000004c0
+        JUMP, 0x000004d8
+    ___start_bb24:
         PUSH, __const_SystemString_10
         EXTERN, "UnityEngineDebug.__LogError__SystemObject__SystemVoid"
-        JUMP, 0x00000438
-    ___start_bb14:
+        JUMP, 0x00000558
+    ___start_bb23:
         PUSH, __dlgc_Void__SystemObject__env
         PUSH, __intnl_SystemObjectArray_c0
         COPY
         PUSH, __intnl_SystemObject_c1
-        PUSH, __const_SystemString_14
+        PUSH, __const_SystemString_17
         PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SetProgramVariable__SystemString_SystemObject__SystemVoid"
         PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemString_c0
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__SendCustomEvent__SystemString__SystemVoid"
         PUSH, __intnl_SystemObject_c1
-        PUSH, __const_SystemString_15
+        PUSH, __const_SystemString_18
         PUSH, __intnl_SystemObject_c2
         EXTERN, "VRCUdonCommonInterfacesIUdonEventReceiver.__GetProgramVariable__SystemString__SystemObject"
         PUSH, __intnl_SystemObject_c2
         PUSH, __intnl_SystemObject_c0
         COPY
-    ___start_bb16:
-        JUMP, 0x0000048c
-    ___start_bb11:
+    ___start_bb25:
+        JUMP, 0x000005ac
+    ___start_bb20:
         PUSH, __intnl_SystemUInt32_c0
         PUSH, __intnl_dlgptr_SystemUInt32_c0
         COPY
@@ -217,7 +265,7 @@
         PUSH, __intnl_SystemObject_c1
         PUSH, __intnl_SystemObject_c0
         COPY
-    ___start_bb13:
+    ___start_bb22:
         PUSH, __intnl_SystemObject_c0
         PUSH, result
         COPY
@@ -275,12 +323,15 @@
 #   __const_SystemInt32_7: %SystemInt32 = 3
 #   __const_SystemInt32_8: %SystemInt32 = 4
 #   __const_SystemString_10: %SystemString = "USugar: NullReferenceException — invoked a null delegate (VariantMethodGroupBinding.f)"
-#   __const_SystemString_11: %SystemString = "usugar-delegate:"
-#   __const_SystemString_12: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (VariantMethodGroupBinding.f)"
-#   __const_SystemUInt32_13: %SystemUInt32 = 0
-#   __const_SystemString_14: %SystemString = "__dlgc_Void__SystemObject__env"
-#   __const_SystemString_15: %SystemString = "__dlgc_Void__SystemObject__ret"
-#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 1124
-#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1248
-#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1332
-#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1316
+#   __const_SystemBoolean_11: %SystemBoolean = false
+#   __const_SystemType_12: %SystemType = "SystemObjectArray"
+#   __const_SystemType_13: %SystemType = "SystemString"
+#   __const_SystemString_14: %SystemString = "usugar-delegate:"
+#   __const_SystemString_15: %SystemString = "USugar: invalid delegate bundle — value is not a USugar delegate (VariantMethodGroupBinding.f)"
+#   __const_SystemUInt32_16: %SystemUInt32 = 0
+#   __const_SystemString_17: %SystemString = "__dlgc_Void__SystemObject__env"
+#   __const_SystemString_18: %SystemString = "__dlgc_Void__SystemObject__ret"
+#   __const_retaddr_SystemUInt32_0: %SystemUInt32 = 1412
+#   __const_retaddr_SystemUInt32_1: %SystemUInt32 = 1536
+#   __const_retaddr_SystemUInt32_2: %SystemUInt32 = 1620
+#   __const_funcaddr_SystemUInt32_0: %SystemUInt32 = 1604
