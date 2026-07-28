@@ -3,6 +3,13 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using Microsoft.CodeAnalysis;
 
+internal enum GenericComponentQueryDisposition
+{
+    BehaviourShim,
+    TypedGenericExtern,
+    ErasedTypeQuery,
+}
+
 internal readonly struct CallSiteBindingScope : IEquatable<CallSiteBindingScope>
 {
     readonly SpecializationKey? _method;
@@ -87,6 +94,8 @@ internal sealed class BoundCallSite
     public readonly DispatchPlan? Dispatch;
     public readonly INamedTypeSymbol ReceiverType;
     public readonly bool UsesRuntimeDispatch;
+    public readonly GenericComponentQueryDisposition?
+        ComponentQueryDisposition;
     public IMethodSymbol Target
         => Dispatch?.BoundTarget ?? Callable.Site.Target;
 
@@ -94,15 +103,24 @@ internal sealed class BoundCallSite
         ResolvedCallableSite callable,
         DispatchPlan? dispatch,
         INamedTypeSymbol receiverType,
-        bool usesRuntimeDispatch)
+        bool usesRuntimeDispatch,
+        GenericComponentQueryDisposition?
+            componentQueryDisposition)
     {
         Callable = callable ?? throw new ArgumentNullException(nameof(callable));
         Dispatch = dispatch;
         ReceiverType = receiverType;
         UsesRuntimeDispatch = usesRuntimeDispatch;
+        ComponentQueryDisposition = componentQueryDisposition;
     }
 
     public DispatchPlan RequireDispatch()
         => Dispatch ?? throw new InvalidOperationException(
             $"Instance callable site '{Callable.Site.Target}' has no bound dispatch plan.");
+
+    public GenericComponentQueryDisposition
+        RequireComponentQueryDisposition()
+        => ComponentQueryDisposition
+           ?? throw new InvalidOperationException(
+               $"Generic component query '{Callable.Site.Target}' has no bound lowering disposition.");
 }

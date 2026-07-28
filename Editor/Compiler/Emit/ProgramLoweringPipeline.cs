@@ -1427,18 +1427,82 @@ public sealed class UasmEmitter
                 }
                 var key = new BoundCallSiteKey(
                     operation.Syntax, rawSite.Kind, scope);
+                var componentQueryDisposition =
+                    rawSite.Kind == CallableSiteKind.Method
+                    && InvocationIntrinsicEmitter
+                        .GenericComponentQueryKey
+                        .Matches(target)
+                        ? BindGenericComponentQueryDisposition(
+                            target, typeMap, abiBuilder)
+                        : (GenericComponentQueryDisposition?)null;
                 if (!sites.TryAdd(
                         key,
                         new BoundCallSite(
                             resolved,
                             dispatch,
                             receiver,
-                            usesRuntimeDispatch)))
+                            usesRuntimeDispatch,
+                            componentQueryDisposition)))
                     throw new InvalidOperationException(
                         $"Callable site '{operation.Syntax}' was bound twice in one specialization.");
             }
             foreach (var child in operation.ChildOps())
                 BindTree(child, typeMap, scope, body, false);
+        }
+
+        GenericComponentQueryDisposition
+            BindGenericComponentQueryDisposition(
+                IMethodSymbol target,
+                IReadOnlyDictionary<
+                    ITypeParameterSymbol, ITypeSymbol>
+                    typeMap,
+                BoundAbiPlanBuilder abi)
+        {
+            var typeArg = target.TypeArguments[0];
+            var resolvedTypeArg = _state.Types.Resolve(
+                typeArg, typeMap);
+            if (_state.Types.Describe(
+                    typeArg,
+                    typeMap).Representation
+                == UdonRepresentationKind
+                    .ObjectArrayBehaviourAlias)
+                throw new NotSupportedException(
+                    $"GetComponent<{resolvedTypeArg.ToDisplayString()}> is invalid: this type is used "
+                    + "as a legacy object[] nominal alias in the same compilation and therefore has "
+                    + "SystemObjectArray storage, not a scene-component representation.");
+
+            if (ExternResolver.IsUdonSharpBehaviour(
+                    resolvedTypeArg))
+                return GenericComponentQueryDisposition
+                    .BehaviourShim;
+
+            var tokenUdonType =
+                _lowering.TypeTokenName(
+                    typeArg, typeMap);
+            var parameterTypes = target.OriginalDefinition
+                .Parameters
+                .Select(parameter =>
+                    _state.Types.GetStorageType(
+                        parameter.Type, typeMap).Name)
+                .ToArray();
+            var key = UdonAbiKey.Method(
+                tokenUdonType,
+                target.Name,
+                parameterTypes,
+                target.Name.StartsWith("GetComponents")
+                    ? "TArray"
+                    : "T");
+
+            // UdonAbiKey normalizes extern ownership. A token is a legal
+            // generic dispatch key only when that remap preserves its
+            // runtime identity and the same frozen catalog contains the
+            // token-owned getter module.
+            return key.Owner == tokenUdonType
+                   && abi.ContainsExact(key)
+                ? GenericComponentQueryDisposition
+                    .TypedGenericExtern
+                : GenericComponentQueryDisposition
+                    .ErasedTypeQuery;
         }
 
         void BindRoot(

@@ -102,9 +102,6 @@ internal sealed class BoundAbiPlan
             new Dictionary<BoundAbiOperationKey, string>());
     }
 
-    internal bool ContainsExact(UdonAbiKey key)
-        => _exact.ContainsKey(key.ToRegistryName());
-
     internal BoundExtern RequireExact(UdonAbiKey key)
     {
         var name = key.ToRegistryName();
@@ -196,6 +193,13 @@ internal sealed class BoundAbiPlanBuilder
     {
         RequireMutable();
         return _catalog.Require(key);
+    }
+
+    public bool ContainsExact(UdonAbiKey key)
+    {
+        RequireMutable();
+        return _catalog.ExactPrototypes.ContainsKey(
+            key.ToRegistryName());
     }
 
     public BoundExtern BindMethod(

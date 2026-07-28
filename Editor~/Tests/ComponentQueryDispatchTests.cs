@@ -1,3 +1,4 @@
+using System.Linq;
 using Xunit;
 
 namespace USugar.Tests;
@@ -116,6 +117,86 @@ public class EQ4 : UdonSharpBehaviour { public VRC_Pickup f;
         Assert.DoesNotContain("VRCUdonCommonInterfacesIUdonEventReceiver", reference);
         Assert.DoesNotContain("VRCSDKBaseVRC_Pickup", reference);
         Assert.Contains("VRCSDK3ComponentsVRCPickup", reference);
+    }
+
+    [Fact]
+    public void LoweringDispositionIsFrozenFromTheExactCatalogSnapshot()
+    {
+        const string source = @"
+using UdonSharp; using UnityEngine;
+public class FrozenComponentQuery : UdonSharpBehaviour
+{
+    public Transform result;
+    void Start() { result = GetComponent<Transform>(); }
+}";
+        const string typedMembership =
+            "UnityEngineTransform.__GetComponent__T";
+        var compilation = TestHelper.BuildCompilation(
+            source, "FrozenComponentQuery",
+            out var classSymbol);
+        var invocation = compilation
+            .GetSemanticModel(compilation.SyntaxTrees.Last())
+            .GetOperation(compilation.SyntaxTrees.Last()
+                .GetRoot().DescendantNodes()
+                .OfType<Microsoft.CodeAnalysis.CSharp.Syntax
+                    .InvocationExpressionSyntax>()
+                .Single());
+
+        var typedEmitter = new UasmEmitter(
+            compilation, classSymbol,
+            externRegistry: TestHelper.RegistryFacts);
+        var typedUasm = typedEmitter.Emit();
+        Assert.Equal(
+            GenericComponentQueryDisposition
+                .TypedGenericExtern,
+            QuerySite(typedEmitter, invocation)
+                .RequireComponentQueryDisposition());
+        Assert.Contains(
+            "UnityEngineComponent.__GetComponent__T",
+            typedUasm);
+
+        var withoutTypedMembership =
+            new UdonAbiCatalog(
+                TestHelper.RegistryFacts.Prototypes
+                    .Where(prototype =>
+                        prototype.RegisteredName
+                        != typedMembership),
+                TestHelper.RegistryFacts.TypeFacts,
+                TestHelper.RegistryFacts.RegisteredTypes,
+                TestHelper.RegistryFacts.AssignabilityFacts);
+        Assert.DoesNotContain(
+            withoutTypedMembership.Prototypes,
+            prototype => prototype.RegisteredName
+                         == typedMembership);
+
+        var erasedEmitter = new UasmEmitter(
+            compilation, classSymbol,
+            externRegistry: withoutTypedMembership);
+        var erasedUasm = erasedEmitter.Emit();
+        Assert.Equal(
+            GenericComponentQueryDisposition
+                .ErasedTypeQuery,
+            QuerySite(erasedEmitter, invocation)
+                .RequireComponentQueryDisposition());
+        Assert.Contains(
+            "UnityEngineComponent.__GetComponent__SystemType__UnityEngineComponent",
+            erasedUasm);
+        Assert.DoesNotContain(
+            "UnityEngineComponent.__GetComponent__T",
+            erasedUasm);
+    }
+
+    static BoundCallSite QuerySite(
+        UasmEmitter emitter,
+        Microsoft.CodeAnalysis.IOperation invocation)
+    {
+        var body = emitter.Program.CallableBodies
+            .Single(candidate =>
+                candidate.Method.Name == "Start");
+        return emitter.Program.RequireCallSite(
+            invocation.Syntax,
+            CallableSiteKind.Method,
+            body.BindingScope);
     }
 
     static System.Collections.Generic.SortedSet<string> OwnersOf(string suffix)

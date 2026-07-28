@@ -417,47 +417,24 @@ internal sealed class ExternInvocationLowerer
 
     internal CLeaf EmitGetComponentGeneric(IInvocationOperation op, IMethodSymbol target)
     {
-        var typeArg = target.TypeArguments[0];
-        if (_lowering.State.Types.Describe(
-                typeArg,
-                _lowering.TypeParamMap).Representation
-            == UdonRepresentationKind.ObjectArrayBehaviourAlias)
-            throw new System.NotSupportedException(
-                $"GetComponent<{_lowering.ResolveType(typeArg).ToDisplayString()}> is invalid: this type is used "
-                + "as a legacy object[] nominal alias in the same compilation and therefore has "
-                + "SystemObjectArray storage, not a scene-component representation.");
-        if (ExternResolver.IsUdonSharpBehaviour(typeArg))
-            return EmitGetComponentShim(op, target);
-        return IsGenericComponentGetterKey(target, _lowering.TypeTokenName(typeArg))
-            ? EmitGetComponentExtern(op, target)
-            : EmitGetComponentErasedQuery(op, target);
-    }
-
-    /// <summary>
-    /// The generic component-query node OWNED BY the type token, i.e. the registration that makes the
-    /// token a legal runtime dispatch key. `UnityEngineComponent.__GetComponent__T` forwards to
-    /// `UdonWrapper.GetComponent__T`, which reads the token off the heap and indexes
-    /// `_componentGetterModules[token]` with a BARE indexer — a miss is a KeyNotFoundException thrown
-    /// out of the EXTERN, which halts the behaviour. The dictionary is populated from every wrapper
-    /// module implementing IUdonComponentGetterModule, and that same interface is what registers the
-    /// module's own `__GetComponent*__T` node under its own type name. So the token is a legal key
-    /// exactly when this key resolves — one interface causing both facts, not a numeric coincidence.
-    /// The frozen ABI snapshot answers this membership question from the same
-    /// installed-SDK registry used while the bound program was materialized.
-    /// </summary>
-    bool IsGenericComponentGetterKey(IMethodSymbol target, string tokenUdonType)
-    {
-        var parameterTypes = target.OriginalDefinition.Parameters
-            .Select(parameter => _lowering.GetStorageTypeName(parameter.Type))
-            .ToArray();
-        var key = UdonAbiKey.Method(tokenUdonType, target.Name, parameterTypes,
-            target.Name.StartsWith("GetComponents") ? "TArray" : "T");
-
-        // UdonAbiKey normalizes its owner through the extern-OWNERSHIP remap (VRC_Pickup's members are
-        // registered under VRCPickup). That remap is about calling members ON a receiver and says
-        // nothing about the token's runtime identity, so if it rewrote the name the catalog would
-        // answer about a different type than the one being baked. Treat any divergence as "not a key".
-        return key.Owner == tokenUdonType && _lowering.State.BoundAbi.ContainsExact(key);
+        switch (_lowering.RequireBoundCallSite(
+                    op, CallableSiteKind.Method)
+                .RequireComponentQueryDisposition())
+        {
+            case GenericComponentQueryDisposition
+                .BehaviourShim:
+                return EmitGetComponentShim(op, target);
+            case GenericComponentQueryDisposition
+                .TypedGenericExtern:
+                return EmitGetComponentExtern(op, target);
+            case GenericComponentQueryDisposition
+                .ErasedTypeQuery:
+                return EmitGetComponentErasedQuery(
+                    op, target);
+            default:
+                throw new System.InvalidOperationException(
+                    $"Generic component query '{target}' has an unknown bound lowering disposition.");
+        }
     }
 
     // ── GetComponent<T> where T is not a legal generic-dispatch key ──

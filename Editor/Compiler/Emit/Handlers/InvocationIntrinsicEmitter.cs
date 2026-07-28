@@ -11,6 +11,23 @@ internal sealed class InvocationIntrinsicEmitter
     internal InvocationIntrinsicEmitter(InvocationHandler owner)
         => _owner = owner ?? throw new System.ArgumentNullException(nameof(owner));
 
+    internal static readonly IntrinsicKey GenericComponentQueryKey =
+        new(
+            new[] { "UnityEngine.Component", "UnityEngine.GameObject" },
+            new[]
+            {
+                "GetComponent",
+                "GetComponents",
+                "GetComponentInChildren",
+                "GetComponentsInChildren",
+                "GetComponentInParent",
+                "GetComponentsInParent",
+            },
+            genericArity: 1,
+            minimumParameters: 0, maximumParameters: 1,
+            constrainedOrdinal: 0,
+            constrainedTypeName: "System.Boolean");
+
     static readonly InvocationIntrinsicRegistry InvocationIntrinsics
         = new(new[]
         {
@@ -36,20 +53,7 @@ internal sealed class InvocationIntrinsicEmitter
                     handler.Intrinsics.IsAggregateArrayCopyIntrinsic(operation, target)),
             new InvocationIntrinsicRule(
                 "generic-component-query",
-                new IntrinsicKey(
-                    new[] { "UnityEngine.Component", "UnityEngine.GameObject" },
-                    new[]
-                    {
-                        "GetComponent",
-                        "GetComponents",
-                        "GetComponentInChildren",
-                        "GetComponentsInChildren",
-                        "GetComponentInParent",
-                        "GetComponentsInParent",
-                    },
-                    genericArity: 1,
-                    minimumParameters: 0, maximumParameters: 1,
-                    constrainedOrdinal: 0, constrainedTypeName: "System.Boolean"),
+                GenericComponentQueryKey,
                 (handler, operation, target) =>
                     handler.Externs.EmitGetComponentGeneric(operation, target)),
         });

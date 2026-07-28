@@ -342,13 +342,22 @@ internal sealed class LoweringServices
     /// must reason about the token's runtime identity — a generic extern whose dispatch keys on it —
     /// asks the same producer instead of recomputing the collapse un-fold.</summary>
     internal string TypeTokenName(ITypeSymbol typeSymbol)
+        => TypeTokenName(typeSymbol, _typeParamMap);
+
+    internal string TypeTokenName(
+        ITypeSymbol typeSymbol,
+        IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol>
+            typeParameterMap)
     {
-        if (ResolveType(typeSymbol) is ITypeParameterSymbol unresolvedTp)
+        if (_state.Types.Resolve(
+                typeSymbol, typeParameterMap)
+            is ITypeParameterSymbol unresolvedTp)
             throw new NotSupportedException(
                 $"A System.Type token for unresolved type parameter '{unresolvedTp.Name}' cannot be emitted: "
                 + "its type argument did not reach this emit site (a generic-instantiation map gap). The token "
                 + "would bake a null System.Type constant and fault at runtime.");
-        var name = GetStorageTypeName(typeSymbol);
+        var name = _state.Types.GetStorageType(
+            typeSymbol, typeParameterMap).Name;
         return name == "VRCUdonCommonInterfacesIUdonEventReceiver" ? "VRCUdonUdonBehaviour" : name;
     }
 
