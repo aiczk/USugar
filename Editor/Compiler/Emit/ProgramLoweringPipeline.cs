@@ -2193,6 +2193,7 @@ public sealed class UasmEmitter
     // separately while the bound program is materialized). Reject it too.
     internal static bool IsCollectibleStructMember(IMethodSymbol m)
         => m != null
+            && !(m.IsImplicitlyDeclared && m.MethodKind == MethodKind.Ordinary)
             && !(m.ContainingType.IsGenericType
                 && m.ContainingType.TypeArguments.Any(ta => ta is ITypeParameterSymbol))
             && !(m.IsGenericMethod
