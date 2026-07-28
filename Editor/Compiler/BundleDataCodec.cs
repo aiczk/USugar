@@ -160,6 +160,20 @@ internal static class BundleDataCodec
         if (seen.TryGetValue(bundle, out var prior))
             return prior;
 
+        // One-dimensional non-native arrays use the Udon SystemObjectArray carrier directly:
+        // unlike data bundles, slot zero is the first encoded element rather than a runtime-type
+        // header. The declared array type therefore owns element decoding and must be handled
+        // before attempting to resolve a tagged bundle identity.
+        if (declaredType.IsArray)
+        {
+            if (declaredType.GetArrayRank() > 1)
+                throw Unsupported(
+                    declaredType,
+                    "multidimensional arrays have no Udon representation");
+            return DecodeArray(
+                bundle, declaredType, isNativeLeaf, seen);
+        }
+
         var runtimeType = ResolveRuntimeType(
             bundle, declaredType, isNativeLeaf);
         if (runtimeType.IsArray)
