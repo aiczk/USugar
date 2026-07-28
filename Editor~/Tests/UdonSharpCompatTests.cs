@@ -134,7 +134,15 @@ public class IsValidExternTest : UdonSharpBehaviour {
 
     [Fact]
     public void Compat_DefaultHeapValueTest()
-        => TestHelper.CompileToUasm(ReadTestFile("Canny", "DefaultHeapValueTest.cs"), "DefaultHeapValueTest");
+    {
+        // The upstream test observes GetType() on a jagged-array carrier.
+        // USugar intentionally hides that object[] implementation detail.
+        var ex = Assert.Throws<NotSupportedException>(
+            () => TestHelper.CompileToUasm(
+                ReadTestFile("Canny", "DefaultHeapValueTest.cs"),
+                "DefaultHeapValueTest"));
+        Assert.Contains("extern-call ABI", ex.Message);
+    }
 
     [Fact]
     public void Compat_JaggedArrayCOWTest()

@@ -136,6 +136,50 @@ public class DynamicEqualsHost : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void ErasedSourceEqualsOverride_IsRejectedInsteadOfReplaced()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ErasedEqualsOverrideNode {
+    public override bool Equals(object other) => true;
+    public override int GetHashCode() => 1;
+}
+public class ErasedEqualsOverrideHost : UdonSharpBehaviour {
+    public bool result;
+    void Start() {
+        result = object.Equals(
+            new ErasedEqualsOverrideNode(),
+            new ErasedEqualsOverrideNode());
+    }
+}", "ErasedEqualsOverrideHost"));
+
+        Assert.Contains(
+            "closed-world virtual dispatch", error.Message);
+    }
+
+    [Fact]
+    public void ErasedSourceHashOverride_IsRejectedInsteadOfReplaced()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class ErasedHashOverrideNode {
+    public override int GetHashCode() => 7;
+}
+public class ErasedHashOverrideHost : UdonSharpBehaviour {
+    public int result;
+    void Start() {
+        object value = new ErasedHashOverrideNode();
+        result = value.GetHashCode();
+    }
+}", "ErasedHashOverrideHost"));
+
+        Assert.Contains(
+            "closed-world virtual dispatch", error.Message);
+    }
+
+    [Fact]
     public void DynamicGetType_RejectsCompilerBundleCarrier()
     {
         var ex = Assert.Throws<NotSupportedException>(() =>

@@ -64,6 +64,81 @@ public class Wj2Box : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void StructBoxing_ClonesTheValueCarrierOnce()
+    {
+        var once = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct Wj2BoxCopyOnce {
+    public int v;
+    public override string ToString() { v++; return ""boxed""; }
+}
+public class Wj2BoxCopyOnceHost : UdonSharpBehaviour {
+    public int seed;
+    public string first;
+    void Start() {
+        Wj2BoxCopyOnce value;
+        value.v = seed;
+        object boxed = value;
+        value.v = seed + 10;
+        first = boxed.ToString();
+    }
+}", "Wj2BoxCopyOnceHost");
+        var twice = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct Wj2BoxCopyTwice {
+    public int v;
+    public override string ToString() { v++; return ""boxed""; }
+}
+public class Wj2BoxCopyTwiceHost : UdonSharpBehaviour {
+    public int seed;
+    public string first;
+    public string second;
+    void Start() {
+        Wj2BoxCopyTwice value;
+        value.v = seed;
+        object boxed = value;
+        value.v = seed + 10;
+        first = boxed.ToString();
+        second = boxed.ToString();
+    }
+}", "Wj2BoxCopyTwiceHost");
+
+        int ConstructorCount(string uasm)
+            => uasm.Split(
+                    "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray")
+                .Length - 1;
+        Assert.Equal(
+            ConstructorCount(once),
+            ConstructorCount(twice));
+        Assert.True(ConstructorCount(once) >= 2);
+    }
+
+    [Fact]
+    public void NullableStructBoxing_ClonesOnlyThePresentValue()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct Wj2NullableBoxValue { public int v; }
+public class Wj2NullableBoxHost : UdonSharpBehaviour {
+    public int seed;
+    public object boxed;
+    void Start() {
+        Wj2NullableBoxValue? value = seed > 0
+            ? new Wj2NullableBoxValue { v = seed }
+            : (Wj2NullableBoxValue?)null;
+        boxed = value;
+    }
+}", "Wj2NullableBoxHost");
+
+        Assert.Contains(
+            "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray",
+            uasm);
+        Assert.Contains(
+            "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
+            uasm);
+    }
+
+    [Fact]
     public void TupleErasedToObject_StringifiesByRuntimeIdentity()
     {
         var uasm = TestHelper.CompileToUasm(@"

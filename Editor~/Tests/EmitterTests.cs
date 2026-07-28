@@ -2510,9 +2510,10 @@ public class JaggedTest : UdonSharpBehaviour {
     }
 
     [Fact]
-    public void JaggedArray_GetType_ReflectsItsObjectArrayCarrier()
+    public void JaggedArray_GetType_RejectsErasedRuntimeIdentity()
     {
-        var uasm = TestHelper.CompileToUasm(@"
+        var ex = Assert.Throws<NotSupportedException>(
+            () => TestHelper.CompileToUasm(@"
 using System;
 using UdonSharp;
 public class JaggedGetTypeTest : UdonSharpBehaviour {
@@ -2522,12 +2523,11 @@ public class JaggedGetTypeTest : UdonSharpBehaviour {
         result = values.GetType() == typeof(object[]);
     }
 }
-", "JaggedGetTypeTest");
+", "JaggedGetTypeTest"));
 
         Assert.Contains(
-            "SystemObject.__GetType__SystemType",
-            uasm);
-        Assert.Contains("__const_SystemType_", uasm);
+            "extern-call ABI",
+            ex.Message);
     }
 
     [Fact]
@@ -6201,11 +6201,11 @@ public class TupleEqTest : UdonSharpBehaviour {
         Assert.Contains(
             "SystemSingle.__op_Equality__SystemSingle_SystemSingle__SystemBoolean",
             uasm);
-        Assert.Contains("__op_LogicalAnd__", uasm);
+        Assert.Contains("JUMP_IF_FALSE", uasm);
     }
 
     [Fact]
-    public void TupleInequality_EmitsNegatedFieldwiseComparison()
+    public void TupleInequality_EmitsElementInequality()
     {
         var uasm = TestHelper.CompileToUasm(@"
 using UdonSharp;
@@ -6221,12 +6221,14 @@ public class TupleNeqTest : UdonSharpBehaviour {
         Assert.DoesNotContain("SystemObjectArray.__op_Inequality__", uasm);
         // Tuple != applies element inequality semantics rather than object.Equals.
         Assert.Contains(
-            "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
+            "SystemInt32.__op_Inequality__SystemInt32_SystemInt32__SystemBoolean",
             uasm);
         Assert.Contains(
-            "SystemString.__op_Equality__SystemString_SystemString__SystemBoolean",
+            "SystemString.__op_Inequality__SystemString_SystemString__SystemBoolean",
             uasm);
-        Assert.Contains("__op_UnaryNegation__", uasm);
+        Assert.DoesNotContain(
+            "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
+            uasm);
     }
 
     [Fact]
@@ -6329,7 +6331,7 @@ public class NestedTupleEqTest : UdonSharpBehaviour {
         Assert.Contains(
             "SystemInt32.__op_Equality__SystemInt32_SystemInt32__SystemBoolean",
             uasm);
-        Assert.Contains("SystemBoolean.__op_LogicalAnd", uasm);
+        Assert.Contains("JUMP_IF_FALSE", uasm);
     }
 
     [Fact]
@@ -6354,6 +6356,51 @@ public class TupleNanEqTest : UdonSharpBehaviour {
         Assert.Contains(
             "SystemObject.__Equals__SystemObject_SystemObject__SystemBoolean",
             uasm);
+    }
+
+    [Fact]
+    public void TupleEquality_RequiringElementConversions_IsRejected()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class TupleConvertedEqTest : UdonSharpBehaviour {
+    bool _result;
+    void Start() {
+        (int, int) left = (1, 2);
+        (long, long) right = (1L, 2L);
+        _result = left == right;
+    }
+}", "TupleConvertedEqTest"));
+
+        Assert.Contains(
+            "implicit conversions", error.Message);
+    }
+
+    [Fact]
+    public void TupleEquality_WithSourceOperator_IsRejected()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public struct TupleEqValue {
+    public int Value;
+    public static bool operator ==(
+        TupleEqValue left, TupleEqValue right) => true;
+    public static bool operator !=(
+        TupleEqValue left, TupleEqValue right) => false;
+}
+public class TupleSourceEqTest : UdonSharpBehaviour {
+    bool _result;
+    void Start() {
+        var left = (new TupleEqValue(), 0);
+        var right = (new TupleEqValue(), 0);
+        _result = left == right;
+    }
+}", "TupleSourceEqTest"));
+
+        Assert.Contains(
+            "source-defined == operator", error.Message);
     }
 
     // ── Tuple array ──

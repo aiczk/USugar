@@ -30,6 +30,8 @@ internal sealed class CompoundAssignmentHandler
             operatorMethod = _lowering.RequireBoundCallSite(
                 op, CallableSiteKind.Operator).Callable.Site.Target;
 
+        LoweringServices.RejectChecked(op.IsChecked);
+
         // Multicast design (2026-07-03 §1.4/§7 A-M1): `+=`/`-=` on ANY delegate-typed target (field,
         // local, param, property, array element, …) lowers to the sig's synthetic combine/remove helper
         // instead of rejecting. Predicate unchanged from the former reject arm (widened per Stage-1 §5.2).
@@ -283,21 +285,24 @@ internal sealed class CompoundAssignmentHandler
         var crossBehaviour = !evt.IsStatic
             && evtRef.Instance is not IInstanceReferenceOperation;
         CLeaf eventReceiver = null;
-        CLeaf currentVal;
         if (crossBehaviour)
-        {
             eventReceiver = _lowering.VisitExpression(evtRef.Instance);
-            currentVal = _lowering.LoadProgramVariable(
-                eventReceiver, storageName, new StorageType(DelegateAbi.BundleType));
-        }
-        else
-        {
-            currentVal = _lowering.LoadField(storageName, new StorageType(DelegateAbi.BundleType));
-        }
+
+        // Event assignment is an accessor call in C#: evaluate the receiver, then the
+        // handler argument, and only then enter the add/remove accessor and read its
+        // backing delegate. Reading currentVal before HandlerValue loses a subscription
+        // when the handler expression itself mutates this event.
         var handler = _lowering.VisitLoweredExpression(op.HandlerValue);
         if (op.Adds)
             _lowering.RejectUnsafeCrossProgramEventHandler(evt, handler.Info);
         var handlerVal = handler.Leaf;
+        var currentVal = crossBehaviour
+            ? _lowering.LoadProgramVariable(
+                eventReceiver, storageName,
+                new StorageType(DelegateAbi.BundleType))
+            : _lowering.LoadField(
+                storageName,
+                new StorageType(DelegateAbi.BundleType));
 
         var sigPart = DelegateAbi.BuildSigPart(
             invoke, _lowering.State.Types,
@@ -329,6 +334,8 @@ internal sealed class CompoundAssignmentHandler
         if (operatorMethod != null)
             operatorMethod = _lowering.RequireBoundCallSite(
                 op, CallableSiteKind.Operator).Callable.Site.Target;
+
+        LoweringServices.RejectChecked(op.IsChecked);
 
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = _lvalues.PrepareLValue(op.Target);

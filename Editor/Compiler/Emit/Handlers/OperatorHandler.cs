@@ -897,16 +897,14 @@ internal sealed class OperatorHandler
         if (op.LeftOperand.Type is not INamedTypeSymbol aggType || !aggType.IsTupleType)
             throw new System.NotSupportedException(
                 $"Tuple binary operation on non-tuple type: {op.LeftOperand.Type}");
-        var result = _lowering.EmitTupleOperatorEquality(
+        _lowering.RequireTupleEqualityOperandsCompatible(
+            op.LeftOperand, op.RightOperand);
+        return _lowering.EmitTupleOperatorEquality(
             _lowering.VisitExpression(op.LeftOperand),
             _lowering.VisitExpression(op.RightOperand),
-            aggType);
-        return op.OperatorKind == BinaryOperatorKind.NotEquals
-            ? _lowering.ExternCall(
-                UdonAbi.BooleanNot,
-                new List<CLeaf> { result },
-                StorageTypes.Boolean)
-            : result;
+            aggType,
+            op.OperatorKind
+                == BinaryOperatorKind.NotEquals);
     }
 
     // ── Aggregate (tuple) equality (via IBinaryOperation shape) ──
@@ -915,16 +913,14 @@ internal sealed class OperatorHandler
         IBinaryOperation op,
         INamedTypeSymbol aggType)
     {
-        var result = _lowering.EmitTupleOperatorEquality(
+        _lowering.RequireTupleEqualityOperandsCompatible(
+            op.LeftOperand, op.RightOperand);
+        return _lowering.EmitTupleOperatorEquality(
             _lowering.VisitExpression(op.LeftOperand),
             _lowering.VisitExpression(op.RightOperand),
-            aggType);
-        return op.OperatorKind == BinaryOperatorKind.NotEquals
-            ? _lowering.ExternCall(
-                UdonAbi.BooleanNot,
-                new List<CLeaf> { result },
-                StorageTypes.Boolean)
-            : result;
+            aggType,
+            op.OperatorKind
+                == BinaryOperatorKind.NotEquals);
     }
 
 }

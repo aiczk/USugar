@@ -287,6 +287,13 @@ internal sealed class AbiDemandPlanner
                 operation, operation.OperatorMethod, scope))
             return;
 
+        // Array ==/!= is a compiler intrinsic over System.Object reference
+        // identity. It deliberately has no source-array operator ABI demand:
+        // collapsed arrays use SystemObjectArray while native arrays retain
+        // their typed carrier, but C# compares the references in both cases.
+        if (ArrayHandler.IsReferenceEquality(operation))
+            return;
+
         if (NullableAbi.IsNullLiteralComparison(operation, out _))
             return;
 

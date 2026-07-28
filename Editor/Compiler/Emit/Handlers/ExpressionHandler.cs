@@ -515,6 +515,48 @@ internal sealed class ExpressionHandler
         var sourceValue = _lowering.VisitLoweredExpression(conv.Operand);
         var srcVal = sourceValue.Leaf;
 
+        // Boxing a user struct copies its current value into a distinct box.
+        // The carrier is already an object[], so a raw pass-through would
+        // alias the original struct storage across the boxing boundary.
+        if (operatorMethod == null
+            && resolvedConversionDestination?.SpecialType
+                == SpecialType.System_Object)
+        {
+            if (resolvedConversionSource
+                    is INamedTypeSymbol boxedAggregate
+                && _lowering.IsAggregateValue(boxedAggregate))
+                srcVal = AggregateAbi.DeepClone(
+                    _lowering.Builder, srcVal, boxedAggregate,
+                    _lowering.State.Aggregates.GetLayout);
+            else if (EmitPolicy.IsNullableT(
+                         resolvedConversionSource,
+                         out var boxedUnderlying)
+                     && _lowering.ResolveType(boxedUnderlying)
+                         is INamedTypeSymbol boxedNullableAggregate
+                     && _lowering.IsAggregateValue(
+                         boxedNullableAggregate))
+            {
+                var boxedResult =
+                    _lowering.State.Builder.AllocScratch(
+                        StorageTypes.Object);
+                _lowering.Builder.EmitIf(
+                    NullableAbi.HasValue(
+                        _lowering.Builder, srcVal),
+                    _ => _lowering.EmitAssign(
+                        boxedResult,
+                        AggregateAbi.DeepClone(
+                            _lowering.Builder, srcVal,
+                            boxedNullableAggregate,
+                            _lowering.State.Aggregates
+                                .GetLayout)),
+                    _ => _lowering.EmitAssign(
+                        boxedResult,
+                        _lowering.Const(
+                            null, StorageTypes.Object)));
+                srcVal = _lowering.SlotRef(boxedResult);
+            }
+        }
+
         // B62: `o as T` — mirror the `is` machinery through the same runtime-type-test choke point:
         // (o is T) ? o : null. A non-distinguishable (collapse-set) target hits EmitTypeCheck's loud
         // reject, exactly like `is`; a failing cast nulls the slot instead of passing the value through

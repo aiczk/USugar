@@ -11,8 +11,39 @@ internal sealed class ArrayHandler
     {
         IArrayCreationOperation op => VisitArrayCreation(op),
         IArrayElementReferenceOperation op => VisitArrayElementReference(op),
+        IBinaryOperation op when IsReferenceEquality(op)
+            => VisitReferenceEquality(op),
         _ => throw new System.NotSupportedException(expression.GetType().Name),
     };
+
+    internal static bool IsReferenceEquality(IOperation expression)
+        => expression is IBinaryOperation
+        {
+            OperatorKind: BinaryOperatorKind.Equals
+                or BinaryOperatorKind.NotEquals,
+            OperatorMethod: null,
+        } binary
+           && (IsArrayOperand(binary.LeftOperand)
+               || IsArrayOperand(binary.RightOperand));
+
+    static bool IsArrayOperand(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        return operation?.Type is IArrayTypeSymbol;
+    }
+
+    CLeaf VisitReferenceEquality(IBinaryOperation op)
+        => _lowering.ExternCall(
+            op.OperatorKind == BinaryOperatorKind.Equals
+                ? UdonAbi.ObjectEquality
+                : UdonAbi.ObjectInequality,
+            new List<CLeaf>
+            {
+                _lowering.VisitExpression(op.LeftOperand),
+                _lowering.VisitExpression(op.RightOperand),
+            },
+            StorageTypes.Boolean);
 
     CLeaf VisitArrayCreation(IArrayCreationOperation op)
     {

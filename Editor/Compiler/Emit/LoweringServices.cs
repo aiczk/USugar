@@ -192,13 +192,17 @@ internal sealed class LoweringServices
     /// in a differently typed strongbox.
     /// </summary>
     internal CLeaf EmitArrayDimension(IOperation dimension)
+        => EmitArrayInt32Operand(dimension, "dimension");
+
+    CLeaf EmitArrayInt32Operand(
+        IOperation operand, string boundary)
     {
-        var value = VisitExpression(dimension);
+        var value = VisitExpression(operand);
         var sourceType = value.Type.Name;
         if (sourceType == StorageTypes.Int32.Name) return value;
         if (ExternResolver.IntInfo(sourceType).rank == 0)
             throw new NotSupportedException(
-                $"Array dimension type '{sourceType}' has no integral Udon representation.");
+                $"Array {boundary} type '{sourceType}' has no integral Udon representation.");
         return ExternCall(
             UdonAbi.Convert(sourceType, StorageTypes.Int32.Name),
             new List<CLeaf> { value },
@@ -1019,7 +1023,7 @@ internal sealed class LoweringServices
     internal CLeaf ResolveArrayIndex(CLeaf arrayVal, string arrayType, IOperation indexOp)
         => indexOp is IUnaryOperation { Type: { Name: "Index" } } fromEnd
             ? EmitIndexFromEnd(arrayVal, arrayType, fromEnd.Operand)
-            : VisitExpression(indexOp);
+            : EmitArrayInt32Operand(indexOp, "index");
 
     /// <summary>`arr[^k]` → `arr.Length - k`. <paramref name="arrayVal"/> must already be a
     /// single-assignment scratch leaf (read once here); <paramref name="operand"/> is the `k` in `^k`.</summary>
@@ -1027,7 +1031,7 @@ internal sealed class LoweringServices
     {
         var lenVal = ExternCall(UdonAbi.ArrayLength(arrayType),
             new List<CLeaf> { arrayVal }, StorageTypes.Int32);
-        var nVal = VisitExpression(operand);
+        var nVal = EmitArrayInt32Operand(operand, "index");
         return ExternCall(UdonAbi.Int32Subtract, new List<CLeaf> { lenVal, nVal }, StorageTypes.Int32);
     }
 
@@ -2820,7 +2824,8 @@ internal sealed class LoweringServices
     }
 
     internal CLeaf EmitKnownBundleToString(
-        CLeaf value, ITypeSymbol type, bool nullIsError)
+        CLeaf value, ITypeSymbol type, bool nullIsError,
+        bool copyAggregateReceiver = true)
     {
         type = ResolveType(type);
         var shape = SourceShape(type);
@@ -2843,9 +2848,11 @@ internal sealed class LoweringServices
                         toStringOverride),
                     new List<CLeaf>
                     {
-                        AggregateAbi.DeepClone(
-                            _builder, value, aggregate,
-                            _state.Aggregates.GetLayout)
+                        copyAggregateReceiver
+                            ? AggregateAbi.DeepClone(
+                                _builder, value, aggregate,
+                                _state.Aggregates.GetLayout)
+                            : value
                     });
             return EmitAggregateString(value, aggregate);
         }
@@ -3023,7 +3030,8 @@ internal sealed class LoweringServices
 
     internal CLeaf EmitTupleOperatorEquality(
         CLeaf left, CLeaf right,
-        INamedTypeSymbol tupleType)
+        INamedTypeSymbol tupleType,
+        bool notEquals)
     {
         if (tupleType == null || !tupleType.IsTupleType)
             throw new ArgumentException(
@@ -3036,29 +3044,97 @@ internal sealed class LoweringServices
         EmitAssign(leftSlot, left);
         EmitAssign(rightSlot, right);
         var layout = _state.Aggregates.GetLayout(tupleType);
-        CLeaf result = Const(true, StorageTypes.Boolean);
+        var result =
+            _builder.AllocScratch(StorageTypes.Boolean);
+        EmitAssign(
+            result,
+            Const(notEquals ? false : true,
+                StorageTypes.Boolean));
         foreach (var field in layout.Fields)
         {
-            var leftValue = AggregateAbi.ReadSlot(
-                _builder, SlotRef(leftSlot), field.Index,
-                StorageTypes.Object);
-            var rightValue = AggregateAbi.ReadSlot(
-                _builder, SlotRef(rightSlot), field.Index,
-                StorageTypes.Object);
-            var equal = EmitTupleElementOperatorEquality(
-                leftValue, rightValue,
-                ResolveType(field.Type));
-            result = ExternCall(
-                UdonAbi.BooleanLogicalAnd,
-                new List<CLeaf> { result, equal },
-                StorageTypes.Boolean);
+            var shouldCompare = notEquals
+                ? ExternCall(
+                    UdonAbi.BooleanNot,
+                    new List<CLeaf> { SlotRef(result) },
+                    StorageTypes.Boolean)
+                : SlotRef(result);
+            _builder.EmitIf(shouldCompare, _ =>
+            {
+                var leftValue = AggregateAbi.ReadSlot(
+                    _builder, SlotRef(leftSlot), field.Index,
+                    StorageTypes.Object);
+                var rightValue = AggregateAbi.ReadSlot(
+                    _builder, SlotRef(rightSlot), field.Index,
+                    StorageTypes.Object);
+                EmitAssign(
+                    result,
+                    EmitTupleElementOperatorEquality(
+                        leftValue, rightValue,
+                        ResolveType(field.Type),
+                        notEquals));
+            }, null);
         }
-        return result;
+        return SlotRef(result);
+    }
+
+    internal void RequireTupleEqualityOperandsCompatible(
+        IOperation leftOperand,
+        IOperation rightOperand)
+    {
+        var resolvedLeft = ResolveType(
+                TupleEqualitySourceType(leftOperand))
+            as INamedTypeSymbol;
+        var resolvedRight = ResolveType(
+                TupleEqualitySourceType(rightOperand))
+            as INamedTypeSymbol;
+        if (resolvedLeft == null
+            || resolvedRight == null
+            || !resolvedLeft.IsTupleType
+            || !resolvedRight.IsTupleType)
+            throw new NotSupportedException(
+                "Tuple equality requires two tuple operands.");
+
+        var leftLayout =
+            _state.Aggregates.GetLayout(resolvedLeft);
+        var rightLayout =
+            _state.Aggregates.GetLayout(resolvedRight);
+        var sameTerminals =
+            leftLayout.Fields.Count == rightLayout.Fields.Count;
+        for (var index = 0;
+             sameTerminals
+             && index < leftLayout.Fields.Count;
+             index++)
+            sameTerminals = SymbolEqualityComparer.Default.Equals(
+                ResolveType(leftLayout.Fields[index].Type),
+                ResolveType(rightLayout.Fields[index].Type));
+        if (sameTerminals)
+            return;
+
+        throw new NotSupportedException(
+            $"Tuple equality between "
+            + $"'{resolvedLeft.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + $"and '{resolvedRight.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "is not supported when element comparisons require "
+            + "implicit conversions. Compare explicitly converted "
+            + "tuples or their elements.");
+    }
+
+    static ITypeSymbol TupleEqualitySourceType(
+        IOperation operand)
+    {
+        while (operand is IConversionOperation conversion
+               && conversion.IsImplicit
+               && conversion.Operand.Type
+                   is INamedTypeSymbol source
+               && source.IsTupleType)
+            operand = conversion.Operand;
+        return operand.Type;
     }
 
     CLeaf EmitTupleElementOperatorEquality(
         CLeaf left, CLeaf right,
-        ITypeSymbol elementType)
+        ITypeSymbol elementType,
+        bool notEquals)
     {
         elementType = ResolveType(elementType);
         if (EmitPolicy.IsNullableT(
@@ -3080,12 +3156,26 @@ internal sealed class LoweringServices
                 new List<CLeaf>
                     { leftPresent, rightPresent },
                 StorageTypes.Boolean);
+            var neitherPresent = ExternCall(
+                UdonAbi.BooleanNot,
+                new List<CLeaf> { eitherPresent },
+                StorageTypes.Boolean);
             EmitAssign(
                 result,
-                ExternCall(
-                    UdonAbi.BooleanNot,
-                    new List<CLeaf> { eitherPresent },
-                    StorageTypes.Boolean));
+                notEquals
+                    ? ExternCall(
+                        UdonAbi.BooleanLogicalAnd,
+                        new List<CLeaf>
+                        {
+                            eitherPresent,
+                            ExternCall(
+                                UdonAbi.BooleanNot,
+                                new List<CLeaf>
+                                    { bothPresent },
+                                StorageTypes.Boolean)
+                        },
+                        StorageTypes.Boolean)
+                    : neitherPresent);
             _builder.EmitIf(
                 bothPresent,
                 _ => EmitAssign(
@@ -3095,7 +3185,8 @@ internal sealed class LoweringServices
                             left, underlying),
                         RetagSmallNullablePresent(
                             right, underlying),
-                        underlying)),
+                        underlying,
+                        notEquals)),
                 null);
             return SlotRef(result);
         }
@@ -3108,8 +3199,8 @@ internal sealed class LoweringServices
                     + "USugar's callable-only delegate model.");
             if (named.IsTupleType)
                 return EmitTupleOperatorEquality(
-                    left, right, named);
-            if (HasSourceEqualityOperator(named))
+                    left, right, named, notEquals);
+            if (HasSourceTupleEqualityOperator(named))
                 throw new NotSupportedException(
                     $"Tuple equality for element type "
                     + $"'{named.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
@@ -3121,7 +3212,9 @@ internal sealed class LoweringServices
                     == RuntimeBundleKind.ReferenceAggregate
                 || shape.Bundle == RuntimeBundleKind.Class)
                 return ExternCall(
-                    UdonAbi.ObjectEquality,
+                    notEquals
+                        ? UdonAbi.ObjectInequality
+                        : UdonAbi.ObjectEquality,
                     new List<CLeaf> { left, right },
                     StorageTypes.Boolean);
             if (shape.Bundle == RuntimeBundleKind.Aggregate)
@@ -3147,7 +3240,10 @@ internal sealed class LoweringServices
                 EmitAssign(rightObject, right);
                 return ExternCall(
                     UdonAbiKey.Method(
-                        "UnityEngineObject", "op_Equality",
+                        "UnityEngineObject",
+                        notEquals
+                            ? "op_Inequality"
+                            : "op_Equality",
                         new[]
                             {
                                 "UnityEngineObject",
@@ -3162,7 +3258,9 @@ internal sealed class LoweringServices
                     StorageTypes.Boolean);
             }
             return ExternCall(
-                UdonAbi.ObjectEquality,
+                notEquals
+                    ? UdonAbi.ObjectInequality
+                    : UdonAbi.ObjectEquality,
                 new List<CLeaf> { left, right },
                 StorageTypes.Boolean);
         }
@@ -3192,18 +3290,24 @@ internal sealed class LoweringServices
         }
         return ExternCall(
             UdonAbiKey.Method(
-                comparisonName, "op_Equality",
+                comparisonName,
+                notEquals
+                    ? "op_Inequality"
+                    : "op_Equality",
                 new[] { comparisonName, comparisonName },
                 "SystemBoolean"),
             new List<CLeaf> { left, right },
             StorageTypes.Boolean);
     }
 
-    static bool HasSourceEqualityOperator(
+    static bool HasSourceTupleEqualityOperator(
         INamedTypeSymbol type)
-        => type.GetMembers("op_Equality")
+        => type.GetMembers()
             .OfType<IMethodSymbol>()
             .Any(method =>
+                method.Name is
+                    "op_Equality" or "op_Inequality"
+                &&
                 method.DeclaringSyntaxReferences.Length != 0);
 
     static bool IsUnityObjectType(ITypeSymbol type)
@@ -3586,6 +3690,7 @@ internal sealed class LoweringServices
     internal CLeaf EmitDynamicObjectEquals(
         CLeaf left, CLeaf right)
     {
+        RequireDynamicObjectEqualityCompatible();
         var leftSlot =
             _builder.AllocScratch(StorageTypes.Object);
         var rightSlot =
@@ -3658,6 +3763,7 @@ internal sealed class LoweringServices
 
     internal CLeaf EmitDynamicObjectHash(CLeaf value)
     {
+        RequireDynamicObjectHashCompatible();
         var valueSlot =
             _builder.AllocScratch(StorageTypes.Object);
         EmitAssign(valueSlot, value);
@@ -3734,6 +3840,82 @@ internal sealed class LoweringServices
                 new List<CLeaf> { staged },
                 StorageTypes.Int32)));
         return SlotRef(result);
+    }
+
+    void RequireDynamicObjectEqualityCompatible()
+    {
+        foreach (var candidate
+                 in _state.Program.Types.KnownBundleTypes)
+        {
+            var type = ResolveType(candidate)
+                as INamedTypeSymbol;
+            if (type == null
+                || !HasSourceObjectEqualsOverride(type))
+                continue;
+            throw new NotSupportedException(
+                "Equals(object) through object erasure is not supported "
+                + $"when runtime type '{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "may be present: its source override requires "
+                + "closed-world virtual dispatch that the erased bundle "
+                + "protocol does not yet encode. Keep the value "
+                + "concretely typed and call Equals explicitly.");
+        }
+    }
+
+    void RequireDynamicObjectHashCompatible()
+    {
+        foreach (var candidate
+                 in _state.Program.Types.KnownBundleTypes)
+        {
+            var type = ResolveType(candidate)
+                as INamedTypeSymbol;
+            if (type == null
+                || !HasSourceGetHashCodeOverride(type))
+                continue;
+            throw new NotSupportedException(
+                "GetHashCode() through object erasure is not supported "
+                + $"when runtime type '{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "may be present: its source override requires "
+                + "closed-world virtual dispatch that the erased bundle "
+                + "protocol does not yet encode. Keep the value "
+                + "concretely typed and call GetHashCode explicitly.");
+        }
+    }
+
+    static bool HasSourceObjectEqualsOverride(
+        INamedTypeSymbol type)
+    {
+        for (var current = type;
+             current != null;
+             current = current.BaseType)
+            if (current.GetMembers(nameof(object.Equals))
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    method.IsOverride
+                    && !method.IsStatic
+                    && method.Parameters.Length == 1
+                    && method.Parameters[0].Type.SpecialType
+                        == SpecialType.System_Object
+                    && method.DeclaringSyntaxReferences.Length != 0))
+                return true;
+        return false;
+    }
+
+    static bool HasSourceGetHashCodeOverride(
+        INamedTypeSymbol type)
+    {
+        for (var current = type;
+             current != null;
+             current = current.BaseType)
+            if (current.GetMembers(nameof(object.GetHashCode))
+                .OfType<IMethodSymbol>()
+                .Any(method =>
+                    method.IsOverride
+                    && !method.IsStatic
+                    && method.Parameters.Length == 0
+                    && method.DeclaringSyntaxReferences.Length != 0))
+                return true;
+        return false;
     }
 
     CLeaf EmitIsCompilerBundle(CLeaf value)
@@ -3891,7 +4073,8 @@ internal sealed class LoweringServices
                         result,
                         EmitKnownBundleToString(
                             value, resolved,
-                            nullIsError: false));
+                            nullIsError: false,
+                            copyAggregateReceiver: false));
                 }, null);
             }
         }, null);

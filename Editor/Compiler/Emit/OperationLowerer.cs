@@ -141,6 +141,12 @@ internal sealed class OperationLowerer
     bool TryLowerExpression(
         IOperation operation, out CLeaf result)
     {
+        if (ArrayHandler.IsReferenceEquality(operation))
+        {
+            result = _arrays.Handle(operation);
+            return true;
+        }
+
         switch (ExpressionRoute(operation.Kind))
         {
             case GeneralExpressionRoute:

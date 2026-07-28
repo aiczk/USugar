@@ -129,21 +129,7 @@ public static class TypeClassifier
             return true;
         return element is INamedTypeSymbol nullable
                && nullable.OriginalDefinition.SpecialType
-                   == SpecialType.System_Nullable_T
-               && UsesCompilerOwnedNullablePayload(
-                   nullable.TypeArguments[0], ctx);
-    }
-
-    static bool UsesCompilerOwnedNullablePayload(
-        ITypeSymbol type,
-        TypeClassifierContext ctx)
-    {
-        type = Resolve(type, ctx);
-        return IsUserClassLeaf(type)
-               || IsReferenceAggregateLeaf(type)
-               || IsAggregateValueLeaf(type)
-               || type is INamedTypeSymbol
-                   { DelegateInvokeMethod: not null };
+                   == SpecialType.System_Nullable_T;
     }
 
     public static bool ContainsUserClassPayload(ITypeSymbol type, TypeClassifierContext ctx)
@@ -353,8 +339,10 @@ internal static class SourceSemanticProfile
         foreach (var operation in root.DescendantsAndSelf())
         {
             RequireSupportedType(operation.Type);
+            RequireSupportedOperatorOperation(operation);
             RequireSupportedDelegateOperation(
                 operation, stableLocalInitializers);
+            RequireSupportedArrayOperation(operation);
             switch (operation)
             {
                 case IInvocationOperation invocation:
@@ -387,6 +375,230 @@ internal static class SourceSemanticProfile
             }
         }
     }
+
+    static void RequireSupportedArrayOperation(
+        IOperation operation)
+    {
+        if (operation is not IConversionOperation conversion)
+            return;
+
+        var source = conversion.Operand.Type;
+        var destination = conversion.Type;
+        var sourceUsesCollapsedCarrier =
+            TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                source, new TypeClassifierContext(null));
+        var destinationUsesCollapsedCarrier =
+            TypeClassifier.UsesCompilerOwnedArrayCarrier(
+                destination, new TypeClassifierContext(null));
+        if (!sourceUsesCollapsedCarrier
+            && !destinationUsesCollapsedCarrier)
+            return;
+        if (conversion.Conversion.IsIdentity)
+            return;
+        var isArrayCovariance =
+            source is IArrayTypeSymbol
+            && destination is IArrayTypeSymbol;
+        var isHardCastToCollapsedArray =
+            destinationUsesCollapsedCarrier
+            && !conversion.IsImplicit;
+        if (!isArrayCovariance
+            && !isHardCastToCollapsedArray)
+            return;
+        if (destinationUsesCollapsedCarrier
+            && IsStaticallyNull(conversion.Operand))
+            return;
+        if (isHardCastToCollapsedArray
+            && IsExactArrayCloneCast(conversion))
+            return;
+        if (StructurallyContainsDelegate(
+                source,
+                new HashSet<ITypeSymbol>(
+                    SymbolEqualityComparer.Default))
+            || StructurallyContainsDelegate(
+                destination,
+                new HashSet<ITypeSymbol>(
+                    SymbolEqualityComparer.Default)))
+            return;
+
+        throw new NotSupportedException(
+            $"Array conversion from "
+            + $"'{source?.ToDisplayString() ?? "<null>"}' to "
+            + $"'{destination?.ToDisplayString() ?? "<null>"}' is not "
+            + "supported: a compiler-owned SystemObjectArray carrier "
+            + "erases the CLR array's runtime element type, so covariance "
+            + "and casts cannot preserve ArrayTypeMismatchException and "
+            + "InvalidCastException semantics. Keep the value at its exact "
+            + "static array type.");
+    }
+
+    static bool StructurallyContainsDelegate(
+        ITypeSymbol type, HashSet<ITypeSymbol> visited)
+    {
+        if (type == null || !visited.Add(type))
+            return false;
+        if (type is INamedTypeSymbol
+            {
+                DelegateInvokeMethod: not null,
+            })
+            return true;
+        if (type is IArrayTypeSymbol array)
+            return StructurallyContainsDelegate(
+                array.ElementType, visited);
+        if (type is not INamedTypeSymbol aggregate
+            || !TypeClassifier.IsAggregateValueLeaf(aggregate))
+            return false;
+        foreach (var field in aggregate.GetMembers()
+                     .OfType<IFieldSymbol>())
+            if (!field.IsStatic
+                && StructurallyContainsDelegate(
+                    field.Type, visited))
+                return true;
+        return false;
+    }
+
+    static bool IsExactArrayCloneCast(
+        IConversionOperation conversion)
+    {
+        if (conversion.Operand
+                is not IInvocationOperation invocation
+            || invocation.Instance?.Type
+                is not IArrayTypeSymbol receiver
+            || invocation.TargetMethod.Name != "Clone"
+            || invocation.TargetMethod.Parameters.Length != 0)
+            return false;
+        return SameArrayType(receiver, conversion.Type);
+    }
+
+    static bool SameArrayType(
+        ITypeSymbol left, ITypeSymbol right)
+    {
+        if (SymbolEqualityComparer.Default.Equals(left, right))
+            return true;
+        if (left is not IArrayTypeSymbol leftArray
+            || right is not IArrayTypeSymbol rightArray
+            || leftArray.Rank != rightArray.Rank)
+            return false;
+        var leftElement = leftArray.ElementType;
+        var rightElement = rightArray.ElementType;
+        if (leftElement is INamedTypeSymbol
+            {
+                IsTupleType: true,
+            } leftTuple
+            && rightElement is INamedTypeSymbol
+            {
+                IsTupleType: true,
+            } rightTuple)
+            return SymbolEqualityComparer.Default.Equals(
+                leftTuple.TupleUnderlyingType,
+                rightTuple.TupleUnderlyingType);
+        return SymbolEqualityComparer.Default.Equals(
+            leftElement, rightElement);
+    }
+
+    static bool IsStaticallyNull(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        return operation?.ConstantValue is
+                   { HasValue: true, Value: null }
+               || operation is IDefaultValueOperation defaultValue
+                  && defaultValue.Type?.IsReferenceType == true;
+    }
+
+    static void RequireSupportedOperatorOperation(
+        IOperation operation)
+    {
+        switch (operation)
+        {
+            case IBinaryOperation binary
+                when binary.OperatorKind is
+                    BinaryOperatorKind.ConditionalAnd
+                    or BinaryOperatorKind.ConditionalOr
+                && binary.OperatorMethod != null:
+                throw new NotSupportedException(
+                    $"User-defined conditional logical operator "
+                    + $"'{binary.OperatorKind}' is not supported: C# "
+                    + "requires operator true/false short-circuiting plus "
+                    + "the selected &/| operator, while USugar currently "
+                    + "only lowers built-in bool &&/||. Use an explicit "
+                    + "if statement and call the desired operator.");
+
+            case IBinaryOperation binary
+                when binary.IsLifted
+                && IsSourceBundleOperator(
+                    binary.OperatorMethod):
+                throw UnsupportedLiftedSourceOperator(
+                    binary.OperatorMethod, "binary operator");
+
+            case IUnaryOperation unary
+                when unary.IsLifted
+                && IsSourceBundleOperator(
+                    unary.OperatorMethod):
+                throw UnsupportedLiftedSourceOperator(
+                    unary.OperatorMethod, "unary operator");
+
+            case ICompoundAssignmentOperation compound
+                when compound.IsLifted
+                && IsSourceBundleOperator(
+                    compound.OperatorMethod):
+                throw UnsupportedLiftedSourceOperator(
+                    compound.OperatorMethod,
+                    "compound assignment");
+
+            case IIncrementOrDecrementOperation increment
+                when increment.IsLifted
+                && IsSourceBundleOperator(
+                    increment.OperatorMethod):
+                throw UnsupportedLiftedSourceOperator(
+                    increment.OperatorMethod,
+                    "increment/decrement");
+
+            case IConversionOperation conversion
+                when IsLiftedSourceConversion(conversion):
+                throw UnsupportedLiftedSourceOperator(
+                    conversion.OperatorMethod,
+                    "conversion");
+        }
+    }
+
+    static bool IsLiftedSourceConversion(
+        IConversionOperation conversion)
+    {
+        var method = conversion.OperatorMethod;
+        if (!IsSourceBundleOperator(method)
+            || method.Parameters.Length != 1)
+            return false;
+        return IsNullableFacade(
+                   conversion.Operand.Type,
+                   method.Parameters[0].Type)
+               && IsNullableFacade(
+                   conversion.Type,
+                   method.ReturnType);
+    }
+
+    static bool IsNullableFacade(
+        ITypeSymbol actual, ITypeSymbol declared)
+        => EmitPolicy.IsNullableT(actual, out var underlying)
+           && !EmitPolicy.IsNullableT(declared, out _)
+           && SymbolEqualityComparer.Default.Equals(
+               underlying, declared);
+
+    static bool IsSourceBundleOperator(
+        IMethodSymbol method)
+        => method?.ContainingType is INamedTypeSymbol owner
+           && (TypeClassifier.IsAggregateValueLeaf(owner)
+               || TypeClassifier.IsUserClassLeaf(owner));
+
+    static NotSupportedException
+        UnsupportedLiftedSourceOperator(
+            IMethodSymbol method, string surface)
+        => new(
+            $"Lifted source {surface} "
+            + $"'{method?.ToDisplayString()}' is not supported: nullable "
+            + "C# semantics must skip the user method on null operands and "
+            + "apply the lifted equality/result rules. Keep the value "
+            + "non-nullable, or test HasValue and invoke the operator "
+            + "explicitly on GetValueOrDefault().");
 
     static void RequireSupportedDelegateOperation(
         IOperation operation,

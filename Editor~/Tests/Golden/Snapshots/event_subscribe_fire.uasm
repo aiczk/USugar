@@ -20,9 +20,8 @@
     __recurSp: %SystemInt32, null
     __recurEnsureNeed: %SystemInt32, null
     __const_SystemUInt32_sentinel: %SystemUInt32, null
-    __intnl_SystemObjectArray_c0: %SystemObjectArray, null
     __const_SystemInt32_0: %SystemInt32, null
-    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
+    __intnl_SystemObjectArray_c0: %SystemObjectArray, null
     __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0: %VRCUdonCommonInterfacesIUdonEventReceiver, null
     __const_SystemInt32_1: %SystemInt32, null
     __const_SystemString_2: %SystemString, null
@@ -32,6 +31,7 @@
     __const_SystemInt32_6: %SystemInt32, null
     __const_SystemInt32_7: %SystemInt32, null
     __const_SystemObject_8: %SystemObject, null
+    __intnl_SystemObjectArray_c1: %SystemObjectArray, null
     __intnl_SystemObjectArray_c2: %SystemObjectArray, null
     __const_SystemString_9: %SystemString, null
     __intnl_SystemBoolean_c0: %SystemBoolean, null
@@ -135,39 +135,39 @@
     _start:
         PUSH, __const_SystemUInt32_sentinel
     _start__body:
-        PUSH, Foo
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
         PUSH, __const_SystemInt32_0
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __this_VRCUdonUdonBehaviour_0
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_1
         PUSH, __const_SystemString_2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_4
         PUSH, __const_SystemString_5
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_6
         PUSH, __const_funcaddr_SystemUInt32_0
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_7
         PUSH, __const_SystemObject_8
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __dlg_combine_SystemInt32__Void__x
+        PUSH, Foo
+        PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __dlg_combine_SystemInt32__Void__x
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __dlg_combine_SystemInt32__Void__y
         COPY
         PUSH, __const_retaddr_SystemUInt32_0
@@ -179,39 +179,39 @@
         PUSH, __intnl_SystemObjectArray_c2
         PUSH, Foo
         COPY
-        PUSH, Foo
-        PUSH, __intnl_SystemObjectArray_c0
-        COPY
         PUSH, __const_SystemInt32_0
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         EXTERN, "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"
         PUSH, __this_VRCUdonUdonBehaviour_0
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         COPY
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_1
         PUSH, __const_SystemString_2
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_3
         PUSH, __intnl_VRCUdonCommonInterfacesIUdonEventReceiver_c0
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_4
         PUSH, __const_SystemString_9
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_6
         PUSH, __const_funcaddr_SystemUInt32_1
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __const_SystemInt32_7
         PUSH, __const_SystemObject_8
         EXTERN, "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"
-        PUSH, __intnl_SystemObjectArray_c0
-        PUSH, __dlg_combine_SystemInt32__Void__x
+        PUSH, Foo
+        PUSH, __intnl_SystemObjectArray_c1
         COPY
         PUSH, __intnl_SystemObjectArray_c1
+        PUSH, __dlg_combine_SystemInt32__Void__x
+        COPY
+        PUSH, __intnl_SystemObjectArray_c0
         PUSH, __dlg_combine_SystemInt32__Void__y
         COPY
         PUSH, __const_retaddr_SystemUInt32_1

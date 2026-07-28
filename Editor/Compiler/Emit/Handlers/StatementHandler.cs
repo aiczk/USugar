@@ -96,8 +96,16 @@ internal sealed class StatementHandler
 
     void VisitConditional(IConditionalOperation op)
     {
-        // Optimization: if (!cond) → invert branches to avoid negation extern
-        if (op.Condition is IUnaryOperation { OperatorKind: UnaryOperatorKind.Not } unary)
+        // Optimization: if (!cond) → invert branches to avoid the built-in bool negation extern.
+        // A user-defined operator ! is executable source semantics and must flow through
+        // OperatorHandler; stripping it here changes both its result and its side effects.
+        if (op.Condition is IUnaryOperation
+            {
+                OperatorKind: UnaryOperatorKind.Not,
+                OperatorMethod: null
+            } unary
+            && unary.Type?.SpecialType == SpecialType.System_Boolean
+            && unary.Operand.Type?.SpecialType == SpecialType.System_Boolean)
         {
             var condVal = _lowering.VisitExpression(unary.Operand);
 

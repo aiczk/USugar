@@ -218,14 +218,6 @@ internal sealed class ExternInvocationLowerer
                 receiverType))
             return false;
 
-        // The carrier's actual VM type is object[] by design. Reflecting that physical type is
-        // representation-correct (and UdonSharp compatibility explicitly observes it for jagged
-        // arrays), while still keeping every unrelated System.Object extern closed.
-        if (target.ContainingType?.SpecialType
-                == SpecialType.System_Object)
-            return target.Name == nameof(object.GetType)
-                   && target.Parameters.Length == 0;
-
         if (target.ContainingType?.SpecialType
                 != SpecialType.System_Array)
             return false;
