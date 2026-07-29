@@ -434,6 +434,9 @@ public class EspRegisteredNullableNumeric : UdonSharpBehaviour {
 }", "EspRegisteredNullableNumeric");
 
         Assert.Contains(
+            "SystemConvert.__ToInt32__SystemObject__SystemInt32",
+            uasm);
+        Assert.DoesNotContain(
             "SystemConvert.__ToInt64__SystemObject__SystemInt64",
             uasm);
     }

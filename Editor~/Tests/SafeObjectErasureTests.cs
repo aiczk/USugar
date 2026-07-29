@@ -5,6 +5,20 @@ namespace USugar.Tests;
 
 public class SafeObjectErasureTests
 {
+    static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        var index = 0;
+        while ((index = text.IndexOf(
+                   value, index,
+                   StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += value.Length;
+        }
+        return count;
+    }
+
     [Fact]
     public void StableLocal_ClassToObjectAndBack_Compiles()
     {
@@ -114,6 +128,67 @@ public class NativeCarrierHost : UdonSharpBehaviour {
     void Start() { object value = seed; Debug.Log(value); }
 }", "NativeCarrierHost");
         Assert.NotNull(uasm);
+    }
+
+    [Fact]
+    public void ValueBoxing_MaterializesOneStableObjectCarrier()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class StableBoxHost : UdonSharpBehaviour {
+    public int seed;
+    public bool result;
+    void Start() {
+        object value = seed;
+        result = object.ReferenceEquals(value, value);
+    }
+}", "StableBoxHost");
+
+        Assert.Equal(
+            1,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"));
+        Assert.Equal(
+            1,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"));
+        Assert.Equal(
+            1,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__Get__SystemInt32__SystemObject"));
+    }
+
+    [Fact]
+    public void SeparateBoxingConversions_MaterializeDistinctObjectCarriers()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class DistinctBoxHost : UdonSharpBehaviour {
+    public int seed;
+    public bool result;
+    void Start() {
+        result = object.ReferenceEquals(seed, seed);
+    }
+}", "DistinctBoxHost");
+
+        Assert.Equal(
+            2,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__ctor__SystemInt32__SystemObjectArray"));
+        Assert.Equal(
+            2,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__Set__SystemInt32_SystemObject__SystemVoid"));
+        Assert.Equal(
+            2,
+            CountOccurrences(
+                uasm,
+                "SystemObjectArray.__Get__SystemInt32__SystemObject"));
     }
 
     [Fact]

@@ -318,7 +318,8 @@ internal sealed class ExpressionHandler
 
         // C# truncates float→integer; System.Convert rounds. Match UdonSharp by truncating in the
         // source domain before the final conversion, including when object erasure hid this pair.
-        if (ExternResolver.IsFloatType(sourceType) && ExternResolver.IsIntegerType(destinationType))
+        if (ExternResolver.IsFloatType(sourceType)
+            && IsIntegerNumeric(destinationType))
         {
             var isDecimal = sourceType.SpecialType == SpecialType.System_Decimal;
             var truncType = isDecimal ? "SystemDecimal" : "SystemDouble";
@@ -413,20 +414,32 @@ internal sealed class ExpressionHandler
         ITypeSymbol sourceNumeric,
         ITypeSymbol destinationNumeric)
     {
-        var convertMethod =
+        var sourceConvertMethod =
             ExternResolver.GetConvertMethodName(
-                destinationNumeric)
+                sourceNumeric)
             ?? throw new NotSupportedException(
                 $"No numeric conversion exists for "
-                + $"'{destinationNumeric.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.");
-        var integerToInteger =
-            IsIntegerNumeric(sourceNumeric)
-            && IsIntegerNumeric(destinationNumeric);
+                + $"'{sourceNumeric.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.");
+        var sourceStorage =
+            _lowering.GetStorageType(sourceNumeric);
         return NullableAbi.EmitLiftedNumericConversion(
-            _lowering.Builder, sourceValue,
-            _lowering.GetStorageType(destinationNumeric),
-            convertMethod, integerToInteger,
-            _lowering.EmitNarrowingConvert);
+            _lowering.Builder,
+            sourceValue,
+            boxed =>
+            {
+                var typedSource = _lowering.ExternCall(
+                    UdonAbiKey.Method(
+                        "SystemConvert",
+                        sourceConvertMethod,
+                        new[] { "SystemObject" },
+                        sourceStorage.Name),
+                    new List<CLeaf> { boxed },
+                    sourceStorage);
+                return EmitNumericConversion(
+                    typedSource,
+                    sourceNumeric,
+                    destinationNumeric);
+            });
     }
 
     static bool IsIntegerNumeric(ITypeSymbol type)
@@ -1199,6 +1212,9 @@ internal sealed class ExpressionHandler
                             null, StorageTypes.Object)));
                 srcVal = _lowering.SlotRef(boxedResult);
             }
+            else if (resolvedConversionSource
+                         is { IsValueType: true })
+                srcVal = _lowering.MaterializeObjectBox(srcVal);
         }
 
         // B62: `o as T` — mirror the `is` machinery through the same runtime-type-test choke point:
@@ -1375,9 +1391,10 @@ internal sealed class ExpressionHandler
         // Lifted numeric Nullable<T> conversion (e.g. char?→int? inserted by Roslyn around small-int nullable
         // arithmetic, or an explicit (int?)byteNullable). Both sides are Nullable<numeric>. The plain
         // identity passthrough below would feed a boxed small-int to a SystemInt32 extern → InvalidCast, so
-        // materialize a null-preserving Convert.To{Dst}(object): null stays null, otherwise re-box the
-        // converted underlying. To{Dst}(SystemObject) tolerates either storage tag (the source nullable may
-        // hold a boxed small-int or, for un-narrowed literals, a boxed int).
+        // materialize a null-preserving conversion: null stays null; otherwise restore the exact source
+        // numeric type from the object slot and reuse the ordinary C# numeric conversion path. Restoring
+        // the source first is load-bearing: Convert.To{Dst}(object) rounds floating values and checked-
+        // converts unsigned values, while C# truncates and performs unchecked integer narrowing.
         // Resolve the destination underlying: Roslyn can lower a small-int nullable narrowing as an inner
         // `int? -> byte` conversion (nullable SOURCE, BARE byte dest) wrapped by an outer byte->byte?. Accept a
         // bare numeric dest too, so the narrow+rebox below still runs — otherwise the boxed int falls through to
@@ -1396,22 +1413,10 @@ internal sealed class ExpressionHandler
             && EmitPolicy.IsNullableT(conv.Operand.Type, out var liftedSrcU)
             && NumericFacet(liftedSrcU) is { } liftedSrcN && ExternResolver.IsConvertibleNumericType(liftedSrcN)
             && liftedDstN != null && ExternResolver.IsConvertibleNumericType(liftedDstN)
-            && !SymbolEqualityComparer.Default.Equals(liftedSrcN, liftedDstN)
-            && ExternResolver.GetConvertMethodName(liftedDstN) is { } liftedDstMethod)
+            && !SymbolEqualityComparer.Default.Equals(liftedSrcN, liftedDstN))
         {
-            var dstU = _lowering.GetStorageTypeName(liftedDstN);
-            // C# integer narrowing is UNCHECKED (wrap); Convert.To{Small} is CHECKED and throws. For an
-            // integer→integer lifted conversion, promote the boxed source to int64 (tolerates any boxed integer
-            // tag, never overflows) and wrap/reinterpret via EmitNarrowingConvert. Float-involved conversions
-            // keep the plain null-preserving Convert.
-            // char is integral for narrowing (EmitNarrowingConvert wraps it like C#'s unchecked cast) but
-            // ExternResolver.IsIntegerType excludes it; treat char as integral here so a lifted int?→char?
-            // narrowing WRAPS instead of taking the CHECKED Convert.ToChar branch (which throws > 65535).
-            bool liftedIntToInt =
-                (ExternResolver.IsIntegerType(liftedSrcN) || liftedSrcN.SpecialType == SpecialType.System_Char)
-                && (ExternResolver.IsIntegerType(liftedDstN) || liftedDstN.SpecialType == SpecialType.System_Char);
-            return NullableAbi.EmitLiftedNumericConversion(_lowering.Builder, srcVal, new StorageType(dstU), liftedDstMethod,
-                liftedIntToInt, _lowering.EmitNarrowingConvert);
+            return EmitLiftedNumericBox(
+                srcVal, liftedSrcN, liftedDstN);
         }
 
         // Lifted numeric conversion with a BARE source and a Nullable<numeric> dest (e.g. `(byte?)(intExpr)`):
@@ -1425,7 +1430,8 @@ internal sealed class ExpressionHandler
             && ExternResolver.IsConvertibleNumericType(bareDstN)
             && !SymbolEqualityComparer.Default.Equals(bareSrcN, bareDstN))
         {
-            return _lowering.EmitNarrowingConvert(srcVal, _lowering.GetStorageTypeName(bareSrcN), _lowering.GetStorageTypeName(bareDstN));
+            return EmitNumericConversion(
+                srcVal, bareSrcN, bareDstN);
         }
 
         // CW20: a HARD cast from a reference-typed source (object / interface / ValueType) to

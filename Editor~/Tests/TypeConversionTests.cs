@@ -151,6 +151,104 @@ public class BareNblByte : UdonSharpBehaviour {
     }
 
     [Fact]
+    public void NullableFloatingToInteger_TruncatesInSourceDomain()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NullableFloatingCast : UdonSharpBehaviour {
+    public float single;
+    public double dbl;
+    public decimal dec;
+    public int result;
+    void Start() {
+        int? a = (int?)(float?)single;
+        int? b = (int?)(double?)dbl;
+        int? c = (int?)(decimal?)dec;
+        char? d = (char?)(float?)single;
+        result = a.GetValueOrDefault()
+            + b.GetValueOrDefault()
+            + c.GetValueOrDefault();
+    }
+}", "NullableFloatingCast");
+
+        Assert.Contains(
+            "SystemConvert.__ToSingle__SystemObject__SystemSingle",
+            uasm);
+        Assert.Contains(
+            "SystemConvert.__ToDouble__SystemObject__SystemDouble",
+            uasm);
+        Assert.Contains(
+            "SystemConvert.__ToDecimal__SystemObject__SystemDecimal",
+            uasm);
+        Assert.Contains(
+            "SystemMath.__Truncate__SystemDouble__SystemDouble",
+            uasm);
+        Assert.Contains(
+            "SystemMath.__Truncate__SystemDecimal__SystemDecimal",
+            uasm);
+        Assert.Contains(
+            "SystemConvert.__ToChar__SystemDouble__SystemChar",
+            uasm);
+        Assert.DoesNotContain(
+            "SystemConvert.__ToInt32__SystemObject__SystemInt32",
+            uasm);
+        Assert.DoesNotContain(
+            "SystemConvert.__ToChar__SystemObject__SystemChar",
+            uasm);
+    }
+
+    [Fact]
+    public void NullableUlongNarrowing_ReinterpretsBeforeNarrowing()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class NullableUlongCast : UdonSharpBehaviour {
+    public ulong value;
+    public long wide;
+    public int narrow;
+    void Start() {
+        ulong? source = value;
+        wide = ((long?)source).GetValueOrDefault();
+        narrow = ((int?)source).GetValueOrDefault();
+    }
+}", "NullableUlongCast");
+
+        Assert.Contains(
+            "SystemConvert.__ToUInt64__SystemObject__SystemUInt64",
+            uasm);
+        Assert.Contains(
+            "SystemBitConverter.__ToInt64__SystemByteArray_SystemInt32__SystemInt64",
+            uasm);
+        Assert.DoesNotContain(
+            "SystemConvert.__ToInt64__SystemObject__SystemInt64",
+            uasm);
+    }
+
+    [Fact]
+    public void FloatingToNullableInteger_TruncatesInSourceDomain()
+    {
+        var uasm = TestHelper.CompileToUasm(@"
+using UdonSharp;
+public class BareFloatingNullableCast : UdonSharpBehaviour {
+    public float value;
+    public int? result;
+    void Start() {
+        result = (int?)value;
+    }
+}", "BareFloatingNullableCast");
+
+        Assert.Contains(
+            "SystemMath.__Truncate__SystemDouble__SystemDouble",
+            uasm);
+        Assert.Contains(
+            "SystemConvert.__ToInt32__SystemDouble__SystemInt32",
+            uasm);
+        Assert.DoesNotContain(
+            "SystemConvert.__ToInt32__SystemSingle__SystemInt32",
+            uasm);
+    }
+
+    [Fact]
     public void LongToUlong_BitReinterprets_NotCheckedConvert()
     {
         // (ulong)longVal is an unchecked bit reinterpret in C#; Convert.ToUInt64 is CHECKED and throws on a

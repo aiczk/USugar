@@ -476,6 +476,20 @@ internal sealed class LoweringServices
         return SlotRef(slot);
     }
 
+    /// <summary>
+    /// Materialize one CLR-style box at a value-to-object boundary. A raw Udon COPY into a
+    /// SystemObject slot preserves the source StrongBox type, so reading that slot as object
+    /// would allocate a fresh CLR box on every access. An object-array Set/Get round-trip
+    /// performs the boxing once and returns a StrongBox&lt;object&gt; carrying that stable box.
+    /// </summary>
+    internal CLeaf MaterializeObjectBox(CLeaf value)
+    {
+        var cell = AggregateAbi.Allocate(_builder, 1);
+        AggregateAbi.WriteSlot(_builder, cell, 0, value);
+        return AggregateAbi.ReadSlot(
+            _builder, cell, 0, StorageTypes.Object);
+    }
+
     /// <summary>Emit an extern call, materialized to a scratch slot (returns the leaf; null for void).</summary>
     internal CSlotRef ExternCall(UdonAbiKey sig, List<CLeaf> args, StorageType retType)
         => _builder.ExternCall(sig, args, retType);

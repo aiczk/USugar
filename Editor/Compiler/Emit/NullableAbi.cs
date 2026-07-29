@@ -71,24 +71,18 @@ public static class NullableAbi
         return builder.SlotRef(resultSlot);
     }
 
-    public static CLeaf EmitLiftedNumericConversion(CoreBuilder builder, CLeaf sourceValue,
-        StorageType destinationUdonType, string convertMethodName, bool integerToInteger,
-        Func<CLeaf, string, string, CLeaf> narrowConvert)
+    public static CLeaf EmitLiftedNumericConversion(
+        CoreBuilder builder,
+        CLeaf sourceValue,
+        Func<CLeaf, CLeaf> convertPresent)
     {
         var resultSlot = builder.AllocScratch(new StorageType(StorageType));
         builder.EmitAssign(resultSlot, builder.Const(null, new StorageType(StorageType)));
-        builder.EmitIf(HasValue(builder, sourceValue), _ =>
-        {
-            CValue converted = integerToInteger
-                ? narrowConvert(
-                    builder.ExternCall(UdonAbiKey.Method("SystemConvert", "ToInt64", new[] { "SystemObject" }, "SystemInt64"),
-                        new List<CLeaf> { sourceValue }, StorageTypes.Int64),
-                    "SystemInt64", destinationUdonType.Name)
-                : builder.ExternCall(UdonAbiKey.Method("SystemConvert",
-                        convertMethodName, new[] { "SystemObject" }, destinationUdonType.Name),
-                    new List<CLeaf> { sourceValue }, destinationUdonType);
-            builder.EmitAssign(resultSlot, converted);
-        });
+        builder.EmitIf(
+            HasValue(builder, sourceValue),
+            _ => builder.EmitAssign(
+                resultSlot,
+                convertPresent(sourceValue)));
         return builder.SlotRef(resultSlot);
     }
 
