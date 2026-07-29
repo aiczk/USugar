@@ -74,11 +74,63 @@ public class InterpolationEnumFormats : UdonSharpBehaviour
             constant => constant.UdonType == "SystemString"
                         && Equals(
                             constant.Value,
-                            "{0:D}|{1:X}|{2:G}"));
+                            "{0:D}|{1:X2}|{2:G}"));
         Assert.Contains("__enumstr_", uasm);
         Assert.Contains(
             "SystemString.__Format__SystemString_SystemObject_SystemObject_SystemObject__SystemString",
             uasm);
+    }
+
+    [Fact]
+    public void FoldedEnum_HexFormat_UsesUnderlyingWidthAndPreservesCase()
+    {
+        var (_, constants) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public enum InterpolationSByte : sbyte { Ten = 10 }
+public enum InterpolationByte : byte { Ten = 10 }
+public enum InterpolationInt16 : short { Ten = 10 }
+public enum InterpolationUInt16 : ushort { Ten = 10 }
+public enum InterpolationInt32 : int { Ten = 10 }
+public enum InterpolationUInt32 : uint { Ten = 10 }
+public enum InterpolationInt64 : long { Ten = 10 }
+public enum InterpolationUInt64 : ulong { Ten = 10 }
+public class InterpolationEnumHexWidths : UdonSharpBehaviour
+{
+    public string result;
+    void Start()
+    {
+        result =
+            $""{InterpolationSByte.Ten:X}|{InterpolationByte.Ten:x}|""
+            + $""{InterpolationInt16.Ten:X}|{InterpolationUInt16.Ten:x}|""
+            + $""{InterpolationInt32.Ten:X}|{InterpolationUInt32.Ten:x}|""
+            + $""{InterpolationInt64.Ten:X}|{InterpolationUInt64.Ten:x}"";
+    }
+}", "InterpolationEnumHexWidths");
+
+        Assert.Contains(
+            constants,
+            constant => constant.UdonType == "SystemString"
+                        && Equals(
+                            constant.Value,
+                            "{0:X2}|{1:x2}|"));
+        Assert.Contains(
+            constants,
+            constant => constant.UdonType == "SystemString"
+                        && Equals(
+                            constant.Value,
+                            "{0:X4}|{1:x4}|"));
+        Assert.Contains(
+            constants,
+            constant => constant.UdonType == "SystemString"
+                        && Equals(
+                            constant.Value,
+                            "{0:X8}|{1:x8}|"));
+        Assert.Contains(
+            constants,
+            constant => constant.UdonType == "SystemString"
+                        && Equals(
+                            constant.Value,
+                            "{0:X16}|{1:x16}"));
     }
 
     [Fact]
@@ -110,6 +162,34 @@ public class InterpolationNullableEnum : UdonSharpBehaviour
         Assert.Contains(
             "SystemObject.__op_Equality__SystemObject_SystemObject__SystemBoolean",
             uasm);
+    }
+
+    [Fact]
+    public void NullableFoldedEnum_HexFormat_UsesUnderlyingWidth()
+    {
+        var (_, constants) = TestHelper.CompileWithConsts(@"
+using UdonSharp;
+public enum InterpolationNullableHex : ushort
+{
+    Ten = 10
+}
+public class InterpolationNullableEnumHex : UdonSharpBehaviour
+{
+    public string result;
+    void Start()
+    {
+        InterpolationNullableHex? value =
+            InterpolationNullableHex.Ten;
+        result = $""{value:x}"";
+    }
+}", "InterpolationNullableEnumHex");
+
+        Assert.Contains(
+            constants,
+            constant => constant.UdonType == "SystemString"
+                        && Equals(
+                            constant.Value,
+                            "{0:x4}"));
     }
 
     [Fact]

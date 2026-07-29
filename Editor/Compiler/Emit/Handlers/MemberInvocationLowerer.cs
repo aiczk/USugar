@@ -401,14 +401,12 @@ internal sealed class MemberInvocationLowerer
                             placeholder.Append(alignVal.Value);
                         }
                     }
-                    if (interpolation.FormatString != null)
+                    var compositeFormat =
+                        CompositeInterpolationFormat(interpolation);
+                    if (compositeFormat != null)
                     {
-                        var fmtVal = interpolation.FormatString.ConstantValue;
-                        if (fmtVal.HasValue)
-                        {
-                            placeholder.Append(':');
-                            placeholder.Append(fmtVal.Value);
-                        }
+                        placeholder.Append(':');
+                        placeholder.Append(compositeFormat);
                     }
                     placeholder.Append('}');
                     formatParts.Add(placeholder.ToString());
@@ -566,6 +564,44 @@ internal sealed class MemberInvocationLowerer
             return format;
         throw new NotSupportedException(
             "A non-constant interpolation format is not supported.");
+    }
+
+    string CompositeInterpolationFormat(
+        IInterpolationOperation interpolation)
+    {
+        var format = InterpolationFormat(interpolation);
+        if (!string.Equals(
+                format, "X",
+                StringComparison.OrdinalIgnoreCase))
+            return format;
+
+        var type =
+            _lowering.ResolveType(interpolation.Expression.Type);
+        if (EmitPolicy.IsNullableT(type, out var underlying))
+            type = _lowering.ResolveType(underlying);
+        if (type is not INamedTypeSymbol enumType
+            || !_lowering.IsFoldedEnum(enumType))
+            return format;
+
+        // Enum's X format is fixed-width for the underlying storage,
+        // unlike the integral X formatter used after folded-enum
+        // erasure. Add the precision explicitly while preserving the
+        // caller's X/x casing.
+        var width = enumType.EnumUnderlyingType.SpecialType switch
+        {
+            SpecialType.System_SByte
+                or SpecialType.System_Byte => "2",
+            SpecialType.System_Int16
+                or SpecialType.System_UInt16 => "4",
+            SpecialType.System_Int32
+                or SpecialType.System_UInt32 => "8",
+            SpecialType.System_Int64
+                or SpecialType.System_UInt64 => "16",
+            _ => throw new InvalidOperationException(
+                $"Unsupported enum underlying type "
+                + $"'{enumType.EnumUnderlyingType.ToDisplayString()}'."),
+        };
+        return format + width;
     }
 
     CLeaf ConvertNullableEnumInterpolation(
