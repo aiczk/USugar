@@ -18,6 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 INSTALL_ROOT = "Assets/USugar"
+NOTES = ROOT / ".github" / "RELEASE_NOTES.md"
 
 EXCLUDE = [
     r"^\.git(/|$)",
@@ -54,6 +55,18 @@ def entries():
         yield path, meta, rel, found.group(1)
 
 
+def check_notes(version: str) -> None:
+    if not NOTES.exists():
+        raise SystemExit(".github/RELEASE_NOTES.md is missing")
+    heading = f"## v{version}"
+    lines = NOTES.read_text(encoding="utf-8").splitlines()
+    if not any(line.rstrip() == heading for line in lines):
+        raise SystemExit(
+            f".github/RELEASE_NOTES.md has no '{heading}' heading; "
+            "it still describes the previous release"
+        )
+
+
 def build(version: str) -> Path:
     out = ROOT / f"USugar.v{version}.unitypackage"
     seen: dict[str, str] = {}
@@ -79,4 +92,6 @@ def build(version: str) -> Path:
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: release.py <tag>")
-    build(sys.argv[1].lstrip("v"))
+    tag_version = sys.argv[1].lstrip("v")
+    check_notes(tag_version)
+    build(tag_version)
