@@ -219,8 +219,6 @@ namespace VRC.SDK3.Data
     }
 }
 
-public enum ByteMode : byte { Zero, One }
-
 public class BoxedGenericConversionHost : UdonSharpBehaviour
 {
     static T FromToken<T>(DataToken token) { return (T)(object)token; }
@@ -237,7 +235,6 @@ public class BoxedGenericConversionHost : UdonSharpBehaviour
         behaviour = FromReference<UdonSharpBehaviour>(default(DataToken));
         number = FromReference<int>(default(DataToken));
         number = FromFloat<int>(1.9f);
-        ByteMode mode = FromInt<ByteMode>(1);
     }
 }
 ", "BoxedGenericConversionHost");
@@ -252,9 +249,26 @@ public class BoxedGenericConversionHost : UdonSharpBehaviour
             "SystemConvert.__ToInt32__SystemObject__SystemInt32", uasm);
         Assert.Contains(
             "SystemMath.__Truncate__SystemDouble__SystemDouble", uasm);
-        Assert.Contains(
-            "SystemConvert.__ToByte__SystemInt32__SystemByte", uasm);
         Assert.DoesNotContain("USUGAR_TYPED_VIEW", uasm);
+    }
+
+    [Fact]
+    public void BoxedGenericNumericToFoldedEnum_RejectsClrInvalidUnbox()
+    {
+        var error = Assert.Throws<System.NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum ByteMode : byte { Zero, One }
+public class BoxedGenericEnumHost : UdonSharpBehaviour
+{
+    static T FromInt<T>(int value) { return (T)(object)value; }
+    public int seed;
+    void Start() { ByteMode mode = FromInt<ByteMode>(seed); }
+}
+", "BoxedGenericEnumHost"));
+
+        Assert.Contains("unboxing", error.Message);
+        Assert.Contains("folded enum", error.Message);
     }
 
     [Fact]

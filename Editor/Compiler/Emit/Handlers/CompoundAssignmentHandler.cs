@@ -38,6 +38,12 @@ internal sealed class CompoundAssignmentHandler
         if (op.Target.Type is INamedTypeSymbol nt && nt.DelegateInvokeMethod != null)
             return VisitDelegateCompoundAssignment(op, nt);
 
+        if (operatorMethod == null
+            && _lowering.RegisteredEnumFacet(op.Target.Type)
+                is { } registeredEnum)
+            throw RegisteredEnumProducerError(
+                registeredEnum, "compound assignment");
+
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = _lvalues.PrepareLValue(op.Target);
         var leftVal = lv.Value;
@@ -337,6 +343,12 @@ internal sealed class CompoundAssignmentHandler
 
         LoweringServices.RejectChecked(op.IsChecked);
 
+        if (operatorMethod == null
+            && _lowering.RegisteredEnumFacet(op.Target.Type)
+                is { } registeredEnum)
+            throw RegisteredEnumProducerError(
+                registeredEnum, "increment/decrement");
+
         // Capture lvalue sub-expressions once to avoid double evaluation
         var lv = _lvalues.PrepareLValue(op.Target);
         var targetVal = lv.Value;
@@ -399,4 +411,14 @@ internal sealed class CompoundAssignmentHandler
         // stores resultVal to the target's heap id and never touches that scratch, so it still holds the old value.
         return op.IsPostfix ? lv.Value : resultVal;
     }
+
+    static System.NotSupportedException RegisteredEnumProducerError(
+        INamedTypeSymbol enumType, string operation)
+        => new(
+            $"{operation} producing registered enum "
+            + $"'{enumType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "is not supported for a runtime value. VRC Udon COPY "
+            + "preserves the numeric result's StrongBox type instead of "
+            + "re-boxing it as the enum. Use an enum constant or keep an "
+            + "already enum-typed value.");
 }

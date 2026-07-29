@@ -130,6 +130,28 @@ public class UdonAbiPrototypeTests
     }
 
     [Fact]
+    public void RegisteredEnumAndInt32AreNotStrongBoxCompatible()
+    {
+        var facts = new UdonTypeFactRegistry();
+        facts.RecordForTest(
+            "FixtureSdkEnum", isEnum: true, isValueType: true);
+
+        var externReason =
+            ExternOperandCompatibility.WhyIncompatible(
+                "FixtureSdkEnum",
+                "SystemInt32",
+                UdonAbiParameterMode.Out,
+                facts);
+        var copyReason = RawCopyCompatibility.WhyIncompatible(
+            "FixtureSdkEnum", "SystemInt32", facts);
+
+        Assert.NotNull(externReason);
+        Assert.NotNull(copyReason);
+        Assert.Contains("fact value type", externReason);
+        Assert.Contains("fact value type", copyReason);
+    }
+
+    [Fact]
     public void NameOnlyPrototypeCannotBypassOperandVerification()
     {
         const string signature = "Example.__Touch__SystemInt32__SystemVoid";

@@ -1,4 +1,4 @@
-using System.Linq;
+using System;
 using Xunit;
 
 namespace USugar.Tests;
@@ -7,9 +7,6 @@ public class EnumOperatorLoweringTests
 {
     const string Int32Add =
         "SystemInt32.__op_Addition__SystemInt32_SystemInt32__SystemInt32";
-    const string Int32Subtract =
-        "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32";
-
     static string CompileBody(string name, string body)
         => TestHelper.CompileToUasm($@"
 using UdonSharp;
@@ -23,35 +20,37 @@ public class {name} : UdonSharpBehaviour {{
     [InlineData("EnumIncPostfix", "keyField++;")]
     [InlineData("EnumIncPrefix", "++keyField;")]
     [InlineData("EnumCompoundAdd", "keyField += 1;")]
-    public void RegisteredEnumAdditionResolvesToItsUnderlyingExtern(
+    public void RegisteredEnumAdditionProducer_Rejects(
         string name, string body)
     {
-        var uasm = CompileBody(name, body);
-        Assert.Contains(Int32Add, uasm);
-        Assert.Contains("keyField: %UnityEngineKeyCode", uasm);
-        Assert.DoesNotContain("UnityEngineKeyCode.__op_", uasm);
+        var error = Assert.Throws<NotSupportedException>(
+            () => CompileBody(name, body));
+        Assert.Contains("registered enum", error.Message);
+        Assert.Contains("StrongBox", error.Message);
     }
 
     [Theory]
     [InlineData("EnumDecPostfix", "keyField--;")]
     [InlineData("EnumDecPrefix", "--keyField;")]
     [InlineData("EnumCompoundSubtract", "keyField -= 1;")]
-    public void RegisteredEnumSubtractionResolvesToItsUnderlyingExtern(
+    public void RegisteredEnumSubtractionProducer_Rejects(
         string name, string body)
     {
-        var uasm = CompileBody(name, body);
-        Assert.Contains(Int32Subtract, uasm);
-        Assert.DoesNotContain("UnityEngineKeyCode.__op_", uasm);
+        var error = Assert.Throws<NotSupportedException>(
+            () => CompileBody(name, body));
+        Assert.Contains("registered enum", error.Message);
+        Assert.Contains("StrongBox", error.Message);
     }
 
     [Fact]
-    public void IncrementAndCompoundAddShareOneOperatorProducer()
+    public void RegisteredEnumConstantProducer_RemainsSupported()
     {
-        var increment = CompileBody("EnumProducerInc", "keyField++;");
-        var compound = CompileBody("EnumProducerCompound", "keyField += 1;");
-        Assert.Equal(
-            ExternNamesOf(increment, "op_Addition"),
-            ExternNamesOf(compound, "op_Addition"));
+        var uasm = CompileBody(
+            "EnumConstantProducer",
+            "keyField = UnityEngine.KeyCode.Space;");
+        Assert.Contains(
+            "keyField: %UnityEngineKeyCode",
+            uasm);
     }
 
     [Fact]
@@ -61,12 +60,4 @@ public class {name} : UdonSharpBehaviour {{
         Assert.Contains(Int32Add, uasm);
         Assert.Contains("intField: %SystemInt32", uasm);
     }
-
-    static string[] ExternNamesOf(string uasm, string member)
-        => uasm.Split('\n')
-            .Where(line => line.Contains("EXTERN") && line.Contains(member))
-            .Select(line => line.Trim())
-            .Distinct()
-            .OrderBy(line => line, System.StringComparer.Ordinal)
-            .ToArray();
 }

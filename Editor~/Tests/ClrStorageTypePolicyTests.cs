@@ -198,21 +198,17 @@ public class RegisteredEnumToString : UdonSharpBehaviour
     }
 
     [Fact]
-    public void EnumCompoundAddAndSubtractUseUnderlyingIntegerExterns()
+    public void FoldedEnumCompoundArithmeticUsesUnderlyingIntegerExterns()
     {
         var uasm = TestHelper.CompileToUasm(@"
-using System;
 using UdonSharp;
 public enum TinyMode : byte { Zero, One }
 public class EnumCompoundArithmetic : UdonSharpBehaviour
 {
-    public DayOfWeek registered;
     public TinyMode folded;
 
     public void Apply()
     {
-        registered += 1;
-        registered -= 1;
         folded += 1;
         folded -= 1;
     }
@@ -224,9 +220,25 @@ public class EnumCompoundArithmetic : UdonSharpBehaviour
         Assert.Contains(
             "SystemInt32.__op_Subtraction__SystemInt32_SystemInt32__SystemInt32",
             uasm);
-        Assert.DoesNotContain("SystemDayOfWeek.__op_", uasm);
         Assert.DoesNotContain("TinyMode.__op_", uasm);
         Assert.DoesNotContain("SystemByte.__op_Addition", uasm);
         Assert.DoesNotContain("SystemByte.__op_Subtraction", uasm);
+    }
+
+    [Fact]
+    public void RegisteredEnumCompoundArithmeticRejectsNumericStrongBox()
+    {
+        var error = Assert.Throws<NotSupportedException>(
+            () => TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class RegisteredEnumCompoundArithmetic : UdonSharpBehaviour
+{
+    public DayOfWeek value;
+    public void Apply() { value += 1; }
+}", "RegisteredEnumCompoundArithmetic"));
+
+        Assert.Contains("registered enum", error.Message);
+        Assert.Contains("StrongBox", error.Message);
     }
 }

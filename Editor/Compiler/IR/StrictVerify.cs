@@ -265,7 +265,7 @@ public sealed class UdonTypeFactRegistry
 
 /// <summary>Raw VM COPY compatibility shared by structured IR verification, flat IR verification,
 /// and the independent UASM validator. Legal mismatches are SystemObject, Nullable erasure,
-/// fact-backed enum/Int32 representation, and two fact-backed reference types. The final rule is
+/// and two fact-backed reference types. The final rule is
 /// valid only for COPY: it moves a reference strongbox without enforcing an extern's CLR operand
 /// type.</summary>
 public static class RawCopyCompatibility
@@ -279,8 +279,6 @@ public static class RawCopyCompatibility
         if (expected == actual) return null;
         if (expected == "SystemObject" || actual == "SystemObject") return null;
         if (IsNullableErasure(expected, actual) || IsNullableErasure(actual, expected)) return null;
-        if (expected == "SystemInt32" && facts.IsEnumFact(actual) == true) return null;
-        if (actual == "SystemInt32" && facts.IsEnumFact(expected) == true) return null;
         var e = facts.IsReferenceFact(expected);
         var a = facts.IsReferenceFact(actual);
         if (e == true && a == true) return null;
@@ -300,4 +298,3 @@ public static class RawCopyCompatibility
     static string Describe(string name, bool? isRef) =>
         $"'{name}' is a fact {(isRef == true ? "reference" : "value type")}";
 }
-

@@ -14,9 +14,10 @@ namespace USugar.Tests;
 ///     unoverridden classes on same-ref / different-ref / null / mixed operand pairs (VM Match).
 ///
 /// (b) enum instance .Equals: a USER enum's inherited Enum.Equals owner resolves through B59 to the
-///     receiver's erased underlying-primitive extern (SystemInt32/SystemByte.__Equals__SystemObject),
-///     whose box-type-and-value BCL semantics equal C# Enum.Equals under the erased tag (VM Match) —
-///     frozen. An SDK enum's owner resolved to its own Udon type (UnityEngineKeyCode …), which has NO
+///     receiver's erased underlying-primitive extern only when the argument's static type is the same
+///     enum. Erased arguments are rejected and statically different value types return false, because
+///     the underlying tag alone cannot implement Enum.Equals type identity. An SDK enum's owner
+///     resolved to its own Udon type (UnityEngineKeyCode …), which has NO
 ///     registered __Equals extern, and ResolveExtern's Component-owner fallback silently adopted
 ///     UnityEngineComponent.__Equals__SystemObject__SystemBoolean — whose wrapper reads the receiver
 ///     as UnityEngine.Object, so the real VM throws HeapTypeMismatchException at runtime on legal C#

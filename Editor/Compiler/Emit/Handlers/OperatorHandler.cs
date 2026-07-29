@@ -122,6 +122,18 @@ internal sealed class OperatorHandler
         }
 
         // ── Nullable (boxed object) compared to null literal → object reference null check ──
+        if (operatorMethod == null
+            && _lowering.RegisteredEnumFacet(op.Type)
+                is { } registeredEnumResult)
+        {
+            if (op.ConstantValue.HasValue)
+                return _lowering.Const(
+                    op.ConstantValue.Value,
+                    _lowering.GetStorageType(op.Type));
+            throw RegisteredEnumProducerError(
+                registeredEnumResult, "binary operator");
+        }
+
         if (NullableAbi.IsNullLiteralComparison(op, out var nullableOperand))
         {
             var nv = _lowering.VisitExpression(nullableOperand);
@@ -341,6 +353,18 @@ internal sealed class OperatorHandler
         }
 
         // Bitwise NOT (~): Udon VM has no unary complement extern → synthesize as XOR with all-bits-set
+        if (operatorMethod == null
+            && _lowering.RegisteredEnumFacet(op.Type)
+                is { } registeredEnumResult)
+        {
+            if (op.ConstantValue.HasValue)
+                return _lowering.Const(
+                    op.ConstantValue.Value,
+                    _lowering.GetStorageType(op.Type));
+            throw RegisteredEnumProducerError(
+                registeredEnumResult, "unary operator");
+        }
+
         if (op.OperatorKind == UnaryOperatorKind.BitwiseNegation)
         {
             // Lifted ~ on Nullable<T> null-propagates; route it through EmitLiftedUnary before the non-lifted
@@ -453,6 +477,16 @@ internal sealed class OperatorHandler
     }
 
     // ── Is-type / Is-pattern ──
+
+    static System.NotSupportedException RegisteredEnumProducerError(
+        INamedTypeSymbol enumType, string operation)
+        => new(
+            $"{operation} producing registered enum "
+            + $"'{enumType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "is not supported for a runtime value. VRC Udon COPY "
+            + "preserves the numeric result's StrongBox type instead of "
+            + "re-boxing it as the enum. Use an enum constant or keep an "
+            + "already enum-typed value.");
 
     CLeaf VisitIsType(IIsTypeOperation op)
     {

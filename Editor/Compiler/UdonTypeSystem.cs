@@ -138,6 +138,25 @@ internal sealed class UdonTypeSystem : IUdonTypeSystem
         TypeClassifier.RequireSupportedArrayRank(resolved);
         var sourceType = UdonTypeIdentity.FromStorage(resolved);
 
+        if (resolved is IArrayTypeSymbol
+            {
+                Rank: 1,
+                ElementType: INamedTypeSymbol
+                {
+                    TypeKind: TypeKind.Enum,
+                } enumElement,
+            }
+            && _abiCatalog.IsRegisteredType(
+                UdonTypeIdentity.FromStorage(enumElement))
+            && !_abiCatalog.IsRegisteredType(sourceType))
+            throw new NotSupportedException(
+                $"Array type '{resolved.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: its enum element has an exact "
+                + "registered Udon heap tag, but the SDK provides no "
+                + "corresponding registered enum-array type. Folding the "
+                + "array to the underlying numeric carrier would lose the "
+                + "element ABI.");
+
         // Anonymous types are compiler-owned aggregate bundles. They have no
         // CLR/SDK extern name to lower, so asking ExternResolver to mint one
         // would misclassify them as unsupported user classes. Record their

@@ -226,7 +226,7 @@ public class UasmValidatorTests
     }
 
     [Fact]
-    public void CopyFactEnumToInt32_Passes() // declared relaxation: fact-enums are stored as Int32
+    public void CopyFactEnumToInt32_Throws()
     {
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("UvFakeSdkEnum", isEnum: true, isValueType: true);
@@ -245,7 +245,11 @@ public class UasmValidatorTests
         JUMP_INDIRECT, __intnl_returnJump_SystemUInt32_0
 .code_end
 ";
-        UasmValidator.Validate(uasm, facts); // should not throw
+        var error = Assert.Throws<UasmValidationException>(
+            () => UasmValidator.Validate(uasm, facts));
+        Assert.Contains("COPY", error.Message);
+        Assert.Contains("UvFakeSdkEnum", error.Message);
+        Assert.Contains("SystemInt32", error.Message);
     }
 
     [Fact]

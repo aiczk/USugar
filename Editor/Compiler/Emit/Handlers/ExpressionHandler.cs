@@ -351,6 +351,88 @@ internal sealed class ExpressionHandler
             _lowering.GetStorageTypeName(destinationType));
     }
 
+    bool TryEmitRegisteredNullableEnumConversion(
+        IConversionOperation conversion,
+        CLeaf sourceValue,
+        ITypeSymbol sourceType,
+        ITypeSymbol destinationType,
+        out CLeaf result)
+    {
+        result = null;
+        if (!conversion.Conversion.IsNullable)
+            return false;
+
+        var sourceIsNullable = EmitPolicy.IsNullableT(
+            sourceType, out var sourceUnderlying);
+        var destinationIsNullable = EmitPolicy.IsNullableT(
+            destinationType, out var destinationUnderlying);
+        var destinationEnum = destinationIsNullable
+            ? _lowering.RegisteredEnumFacet(
+                destinationUnderlying)
+            : null;
+
+        if (destinationEnum != null)
+        {
+            var sourceEnum = _lowering.RegisteredEnumFacet(
+                sourceType);
+            if (SymbolEqualityComparer.Default.Equals(
+                    sourceEnum, destinationEnum))
+            {
+                result = sourceValue;
+                return true;
+            }
+            throw RegisteredEnumProducerError(
+                destinationEnum,
+                "nullable conversion");
+        }
+
+        if (!sourceIsNullable
+            || _lowering.RegisteredEnumFacet(
+                sourceUnderlying) is not { } sourceRegistered
+            || !destinationIsNullable)
+            return false;
+
+        var destinationEnumType =
+            _lowering.ResolveType(destinationUnderlying)
+            as INamedTypeSymbol;
+        var destinationNumericType =
+            destinationEnumType?.TypeKind == TypeKind.Enum
+                ? destinationEnumType.EnumUnderlyingType
+                : _lowering.ResolveType(destinationUnderlying);
+        if (!ExternResolver.IsConvertibleNumericType(
+                destinationNumericType))
+            return false;
+        result = EmitLiftedNumericBox(
+            sourceValue, sourceRegistered.EnumUnderlyingType,
+            destinationNumericType);
+        return true;
+    }
+
+    CLeaf EmitLiftedNumericBox(
+        CLeaf sourceValue,
+        ITypeSymbol sourceNumeric,
+        ITypeSymbol destinationNumeric)
+    {
+        var convertMethod =
+            ExternResolver.GetConvertMethodName(
+                destinationNumeric)
+            ?? throw new NotSupportedException(
+                $"No numeric conversion exists for "
+                + $"'{destinationNumeric.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'.");
+        var integerToInteger =
+            IsIntegerNumeric(sourceNumeric)
+            && IsIntegerNumeric(destinationNumeric);
+        return NullableAbi.EmitLiftedNumericConversion(
+            _lowering.Builder, sourceValue,
+            _lowering.GetStorageType(destinationNumeric),
+            convertMethod, integerToInteger,
+            _lowering.EmitNarrowingConvert);
+    }
+
+    static bool IsIntegerNumeric(ITypeSymbol type)
+        => ExternResolver.IsIntegerType(type)
+           || type.SpecialType == SpecialType.System_Char;
+
     bool TryEmitClosedObjectCast(IConversionOperation conv, LoweredValue source,
         ITypeSymbol closedDestination, out CLeaf result)
     {
@@ -408,30 +490,37 @@ internal sealed class ExpressionHandler
             if (destinationEnum?.TypeKind != TypeKind.Enum)
                 destinationEnum = null;
 
-            if (sourceEnum != null
-                && !_lowering.IsFoldedEnum(sourceEnum)
-                && ExternResolver.IsConvertibleNumericType(closedDestination)
-                && ExternResolver.GetConvertMethodName(closedDestination) is { } enumConvert)
+            if (destinationEnum != null
+                && !_lowering.IsFoldedEnum(destinationEnum))
             {
-                result = _lowering.ExternCall(
-                    UdonAbiKey.Method("SystemConvert", enumConvert,
-                        new[] { "SystemObject" }, destinationStorage.Name),
-                    new List<CLeaf> { srcVal },
-                    destinationStorage);
-                return true;
+                if (SymbolEqualityComparer.Default.Equals(
+                        sourceEnum, destinationEnum))
+                {
+                    result = srcVal;
+                    return true;
+                }
+                throw RegisteredEnumProducerError(
+                    destinationEnum,
+                    "closed generic runtime conversion");
             }
 
             var numericSource = sourceEnum?.EnumUnderlyingType ?? effectiveSource;
             var numericDestination = destinationEnum?.EnumUnderlyingType ?? closedDestination;
-            if ((destinationEnum == null || _lowering.IsFoldedEnum(destinationEnum))
-                && ExternResolver.IsConvertibleNumericType(numericSource)
+            if (ExternResolver.IsConvertibleNumericType(numericSource)
                 && ExternResolver.IsConvertibleNumericType(numericDestination))
             {
-            result = EmitNumericConversion(srcVal, numericSource, numericDestination);
-            if (result.Type != destinationStorage)
-                result = _lowering.RepresentationCast(
-                    result, destinationStorage, RepresentationCastKind.EnumRepresentation);
-            return true;
+                var numericValue = sourceEnum == null
+                    ? srcVal
+                    : _lowering.EmitEnumToUnderlying(
+                        srcVal, sourceEnum);
+                result = EmitNumericConversion(
+                    numericValue, numericSource,
+                    numericDestination);
+                if (result.Type != destinationStorage)
+                    result = _lowering.RepresentationCast(
+                        result, destinationStorage,
+                        RepresentationCastKind.EnumRepresentation);
+                return true;
             }
         }
 
@@ -457,6 +546,297 @@ internal sealed class ExpressionHandler
         result = _lowering.RepresentationCast(
             srcVal, destinationStorage, RepresentationCastKind.ClosedGenericObjectCast);
         return true;
+    }
+
+    void RequireEnumConversionSemantics(
+        IConversionOperation conversion,
+        ITypeSymbol source,
+        ITypeSymbol destination,
+        IMethodSymbol operatorMethod)
+    {
+        if (operatorMethod != null || source == null || destination == null)
+            return;
+        if (SymbolEqualityComparer.Default.Equals(source, destination))
+            return;
+
+        var destinationRegistered =
+            _lowering.RegisteredEnumFacet(destination);
+        if (destinationRegistered != null)
+        {
+            var sourceRegistered =
+                _lowering.RegisteredEnumFacet(source);
+            var boundSource =
+                _lowering.RequireBoundConversion(conversion)
+                    .SourceType;
+            var boundSourceRegistered =
+                _lowering.RegisteredEnumFacet(boundSource);
+            var preservesExactEnum =
+                SymbolEqualityComparer.Default.Equals(
+                    sourceRegistered, destinationRegistered)
+                || SymbolEqualityComparer.Default.Equals(
+                    boundSourceRegistered,
+                    destinationRegistered);
+            if (!preservesExactEnum
+                && !conversion.ConstantValue.HasValue
+                && !conversion.Operand.ConstantValue.HasValue)
+                throw RegisteredEnumProducerError(
+                    destinationRegistered,
+                    "runtime conversion");
+        }
+
+        var sourceFolded = _lowering.FoldedEnumFacet(source);
+        var destinationFolded = _lowering.FoldedEnumFacet(destination);
+        // A folded enum is stored as its underlying primitive. Letting it
+        // escape to object/ValueType/Enum/an interface would box that
+        // primitive and permanently lose the enum's CLR identity. Numeric
+        // conversions and nullable wrapping keep the static enum contract.
+        if (sourceFolded != null
+            && destinationFolded == null
+            && !IsEnumNumericDestination(destination)
+            && !IsExactFoldedEnumBoxRoundtrip(conversion)
+            && !IsFoldedEnumIdentitySafeUse(
+                conversion, sourceFolded))
+            throw new NotSupportedException(
+                $"Conversion from folded enum "
+                + $"'{sourceFolded.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{destination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: Udon stores the enum as its underlying "
+                + "primitive, so boxing or interface erasure would lose the "
+                + "CLR enum runtime type identity. Keep the value enum-typed "
+                + "or convert it explicitly to a numeric type.");
+
+        if (destinationFolded != null
+            && sourceFolded == null
+            && !IsEnumNumericSource(source)
+            && !IsNullToNullable(conversion, destination)
+            && !IsExactFoldedEnumBoxRoundtrip(conversion))
+            throw new NotSupportedException(
+                $"Conversion from "
+                + $"'{source.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to folded enum "
+                + $"'{destinationFolded.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: unboxing requires the erased value to "
+                + "carry the exact CLR enum type, but Udon stores this enum "
+                + "as its underlying primitive. Keep the value enum-typed "
+                + "instead of routing it through object, ValueType, Enum, "
+                + "or an interface.");
+
+        var sourceArrayEnum =
+            _lowering.FoldedEnumArrayElement(source);
+        var destinationArrayEnum =
+            _lowering.FoldedEnumArrayElement(destination);
+        if (sourceArrayEnum != null
+            && destinationArrayEnum == null
+            && !IsFoldedEnumArrayTransientUse(conversion))
+            throw new NotSupportedException(
+                $"Conversion from folded enum array "
+                + $"'{source.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to '{destination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported here: Udon stores the array with its "
+                + "underlying element carrier, so erasure would let GetType "
+                + "observe the wrong CLR array identity. Keep the array at "
+                + "its exact static type.");
+
+        if (destinationArrayEnum != null
+            && sourceArrayEnum == null
+            && !IsNullValue(conversion.Operand)
+            && !IsExactFoldedEnumArrayCloneCast(conversion))
+            throw new NotSupportedException(
+                $"Cast from "
+                + $"'{source.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + $"to folded enum array "
+                + $"'{destination.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: the erased Udon carrier cannot prove "
+                + "the CLR array element identity required by a hard cast. "
+                + "Keep the array at its exact static type.");
+    }
+
+    static bool IsEnumNumericSource(ITypeSymbol type)
+    {
+        if (EmitPolicy.IsNullableT(type, out var nullable))
+            type = nullable;
+        return type?.TypeKind == TypeKind.Enum
+               || ExternResolver.IsConvertibleNumericType(type);
+    }
+
+    static bool IsEnumNumericDestination(ITypeSymbol type)
+    {
+        if (EmitPolicy.IsNullableT(type, out var nullable))
+            type = nullable;
+        return type?.TypeKind == TypeKind.Enum
+               || ExternResolver.IsConvertibleNumericType(type);
+    }
+
+    static bool IsNullToNullable(
+        IConversionOperation conversion,
+        ITypeSymbol destination)
+        => EmitPolicy.IsNullableT(destination, out _)
+           && IsNullValue(conversion.Operand);
+
+    static bool IsNullValue(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        return operation is IDefaultValueOperation
+               || operation?.ConstantValue.HasValue == true
+               && operation.ConstantValue.Value == null;
+    }
+
+    static NotSupportedException RegisteredEnumProducerError(
+        INamedTypeSymbol enumType, string operation)
+        => new(
+            $"{operation} producing registered enum "
+            + $"'{enumType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "is not supported unless the value is a compile-time "
+            + "constant or already has that exact enum heap type. "
+            + "VRC Udon COPY preserves the source StrongBox type; copying "
+            + "an underlying numeric result into an enum-typed destination "
+            + "therefore stores the numeric StrongBox instead of re-boxing "
+            + "it as the enum.");
+
+    bool IsExactFoldedEnumBoxRoundtrip(
+        IConversionOperation conversion)
+    {
+        ITypeSymbol original;
+        ITypeSymbol restored;
+        if (conversion.Parent is IConversionOperation outer
+            && ReferenceEquals(outer.Operand, conversion))
+        {
+            original = _lowering.ResolveType(
+                conversion.Operand.Type);
+            restored = _lowering.ResolveType(outer.Type);
+        }
+        else if (conversion.Operand
+                     is IConversionOperation inner
+                 && ReferenceEquals(inner.Parent, conversion))
+        {
+            original = _lowering.ResolveType(
+                inner.Operand.Type);
+            restored = _lowering.ResolveType(
+                conversion.Type);
+        }
+        else
+        {
+            return false;
+        }
+
+        return _lowering.FoldedEnumFacet(original) != null
+               && SymbolEqualityComparer.Default.Equals(
+                   original, restored);
+    }
+
+    bool IsFoldedEnumIdentitySafeUse(
+        IConversionOperation conversion,
+        INamedTypeSymbol sourceEnum)
+    {
+        if (conversion.Parent is not IArgumentOperation
+            {
+                Parent: IInvocationOperation invocation,
+            } argument)
+            return false;
+        var target = invocation.TargetMethod;
+        if (!target.IsStatic
+            && target.Name is "Equals" or "CompareTo"
+            && invocation.Instance != null
+            && SymbolEqualityComparer.Default.Equals(
+                _lowering.FoldedEnumFacet(
+                    invocation.Instance.Type),
+                sourceEnum))
+        {
+            var unwrapped = LoweringServices.UnwrapConcatOperand(
+                argument.Value);
+            return SymbolEqualityComparer.Default.Equals(
+                _lowering.FoldedEnumFacet(unwrapped.Type),
+                sourceEnum);
+        }
+        return false;
+    }
+
+    bool IsFoldedEnumArrayTransientUse(
+        IConversionOperation conversion)
+    {
+        if (conversion.Parent is IBinaryOperation
+            {
+                OperatorKind: BinaryOperatorKind.Equals
+                    or BinaryOperatorKind.NotEquals,
+            } binary
+            && ArrayHandler.IsReferenceEquality(binary))
+            return true;
+        if (conversion.Parent is not IArgumentOperation
+            {
+                Parent: IInvocationOperation invocation,
+            })
+            return false;
+        var target = invocation.TargetMethod;
+        if (!target.IsStatic
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && target.Name == "Equals"
+            && _lowering.FoldedEnumArrayElement(
+                invocation.Instance?.Type) != null)
+            return true;
+        if (target.IsStatic
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && target.Name is "Equals" or "ReferenceEquals")
+            return true;
+        if (target.IsStatic
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Array)
+        {
+            if (target.Name == "Clear")
+                return true;
+            if (target.Name is not ("Copy" or "ConstrainedCopy"))
+                return false;
+            var ranged = target.Parameters.Length == 5;
+            return SameExactFoldedEnumArrays(
+                InvocationArgument(invocation, 0),
+                InvocationArgument(
+                    invocation, ranged ? 2 : 1));
+        }
+        return !target.IsStatic
+               && target.Name == "CopyTo"
+               && SameExactFoldedEnumArrays(
+                   invocation.Instance,
+                   InvocationArgument(invocation, 0));
+    }
+
+    bool SameExactFoldedEnumArrays(
+        IOperation source, IOperation destination)
+    {
+        source = LoweringServices.UnwrapConversions(source);
+        destination =
+            LoweringServices.UnwrapConversions(destination);
+        var sourceType = _lowering.ResolveType(source.Type);
+        var destinationType =
+            _lowering.ResolveType(destination.Type);
+        return _lowering.FoldedEnumArrayElement(sourceType)
+                   != null
+               && SymbolEqualityComparer.Default.Equals(
+                   sourceType, destinationType);
+    }
+
+    static IOperation InvocationArgument(
+        IInvocationOperation invocation, int ordinal)
+    {
+        foreach (var argument in invocation.Arguments)
+            if (argument.Parameter?.Ordinal == ordinal)
+                return argument.Value;
+        return null;
+    }
+
+    static bool IsExactFoldedEnumArrayCloneCast(
+        IConversionOperation conversion)
+    {
+        if (conversion.Operand
+                is not IInvocationOperation invocation
+            || invocation.TargetMethod.Name != "Clone"
+            || invocation.TargetMethod.Parameters.Length != 0
+            || invocation.Instance?.Type
+                is not IArrayTypeSymbol receiver)
+            return false;
+        return SymbolEqualityComparer.Default.Equals(
+            receiver, conversion.Type);
     }
 
     CLeaf VisitConversion(IConversionOperation conv)
@@ -511,6 +891,10 @@ internal sealed class ExpressionHandler
             && _lowering.ResolveType(conv.Type) is { } destination)
             _lowering.RejectProgramLocalErasure(
                 conv, source, destination);
+
+        RequireEnumConversionSemantics(
+            conv, resolvedConversionSource,
+            resolvedConversionDestination, operatorMethod);
 
         var sourceValue = _lowering.VisitLoweredExpression(conv.Operand);
         var srcVal = sourceValue.Leaf;
@@ -717,6 +1101,11 @@ internal sealed class ExpressionHandler
             return srcVal;
         }
 
+        if (TryEmitRegisteredNullableEnumConversion(
+                conv, srcVal, convSrcType, convDstType,
+                out var registeredNullableConversion))
+            return registeredNullableConversion;
+
         // Closed generic/object-erasure cast. This must run after the delegate protocol guards above
         // and before the raw conversion arms below, whose Roslyn symbols still expose `object` and T.
         if (TryEmitClosedObjectCast(
@@ -837,42 +1226,71 @@ internal sealed class ExpressionHandler
                 new StorageType(dstType));
         }
 
-        // Enum ↔ numeric conversions (int→enum, enum→int, and B72: enum→float/double/decimal). This arm is a
-        // conversion between an enum and a numeric type. It must NOT fire when the other side is `object`
-        // (enum→object BOXING) — that mints a nonexistent SystemConvert.__ToObject__ and must fall through to
-        // the identity pass-through below (the underlying value is already a heap object in Udon's object[]
-        // model). B61 restricted this to exclude boxing; B72 widened it back to floating/decimal targets,
-        // which are genuine conversions (a raw COPY into a float/decimal slot is a silent mistype).
-        if (conv.Operand.Type != null && conv.Type != null
-                                      && !SymbolEqualityComparer.Default.Equals(conv.Operand.Type, conv.Type)
-                                      && (conv.Operand.Type.TypeKind == TypeKind.Enum || conv.Type.TypeKind == TypeKind.Enum)
-                                      && IsEnumOrNumeric(conv.Operand.Type) && IsEnumOrNumeric(conv.Type))
+        // Enum ↔ numeric conversions (int→enum, enum→int, and B72:
+        // enum→float/double/decimal). Object boxing/unboxing is deliberately
+        // excluded: folded enums cannot preserve CLR identity there, while
+        // registered enum unboxing follows the exact-tag cast path.
+        var conversionSourceEnum =
+            convSrcType as INamedTypeSymbol;
+        if (conversionSourceEnum?.TypeKind != TypeKind.Enum)
+            conversionSourceEnum = null;
+        var conversionDestinationEnum =
+            convDstType as INamedTypeSymbol;
+        if (conversionDestinationEnum?.TypeKind != TypeKind.Enum)
+            conversionDestinationEnum = null;
+        if (convSrcType != null && convDstType != null
+            && !SymbolEqualityComparer.Default.Equals(
+                convSrcType, convDstType)
+            && (conversionSourceEnum != null
+                || conversionDestinationEnum != null)
+            && IsEnumOrNumeric(convSrcType)
+            && IsEnumOrNumeric(convDstType))
         {
-            var dstType = _lowering.GetStorageTypeName(conv.Type);
+            var destinationNumeric =
+                conversionDestinationEnum?.EnumUnderlyingType
+                ?? convDstType;
+            var dstType =
+                _lowering.GetStorageTypeName(destinationNumeric);
             // Prefer const: avoids COPY type-tag corruption
             var constVal = conv.ConstantValue.HasValue ? conv.ConstantValue
                          : conv.Operand.ConstantValue.HasValue ? conv.Operand.ConstantValue
                          : default;
             if (constVal.HasValue)
-                return _lowering.Const(constVal.Value, new StorageType(dstType));
+                return _lowering.Const(
+                    constVal.Value,
+                    _lowering.GetStorageType(convDstType));
 
-            // Enum ↔ underlying is a pure re-typing between each side's effective underlying udon type (an enum
-            // is STORED as its underlying type — see UdonTypeSystem.Describe, so dstType for an enum
-            // target is already its underlying). The former int→enum path indexed a per-enum lookup array, but
-            // enumArr[v - min] == v — an identity over the underlying value — so it added nothing except a VM
-            // fault on out-of-range casts ((E)999 is legal C# and must round-trip). A direct convert is correct
-            // for every value: in-range, out-of-range, and byte/short/unsigned wrap. A same-width pair (int-
-            // backed enum ↔ int) re-types through a scratch slot; a different-width pair (byte/short-backed enum
-            // ↔ int, any enum ↔ long) needs a real numeric conversion (a bare COPY into a wider slot would store
-            // e.g. a SystemByte into a SystemInt32 variable and fail verification).
-            var srcUnderlying = conv.Operand.Type is INamedTypeSymbol srcEnum && srcEnum.TypeKind == TypeKind.Enum
-                ? _lowering.GetStorageTypeName(srcEnum.EnumUnderlyingType)
-                : _lowering.GetStorageTypeName(conv.Operand.Type);
+            if (conversionDestinationEnum != null
+                && !_lowering.IsFoldedEnum(
+                    conversionDestinationEnum))
+                throw RegisteredEnumProducerError(
+                    conversionDestinationEnum,
+                    "runtime conversion");
+
+            // Compute in the effective underlying domain. Registered enum
+            // sources are first read through Convert.ToUnderlying(object);
+            // the remaining conversion is C#'s unchecked numeric conversion.
+            var sourceNumeric =
+                conversionSourceEnum?.EnumUnderlyingType
+                ?? convSrcType;
+            var srcUnderlying =
+                _lowering.GetStorageTypeName(sourceNumeric);
+            if (conversionSourceEnum != null)
+                srcVal = _lowering.EmitEnumToUnderlying(
+                    srcVal, conversionSourceEnum);
+            CLeaf numericResult;
             if (srcUnderlying != dstType)
-                return _lowering.EmitNarrowingConvert(srcVal, srcUnderlying, dstType);
-            var tmpSlot = _lowering.State.Builder.AllocScratch(new StorageType(dstType));
-            _lowering.EmitAssign(tmpSlot, srcVal);
-            return _lowering.SlotRef(tmpSlot);
+                numericResult = _lowering.EmitNarrowingConvert(
+                    srcVal, srcUnderlying, dstType);
+            else
+            {
+                var tmpSlot = _lowering.State.Builder.AllocScratch(
+                    new StorageType(dstType));
+                _lowering.EmitAssign(tmpSlot, srcVal);
+                numericResult = _lowering.SlotRef(tmpSlot);
+            }
+
+            return numericResult;
         }
 
         // A potentially-failing hard cast into a compiler-owned bundle needs

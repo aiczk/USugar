@@ -163,8 +163,8 @@ using UdonSharp;
 public enum L2E { A, B }
 public class L2REnum : UdonSharpBehaviour {
     public int seed; public int result;
-    object boxed;
-    void Start() { boxed = L2E.A; result = boxed is L2E ? 1 : 0; }
+    public object boxed;
+    void Start() { result = boxed is L2E ? 1 : 0; }
 }", "L2REnum"));
         Assert.Contains("Runtime type test against", ex.Message);
     }
@@ -176,9 +176,8 @@ public class L2REnum : UdonSharpBehaviour {
 using UdonSharp;
 public enum L2ArrayEnum { A, B }
 public class L2REnumArray : UdonSharpBehaviour {
-    object boxed;
+    public object boxed;
     void Start() {
-        boxed = new L2ArrayEnum[1];
         if (boxed is L2ArrayEnum[]) { }
     }
 }", "L2REnumArray"));

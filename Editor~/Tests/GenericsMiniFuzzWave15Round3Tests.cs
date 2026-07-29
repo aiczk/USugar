@@ -6,19 +6,33 @@ namespace USugar.Tests;
 // Generics mini-fuzz wave-15 round-3 batch — tracked pins. See docs/roadmap.md (production gate + B61-B65).
 public class GenericsMiniFuzzWave15Round3Tests
 {
-    // ── B61: enum→object boxing must not hijack the enum↔underlying arm (bogus SystemConvert.__ToObject__) ──
+    // ── B61: same-enum object members use the guarded underlying path; general boxing rejects ──
 
     [Theory]
     [InlineData("B61C", "L a = (L)(seed % 3); L b = (L)((seed+1) % 3); result = a.CompareTo(b);")]
     [InlineData("B61E", "L a = (L)(seed % 3); L b = (L)((seed+2) % 3); result = a.Equals(b) ? 1 : 0;")]
-    [InlineData("B61B", "L e = (L)(seed % 3); object o = e; result = (o == null) ? 0 : ((int)(L)o);")]
-    public void B61_EnumBoxingDoesNotMintBogusConvert(string cls, string body)
+    public void B61_SameEnumObjectMembersDoNotMintBogusConvert(string cls, string body)
     {
         var uasm = TestHelper.CompileToUasm($@"
 using System; using UdonSharp;
 public enum L {{ A, B, C }}
 public class {cls} : UdonSharpBehaviour {{ public int seed; public int result; void Start(){{ {body} }} }}", cls);
         Assert.DoesNotContain("SystemConvert.__ToObject__", uasm);
+    }
+
+    [Fact]
+    public void B61_FoldedEnumBoxing_RejectsIdentityLoss()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using System; using UdonSharp;
+public enum L61B { A, B, C }
+public class B61B : UdonSharpBehaviour {
+  public int seed; public object result;
+  void Start(){ L61B e = (L61B)(seed % 3); result = e; }
+}", "B61B"));
+        Assert.Contains("folded enum", error.Message);
+        Assert.Contains("runtime type identity", error.Message);
     }
 
     // ── B62: `as`-cast implemented via the is-machinery (distinguishable → test+null-out; collapse → reject) ──
@@ -225,7 +239,8 @@ public class B70S : UdonSharpBehaviour { public int seedA; public int seedB; pub
     // ── B72: enum→floating/decimal is a real conversion, not a re-typing — the emitter must produce the
     //         SystemConvert.__To{Double,Single,Decimal}__, not COPY the raw underlying int into the wider
     //         slot. (VM value pins in the harness; DiffFuzz numeric coercion masks the double/float mistype,
-    //         so the structural extern presence is the real regression guard.) enum→object stays identity. ──
+    //         so the structural extern presence is the real regression guard.) General enum-to-object
+    //         boxing rejects because the folded carrier cannot preserve CLR enum identity. ──
 
     [Theory]
     [InlineData("B72Dd", "double", "SystemConvert.__ToDouble__SystemInt32__SystemDouble")]
@@ -241,14 +256,17 @@ public class {cls} : UdonSharpBehaviour {{ public int seed; public {dstType} res
     }
 
     [Fact]
-    public void B72_EnumToObjectBoxing_StaysIdentity_NoBogusConvert()
+    public void B72_EnumToObjectBoxing_RejectsIdentityLoss()
     {
-        // Control: enum→object boxing must NOT mint a SystemConvert.__ToObject__ (the B61 fix this preserves).
-        var uasm = TestHelper.CompileToUasm(@"
+        // A folded enum cannot be boxed honestly: the VM would expose
+        // the underlying integer type instead of the enum type.
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
 using System; using UdonSharp;
 public enum E72b { A, B = 5 }
-public class B72Bx : UdonSharpBehaviour { public int seed; public int result; void Start(){ E72b e = (E72b)seed; object o = e; result = (o == null) ? 0 : ((int)(E72b)o); } }", "B72Bx");
-        Assert.DoesNotContain("SystemConvert.__ToObject__", uasm);
+public class B72Bx : UdonSharpBehaviour { public int seed; public object result; void Start(){ E72b e = (E72b)seed; result = e; } }", "B72Bx"));
+        Assert.Contains("folded enum", error.Message);
+        Assert.Contains("runtime type identity", error.Message);
     }
 
     // ── B73: a type parameter used ONLY inside a pattern (`o is T x`, `case T t:`, recursive `T { … }`) was

@@ -4,7 +4,7 @@ namespace USugar.Tests;
 
 // Phase-D enforcement pins (the Phase-B shadow's successor): CoreVerify's relaxed-arm GUESSES are gone —
 // a slot/value type pair may differ only under RawCopyCompatibility (SystemObject wildcard, Nullable
-// erasure, fact-enum↔Int32, both-fact-reference COPY). These tests pin the flipped polarity: fact-backed
+// erasure, both-fact-reference COPY). These tests pin the flipped polarity: fact-backed
 // pairs still pass (accept controls), while no-fact and fact-contradicted pairs throw loudly, naming the
 // missing fact.
 public class StrictVerifyShadowTests
@@ -35,11 +35,18 @@ public class StrictVerifyShadowTests
     }
 
     [Fact]
-    public void EnumInterop_FactEnum_Passes() // accept control
+    public void EnumInterop_FactEnumAndInt32_Throws()
     {
         var facts = new UdonTypeFactRegistry();
         facts.RecordForTest("SsvFakeSdkEnum", isEnum: true, isValueType: true);
-        VerifyAssign(Fn("enumguess_fact"), "SsvFakeSdkEnum", new CConst(1, StorageTypes.Int32), facts); // no throw
+        var ex = Assert.Throws<VerificationException>(
+            () => VerifyAssign(
+                Fn("enumguess_fact"),
+                "SsvFakeSdkEnum",
+                new CConst(1, StorageTypes.Int32),
+                facts));
+        Assert.Contains("'SsvFakeSdkEnum' is a fact value type", ex.Message);
+        Assert.Contains("'SystemInt32' is a fact value type", ex.Message);
     }
 
     [Fact]

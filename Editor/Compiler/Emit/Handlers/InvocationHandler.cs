@@ -44,6 +44,369 @@ internal sealed class InvocationHandler
     internal static CConst DefaultConst(CoreBuilder builder, StorageType type)
         => DelegateInvocationLowerer.DefaultConst(builder, type);
 
+    bool TryEmitFoldedEnumEquals(
+        IInvocationOperation operation,
+        IMethodSymbol target,
+        out CLeaf result)
+    {
+        result = null;
+        var isStaticObjectEquals =
+            target.IsStatic
+            && target.Name == nameof(object.Equals)
+            && target.ContainingType.SpecialType
+                == SpecialType.System_Object
+            && operation.Arguments.Length == 2;
+        var receiverEnum = target.IsStatic
+            ? null
+            : _lowering.FoldedEnumFacet(
+                operation.Instance?.Type);
+        var isInstanceEquals =
+            receiverEnum != null
+            && target.Name == nameof(object.Equals)
+            && operation.Arguments.Length == 1;
+        if (!isStaticObjectEquals && !isInstanceEquals)
+            return false;
+
+        if (isInstanceEquals)
+        {
+            var argument = LoweringServices.UnwrapConcatOperand(
+                operation.Arguments[0].Value);
+            var argumentEnum =
+                _lowering.FoldedEnumFacet(argument.Type);
+            var receiverNullable = EmitPolicy.IsNullableT(
+                _lowering.ResolveType(operation.Instance.Type),
+                out _);
+            var argumentNullable = EmitPolicy.IsNullableT(
+                _lowering.ResolveType(argument.Type), out _);
+            if (!receiverNullable && !argumentNullable
+                && SymbolEqualityComparer.Default.Equals(
+                    receiverEnum, argumentEnum))
+                return false;
+            if (SymbolEqualityComparer.Default.Equals(
+                    receiverEnum, argumentEnum)
+                || IsNull(argument))
+            {
+                result = _lowering.ExternCall(
+                    UdonAbi.ObjectEquals,
+                    new List<CLeaf>
+                    {
+                        _lowering.VisitExpression(
+                            operation.Instance),
+                        _lowering.VisitExpression(argument)
+                    },
+                    StorageTypes.Boolean);
+                return true;
+            }
+            if (HasAmbiguousEnumRuntimeIdentity(argument.Type))
+                throw FoldedEnumIdentityError(
+                    receiverEnum, "Equals(object)");
+
+            // The argument's static type cannot box the receiver enum.
+            // Evaluate both expressions in call order, then return false.
+            _lowering.VisitExpression(operation.Instance);
+            _lowering.VisitExpression(argument);
+            result = _lowering.Const(
+                false, StorageTypes.Boolean);
+            return true;
+        }
+
+        var argumentsByOrdinal = new IOperation[2];
+        foreach (var argument in operation.Arguments)
+            argumentsByOrdinal[argument.Parameter.Ordinal] =
+                LoweringServices.UnwrapConcatOperand(argument.Value);
+        var leftEnum = _lowering.FoldedEnumFacet(
+            argumentsByOrdinal[0].Type);
+        var rightEnum = _lowering.FoldedEnumFacet(
+            argumentsByOrdinal[1].Type);
+        if (leftEnum == null && rightEnum == null)
+            return false;
+
+        var sameEnum = leftEnum != null
+            && SymbolEqualityComparer.Default.Equals(
+                leftEnum, rightEnum);
+        var oneNull = leftEnum != null
+            && IsNull(argumentsByOrdinal[1])
+            || rightEnum != null
+            && IsNull(argumentsByOrdinal[0]);
+        if (!sameEnum && !oneNull)
+        {
+            // object.Equals(a, b) dispatches a.Equals(b); it is not
+            // symmetric. When only b is a folded enum, an arbitrary
+            // a.Equals override can return true or inspect b's exact enum
+            // identity, neither of which the primitive carrier preserves.
+            if (leftEnum == null && rightEnum != null)
+                throw FoldedEnumIdentityError(
+                    rightEnum,
+                    "object.Equals(non-enum, folded enum)");
+
+            var other = leftEnum != null
+                ? argumentsByOrdinal[1]
+                : argumentsByOrdinal[0];
+            if (HasAmbiguousEnumRuntimeIdentity(other.Type))
+                throw FoldedEnumIdentityError(
+                    leftEnum ?? rightEnum,
+                    "object.Equals");
+        }
+
+        var valuesByOrdinal = new CLeaf[2];
+        foreach (var argument in operation.Arguments)
+            valuesByOrdinal[argument.Parameter.Ordinal] =
+                _lowering.VisitExpression(
+                    LoweringServices.UnwrapConcatOperand(
+                        argument.Value));
+        result = sameEnum || oneNull
+            ? _lowering.ExternCall(
+                UdonAbi.ObjectEquals,
+                new List<CLeaf>
+                {
+                    valuesByOrdinal[0],
+                    valuesByOrdinal[1]
+                },
+                StorageTypes.Boolean)
+            : _lowering.Const(false, StorageTypes.Boolean);
+        return true;
+    }
+
+    bool TryEmitFoldedEnumReferenceEquals(
+        IInvocationOperation operation,
+        IMethodSymbol target,
+        out CLeaf result)
+    {
+        result = null;
+        if (!target.IsStatic
+            || target.Name != nameof(object.ReferenceEquals)
+            || target.ContainingType.SpecialType
+                != SpecialType.System_Object
+            || operation.Arguments.Length != 2)
+            return false;
+
+        var argumentsByOrdinal = new IOperation[2];
+        foreach (var argument in operation.Arguments)
+            argumentsByOrdinal[argument.Parameter.Ordinal] =
+                LoweringServices.UnwrapConcatOperand(
+                    argument.Value);
+        if (argumentsByOrdinal.All(argument =>
+                _lowering.FoldedEnumFacet(argument.Type)
+                    == null))
+            return false;
+
+        var valuesByOrdinal = new CLeaf[2];
+        foreach (var argument in operation.Arguments)
+            valuesByOrdinal[argument.Parameter.Ordinal] =
+                _lowering.VisitExpression(
+                    LoweringServices.UnwrapConcatOperand(
+                        argument.Value));
+        result = _lowering.ExternCall(
+            UdonAbiKey.Method(
+                "SystemObject", "ReferenceEquals",
+                new[] { "SystemObject", "SystemObject" },
+                "SystemBoolean"),
+            new List<CLeaf>
+            {
+                valuesByOrdinal[0],
+                valuesByOrdinal[1]
+            },
+            StorageTypes.Boolean);
+        return true;
+    }
+
+    void RequireFoldedEnumObjectMemberSemantics(
+        IInvocationOperation operation,
+        IMethodSymbol target)
+    {
+        if (target.IsStatic || operation.Instance == null)
+            return;
+        var receiverEnum = _lowering.FoldedEnumFacet(
+            operation.Instance.Type);
+        if (receiverEnum == null)
+            return;
+
+        if (target.Name == nameof(object.ToString)
+                && target.Parameters.Length == 0
+            || target.Name == nameof(object.Equals)
+                && target.Parameters.Length == 1
+            || target.Name == nameof(object.GetHashCode)
+                && target.Parameters.Length == 0
+            || target.Name == "GetValueOrDefault"
+                && target.Parameters.Length <= 1)
+            return;
+        if (target.Name == "CompareTo"
+            && operation.Arguments.Length == 1)
+        {
+            var argument = LoweringServices.UnwrapConcatOperand(
+                operation.Arguments[0].Value);
+            if (SymbolEqualityComparer.Default.Equals(
+                    receiverEnum,
+                    _lowering.FoldedEnumFacet(argument.Type)))
+                return;
+        }
+
+        throw FoldedEnumIdentityError(
+            receiverEnum, target.Name + "()");
+    }
+
+    void RequireFoldedEnumArrayInvocationSemantics(
+        IInvocationOperation operation,
+        IMethodSymbol target)
+    {
+        var receiverElement =
+            _lowering.FoldedEnumArrayElement(
+                operation.Instance?.Type);
+        if (receiverElement != null)
+        {
+            if (target.Name is nameof(object.GetType)
+                    or nameof(object.ToString)
+                && target.Parameters.Length == 0)
+                throw new System.NotSupportedException(
+                    $"'{target.Name}()' is not supported for folded enum "
+                    + $"array '{operation.Instance.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}': "
+                    + "Udon stores it as an underlying-element array, so "
+                    + "the observed CLR array type name would be wrong.");
+
+            if (target.Name == "Clone"
+                && target.Parameters.Length == 0)
+            {
+                if (operation.Parent
+                        is IConversionOperation conversion
+                    && SymbolEqualityComparer.Default.Equals(
+                        _lowering.ResolveType(conversion.Type),
+                        _lowering.ResolveType(
+                            operation.Instance.Type)))
+                    return;
+                throw new System.NotSupportedException(
+                    $"Clone() on folded enum array "
+                    + $"'{operation.Instance.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                    + "must be cast immediately back to the same array type; "
+                    + "an object-typed clone would expose the underlying "
+                    + "array identity.");
+            }
+
+            if (target.Name == "CopyTo")
+            {
+                RequireSameFoldedEnumArrayCopy(
+                    operation.Instance,
+                    ArgumentByOrdinal(operation, 0),
+                    "CopyTo");
+                return;
+            }
+
+            if (target.Name is "GetLength" or "GetLongLength"
+                    or "GetLowerBound" or "GetUpperBound"
+                || target.Name is nameof(object.Equals)
+                    or nameof(object.GetHashCode))
+                return;
+
+            if (target.ContainingType.SpecialType
+                    is SpecialType.System_Array
+                    or SpecialType.System_Object
+                || target.Name is "GetValue" or "SetValue")
+                throw new System.NotSupportedException(
+                    $"Array member '{target.Name}' is not supported for "
+                    + $"folded enum array '{operation.Instance.Type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}': "
+                    + "it exposes an element or runtime array identity that "
+                    + "Udon stores only as the underlying type.");
+        }
+
+        if (!target.IsStatic
+            || target.ContainingType.SpecialType
+                != SpecialType.System_Array)
+            return;
+
+        var foldedArguments = operation.Arguments
+            .Select(argument =>
+                LoweringServices.UnwrapConversions(
+                    argument.Value))
+            .Where(argument =>
+                _lowering.FoldedEnumArrayElement(
+                    argument.Type) != null)
+            .ToArray();
+        if (foldedArguments.Length == 0)
+            return;
+        if (target.Name == "Clear")
+            return;
+        if (target.Name is "Copy" or "ConstrainedCopy")
+        {
+            var ranged = target.Parameters.Length == 5;
+            RequireSameFoldedEnumArrayCopy(
+                ArgumentByOrdinal(operation, 0),
+                ArgumentByOrdinal(operation, ranged ? 2 : 1),
+                "Array." + target.Name);
+            return;
+        }
+        throw new System.NotSupportedException(
+            $"Array.{target.Name} is not supported for folded enum "
+            + "arrays: the operation can observe the erased element "
+            + "runtime identity. Use typed indexing instead.");
+    }
+
+    void RequireSameFoldedEnumArrayCopy(
+        IOperation source,
+        IOperation destination,
+        string operation)
+    {
+        source = LoweringServices.UnwrapConversions(source);
+        destination =
+            LoweringServices.UnwrapConversions(destination);
+        var sourceType = _lowering.ResolveType(source.Type);
+        var destinationType =
+            _lowering.ResolveType(destination.Type);
+        if (_lowering.FoldedEnumArrayElement(sourceType) != null
+            && SymbolEqualityComparer.Default.Equals(
+                sourceType, destinationType))
+            return;
+        throw new System.NotSupportedException(
+            $"{operation} is supported for a folded enum array only "
+            + "when source and destination have the exact same enum "
+            + $"array type; found '{sourceType?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + $"and '{destinationType?.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}'. "
+            + "Udon erases both element types to their underlying array "
+            + "carrier and otherwise cannot preserve ArrayTypeMismatchException.");
+    }
+
+    static IOperation ArgumentByOrdinal(
+        IInvocationOperation operation, int ordinal)
+    {
+        foreach (var argument in operation.Arguments)
+            if (argument.Parameter?.Ordinal == ordinal)
+                return argument.Value;
+        throw new System.InvalidOperationException(
+            $"Invocation '{operation.TargetMethod.Name}' has no "
+            + $"argument at ordinal {ordinal}.");
+    }
+
+    bool HasAmbiguousEnumRuntimeIdentity(ITypeSymbol type)
+    {
+        var resolved = _lowering.ResolveType(type);
+        return resolved == null
+               || resolved.TypeKind
+                   is TypeKind.Interface
+                   or TypeKind.TypeParameter
+               || resolved.SpecialType
+                   is SpecialType.System_Object
+                   or SpecialType.System_ValueType
+                   or SpecialType.System_Enum;
+    }
+
+    static bool IsNull(IOperation operation)
+    {
+        while (operation is IConversionOperation conversion)
+            operation = conversion.Operand;
+        return operation is IDefaultValueOperation
+               || operation?.ConstantValue.HasValue == true
+               && operation.ConstantValue.Value == null;
+    }
+
+    static System.NotSupportedException
+        FoldedEnumIdentityError(
+            INamedTypeSymbol enumType, string operation)
+        => new(
+            $"'{operation}' is not supported for folded enum "
+            + $"'{enumType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+            + "with an erased or differently-typed value: Udon stores "
+            + "the enum as its underlying primitive and cannot preserve "
+            + "the CLR enum runtime type identity. Keep both values "
+            + "statically typed as the same enum.");
+
     public CLeaf Handle(IOperation expression) => expression switch
     {
         IInvocationOperation op => VisitInvocation(op),
@@ -64,6 +427,15 @@ internal sealed class InvocationHandler
         var boundSite = _lowering.RequireBoundCallSite(
             op, CallableSiteKind.Method);
         var target = boundSite.Target;
+
+        RequireFoldedEnumArrayInvocationSemantics(op, target);
+        if (TryEmitFoldedEnumEquals(op, target, out var foldedEnumEquals))
+            return foldedEnumEquals;
+        if (TryEmitFoldedEnumReferenceEquals(
+                op, target,
+                out var foldedEnumReferenceEquals))
+            return foldedEnumReferenceEquals;
+        RequireFoldedEnumObjectMemberSemantics(op, target);
 
         if (target.IsStatic
             && target.Name == nameof(object.Equals)

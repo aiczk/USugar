@@ -242,6 +242,49 @@ internal sealed class LoweringServices
     }
     internal bool IsFoldedEnum(ITypeSymbol type)
         => _state.Types.IsFoldedEnum(ResolveType(type));
+
+    internal INamedTypeSymbol FoldedEnumFacet(ITypeSymbol type)
+    {
+        if (type == null) return null;
+        var resolved = ResolveType(type);
+        if (EmitPolicy.IsNullableT(resolved, out var underlying))
+            resolved = ResolveType(underlying);
+        return resolved is INamedTypeSymbol
+            {
+                TypeKind: TypeKind.Enum,
+            } enumType
+            && IsFoldedEnum(enumType)
+                ? enumType
+                : null;
+    }
+
+    internal INamedTypeSymbol RegisteredEnumFacet(ITypeSymbol type)
+    {
+        if (type == null) return null;
+        var resolved = ResolveType(type);
+        if (EmitPolicy.IsNullableT(resolved, out var underlying))
+            resolved = ResolveType(underlying);
+        return resolved is INamedTypeSymbol
+            {
+                TypeKind: TypeKind.Enum,
+            } enumType
+            && !IsFoldedEnum(enumType)
+                ? enumType
+                : null;
+    }
+
+    internal INamedTypeSymbol FoldedEnumArrayElement(
+        ITypeSymbol type)
+    {
+        if (type == null) return null;
+        var resolved = ResolveType(type);
+        return resolved is IArrayTypeSymbol
+            {
+                Rank: 1,
+            } array
+            ? FoldedEnumFacet(array.ElementType)
+            : null;
+    }
     internal string GetArrayType(IArrayTypeSymbol arrType) => GetStorageTypeName(arrType);
     internal string GetArrayElemType(IArrayTypeSymbol arrType)
     {
@@ -2810,6 +2853,14 @@ internal sealed class LoweringServices
     internal CLeaf ConvertConcatOperand(CLeaf value, IOperation unwrapped)
     {
         var type = ResolveType(unwrapped.Type);
+        if (FoldedEnumArrayElement(type) is { } enumElement)
+            throw new NotSupportedException(
+                $"Implicit stringification of folded enum array "
+                + $"'{type.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}' "
+                + "is not supported: Udon stores it as an "
+                + $"'{enumElement.EnumUnderlyingType.ToDisplayString(SymbolDisplayFormat.MinimallyQualifiedFormat)}[]' "
+                + "carrier, so ToString would report the wrong CLR array "
+                + "type name.");
         if (type != null && SourceShape(type).IsBundle)
             return EmitKnownBundleToString(
                 value, type, nullIsError: false);

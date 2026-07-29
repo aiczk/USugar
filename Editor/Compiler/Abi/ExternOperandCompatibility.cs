@@ -36,12 +36,6 @@ public static class ExternOperandCompatibility
             || IsNullableErasure(actual, expected))
             return null;
 
-        // A folded source enum is represented by its integral strongbox.
-        if (expected == "SystemInt32" && facts.IsEnumFact(actual) == true)
-            return null;
-        if (actual == "SystemInt32" && facts.IsEnumFact(expected) == true)
-            return null;
-
         var expectedReference = facts.IsReferenceFact(expected);
         var actualReference = facts.IsReferenceFact(actual);
         if (expectedReference == true && actualReference == true)
