@@ -499,6 +499,15 @@ internal sealed class ExpressionHandler
                     result = srcVal;
                     return true;
                 }
+                if (IsRuntimeTypeGuardedRegisteredEnumCast(
+                        conv, destinationEnum))
+                {
+                    result = _lowering.RepresentationCast(
+                        srcVal, destinationStorage,
+                        RepresentationCastKind
+                            .ClosedGenericObjectCast);
+                    return true;
+                }
                 throw RegisteredEnumProducerError(
                     destinationEnum,
                     "closed generic runtime conversion");
@@ -578,7 +587,9 @@ internal sealed class ExpressionHandler
                     destinationRegistered);
             if (!preservesExactEnum
                 && !conversion.ConstantValue.HasValue
-                && !conversion.Operand.ConstantValue.HasValue)
+                && !conversion.Operand.ConstantValue.HasValue
+                && !IsRuntimeTypeGuardedRegisteredEnumCast(
+                    conversion, destinationRegistered))
                 throw RegisteredEnumProducerError(
                     destinationRegistered,
                     "runtime conversion");
@@ -697,6 +708,139 @@ internal sealed class ExpressionHandler
             + "an underlying numeric result into an enum-typed destination "
             + "therefore stores the numeric StrongBox instead of re-boxing "
             + "it as the enum.");
+
+    bool IsRuntimeTypeGuardedRegisteredEnumCast(
+        IConversionOperation conversion,
+        INamedTypeSymbol destinationEnum)
+    {
+        // Generic container helpers commonly keep all T-specific branches:
+        // `if (value.GetType() == typeof(E)) (E)(object)value`.
+        // For T != E the cast is unreachable; for T == E its StrongBox is
+        // already exact. Recognize only that dominance proof.
+        var source = LoweringServices.UnwrapConcatOperand(
+            conversion.Operand);
+        IOperation child = conversion;
+        for (var parent = conversion.Parent;
+             parent != null;
+             child = parent, parent = parent.Parent)
+        {
+            if (parent is not IConditionalOperation conditional
+                || !ReferenceEquals(
+                    child, conditional.WhenTrue))
+                continue;
+            if (RuntimeTypeGuardMatches(
+                    conditional.Condition, source,
+                    destinationEnum))
+                return true;
+        }
+        return false;
+    }
+
+    bool RuntimeTypeGuardMatches(
+        IOperation condition,
+        IOperation source,
+        INamedTypeSymbol destinationEnum)
+    {
+        condition =
+            LoweringServices.UnwrapConversions(condition);
+        if (condition is not IBinaryOperation
+            {
+                OperatorKind: BinaryOperatorKind.Equals,
+            } equality)
+            return false;
+
+        return TypeGuardPairMatches(
+                   equality.LeftOperand,
+                   equality.RightOperand,
+                   source, destinationEnum)
+               || TypeGuardPairMatches(
+                   equality.RightOperand,
+                   equality.LeftOperand,
+                   source, destinationEnum);
+    }
+
+    bool TypeGuardPairMatches(
+        IOperation runtimeType,
+        IOperation expectedType,
+        IOperation source,
+        INamedTypeSymbol destinationEnum)
+    {
+        expectedType =
+            LoweringServices.UnwrapConversions(
+                expectedType);
+        if (expectedType is not ITypeOfOperation typeOf
+            || !SymbolEqualityComparer.Default.Equals(
+                _lowering.ResolveType(typeOf.TypeOperand),
+                destinationEnum))
+            return false;
+
+        runtimeType =
+            LoweringServices.UnwrapConversions(
+                runtimeType);
+        if (IsGetTypeOf(runtimeType, source))
+            return true;
+        if (runtimeType
+                is not ILocalReferenceOperation typeLocal)
+            return false;
+        return StableLocalIsGetTypeOf(
+            typeLocal.Local, source);
+    }
+
+    bool StableLocalIsGetTypeOf(
+        ILocalSymbol local,
+        IOperation source)
+    {
+        var method = _lowering.CurrentMethod;
+        if (method == null)
+            return false;
+        var body = _lowering.State.Methods
+            .DescribeBody(method);
+        return body.StableLocalInitializers.TryGetValue(
+                   local, out var initializer)
+               && IsGetTypeOf(initializer, source);
+    }
+
+    bool IsGetTypeOf(
+        IOperation operation,
+        IOperation source)
+    {
+        operation =
+            LoweringServices.UnwrapConversions(operation);
+        if (operation is not IInvocationOperation
+            {
+                TargetMethod:
+                {
+                    Name: nameof(object.GetType),
+                },
+                Arguments:
+                {
+                    Length: 0,
+                },
+            } invocation)
+            return false;
+        var instance = LoweringServices.UnwrapConcatOperand(
+            invocation.Instance);
+        return SameValueReference(instance, source);
+    }
+
+    static bool SameValueReference(
+        IOperation left,
+        IOperation right)
+    {
+        left = LoweringServices.UnwrapConcatOperand(left);
+        right = LoweringServices.UnwrapConcatOperand(right);
+        if (left is IParameterReferenceOperation leftParameter
+            && right
+                is IParameterReferenceOperation rightParameter)
+            return SymbolEqualityComparer.Default.Equals(
+                leftParameter.Parameter,
+                rightParameter.Parameter);
+        if (left is ILocalReferenceOperation leftLocal
+            && right is ILocalReferenceOperation rightLocal)
+            return SymbolEqualityComparer.Default.Equals(
+                leftLocal.Local, rightLocal.Local);
+        return false;
+    }
 
     bool IsExactFoldedEnumBoxRoundtrip(
         IConversionOperation conversion)

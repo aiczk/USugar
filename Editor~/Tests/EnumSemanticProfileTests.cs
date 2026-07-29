@@ -293,6 +293,54 @@ public class EspRegistered : UdonSharpBehaviour {
         Assert.Contains("StrongBox", error.Message);
     }
 
+    [Fact]
+    public void RegisteredEnum_RuntimeTypeGuardedGenericCast_RemainsSupported()
+        => TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class EspRegisteredTypeGuard : UdonSharpBehaviour {
+    public int seed;
+    public DayOfWeek value;
+
+    static DayOfWeek ConvertIfDayOfWeek<T>(T item) {
+        var itemType = item.GetType();
+        if (itemType == typeof(DayOfWeek))
+            return (DayOfWeek)(object)item;
+        return DayOfWeek.Sunday;
+    }
+
+    void Start() {
+        value = ConvertIfDayOfWeek<int>(seed);
+        value = ConvertIfDayOfWeek<DayOfWeek>(value);
+    }
+}", "EspRegisteredTypeGuard");
+
+    [Fact]
+    public void RegisteredEnum_UntiedRuntimeTypeGuard_StillRejects()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using System;
+using UdonSharp;
+public class EspRegisteredUntiedGuard : UdonSharpBehaviour {
+    public int seed;
+
+    static DayOfWeek Convert<T>(T item) {
+        var unrelated = typeof(DayOfWeek);
+        if (unrelated == typeof(DayOfWeek))
+            return (DayOfWeek)(object)item;
+        return DayOfWeek.Sunday;
+    }
+
+    void Start() {
+        DayOfWeek value = Convert<int>(seed);
+    }
+}", "EspRegisteredUntiedGuard"));
+
+        Assert.Contains("registered enum", error.Message);
+        Assert.Contains("StrongBox", error.Message);
+    }
+
     [Theory]
     [InlineData("value = value | DayOfWeek.Tuesday;")]
     [InlineData("value = value + 1;")]
