@@ -62,6 +62,51 @@ public class EspRoundtripHost : UdonSharpBehaviour {
 }", "EspRoundtripHost");
 
     [Fact]
+    public void FoldedEnum_ObjectArrayCarrierRoundtrip_RemainsSupported()
+        => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum EspObjectCell { A, B }
+public class EspObjectCellHost : UdonSharpBehaviour {
+    public int seed;
+    public EspObjectCell Read() {
+        EspObjectCell value = (EspObjectCell)seed;
+        object[] carrier = new object[] { value };
+        carrier[0] = EspObjectCell.B;
+        return (EspObjectCell)carrier[0];
+    }
+}", "EspObjectCellHost");
+
+    [Fact]
+    public void FoldedEnum_ExplicitUnderlyingArrayCarrierCast_RemainsSupported()
+        => TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum EspArrayCarrier { A, B }
+public class EspArrayCarrierHost : UdonSharpBehaviour {
+    public int seed;
+    public EspArrayCarrier[] Read() {
+        int[] carrier = new int[] { seed, 1 };
+        return (EspArrayCarrier[])(object)carrier;
+    }
+}", "EspArrayCarrierHost");
+
+    [Fact]
+    public void FoldedEnum_MismatchedArrayCarrierCast_Rejects()
+    {
+        var error = Assert.Throws<NotSupportedException>(() =>
+            TestHelper.CompileToUasm(@"
+using UdonSharp;
+public enum EspArrayCarrierMismatch { A, B }
+public class EspArrayCarrierMismatchHost : UdonSharpBehaviour {
+    public short[] carrier;
+    public EspArrayCarrierMismatch[] Read() =>
+        (EspArrayCarrierMismatch[])(object)carrier;
+}", "EspArrayCarrierMismatchHost"));
+
+        Assert.Contains("folded enum array", error.Message);
+        Assert.Contains("hard cast", error.Message);
+    }
+
+    [Fact]
     public void FoldedEnum_GetType_Rejects()
     {
         var error = Assert.Throws<NotSupportedException>(() =>

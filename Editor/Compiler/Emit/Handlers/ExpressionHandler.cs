@@ -594,6 +594,7 @@ internal sealed class ExpressionHandler
             && destinationFolded == null
             && !IsEnumNumericDestination(destination)
             && !IsExactFoldedEnumBoxRoundtrip(conversion)
+            && !IsFoldedEnumObjectCarrierWrite(conversion)
             && !IsFoldedEnumIdentitySafeUse(
                 conversion, sourceFolded))
             throw new NotSupportedException(
@@ -609,6 +610,7 @@ internal sealed class ExpressionHandler
             && sourceFolded == null
             && !IsEnumNumericSource(source)
             && !IsNullToNullable(conversion, destination)
+            && !IsFoldedEnumObjectCarrierRead(conversion)
             && !IsExactFoldedEnumBoxRoundtrip(conversion))
             throw new NotSupportedException(
                 $"Conversion from "
@@ -627,6 +629,7 @@ internal sealed class ExpressionHandler
             _lowering.FoldedEnumArrayElement(destination);
         if (sourceArrayEnum != null
             && destinationArrayEnum == null
+            && !IsExplicitFoldedEnumArrayCarrierCast(conversion)
             && !IsFoldedEnumArrayTransientUse(conversion))
             throw new NotSupportedException(
                 $"Conversion from folded enum array "
@@ -640,6 +643,7 @@ internal sealed class ExpressionHandler
         if (destinationArrayEnum != null
             && sourceArrayEnum == null
             && !IsNullValue(conversion.Operand)
+            && !IsExplicitFoldedEnumArrayCarrierCast(conversion)
             && !IsExactFoldedEnumArrayCloneCast(conversion))
             throw new NotSupportedException(
                 $"Cast from "
@@ -723,6 +727,118 @@ internal sealed class ExpressionHandler
         return _lowering.FoldedEnumFacet(original) != null
                && SymbolEqualityComparer.Default.Equals(
                    original, restored);
+    }
+
+    bool IsFoldedEnumObjectCarrierWrite(
+        IConversionOperation conversion)
+    {
+        // UdonSharp libraries deliberately use object[] cells as untyped
+        // transport storage. Keep this exception at the cell boundary:
+        // general enum-to-object locals/fields/arguments remain rejected,
+        // and a read must cast the element directly back to the enum.
+        if (conversion.Parent is IArrayInitializerOperation
+            {
+                Parent: IArrayCreationOperation creation,
+            }
+            && IsObjectArray(creation.Type))
+            return true;
+
+        return conversion.Parent
+                   is ISimpleAssignmentOperation assignment
+               && ReferenceEquals(assignment.Value, conversion)
+               && assignment.Target
+                   is IArrayElementReferenceOperation element
+               && IsObjectArray(element.ArrayReference.Type);
+    }
+
+    bool IsFoldedEnumObjectCarrierRead(
+        IConversionOperation conversion)
+    {
+        var operand =
+            LoweringServices.UnwrapConcatOperand(
+                conversion.Operand);
+        return operand is IArrayElementReferenceOperation element
+               && IsObjectArray(element.ArrayReference.Type);
+    }
+
+    bool IsObjectArray(ITypeSymbol type)
+    {
+        var resolved = _lowering.ResolveType(type);
+        return resolved is IArrayTypeSymbol
+        {
+            Rank: 1,
+            ElementType:
+            {
+                SpecialType:
+                    SpecialType.System_Object,
+            },
+        };
+    }
+
+    bool IsExplicitFoldedEnumArrayCarrierCast(
+        IConversionOperation conversion)
+    {
+        // `(E[])(object)underlyingArray` is an established UdonSharp
+        // representation escape hatch. Admit only the immediate, explicit
+        // cast and only when E's underlying element type is exact; an object
+        // local or a differently typed array still cannot launder the cast.
+        ITypeSymbol source;
+        ITypeSymbol destination;
+        if (!conversion.IsImplicit
+            && conversion.Operand
+                is IConversionOperation erase
+            && _lowering.ResolveType(erase.Type).SpecialType
+                == SpecialType.System_Object)
+        {
+            source = _lowering.ResolveType(
+                erase.Operand.Type);
+            destination = _lowering.ResolveType(
+                conversion.Type);
+        }
+        else if (conversion.Parent
+                     is IConversionOperation restore
+                 && !restore.IsImplicit
+                 && ReferenceEquals(
+                     restore.Operand, conversion)
+                 && _lowering.ResolveType(
+                         conversion.Type).SpecialType
+                     == SpecialType.System_Object)
+        {
+            source = _lowering.ResolveType(
+                conversion.Operand.Type);
+            destination = _lowering.ResolveType(
+                restore.Type);
+        }
+        else
+        {
+            return false;
+        }
+
+        if (source is not IArrayTypeSymbol
+            {
+                Rank: 1,
+            } sourceArray
+            || destination is not IArrayTypeSymbol
+            {
+                Rank: 1,
+            } destinationArray)
+            return false;
+
+        if (_lowering.FoldedEnumArrayElement(
+                sourceArray) is { } sourceEnum)
+            return SymbolEqualityComparer.Default.Equals(
+                _lowering.ResolveType(
+                    sourceEnum.EnumUnderlyingType),
+                _lowering.ResolveType(
+                    destinationArray.ElementType));
+        if (_lowering.FoldedEnumArrayElement(
+                destinationArray) is { } destinationEnum)
+            return SymbolEqualityComparer.Default.Equals(
+                _lowering.ResolveType(
+                    sourceArray.ElementType),
+                _lowering.ResolveType(
+                    destinationEnum.EnumUnderlyingType));
+        return false;
     }
 
     bool IsFoldedEnumIdentitySafeUse(
