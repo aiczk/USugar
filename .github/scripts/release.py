@@ -20,6 +20,20 @@ ROOT = Path(__file__).resolve().parents[2]
 INSTALL_ROOT = "Assets/USugar"
 NOTES = ROOT / ".github" / "RELEASE_NOTES.md"
 
+# Assets/USugar.meta lives outside this repository, so the install root's folder asset is
+# reproduced here. The guid must stay fixed or every upgrade re-creates the folder.
+INSTALL_ROOT_GUID = "1100d99290ca53b4283a530c092bb44b"
+INSTALL_ROOT_META = (
+    "fileFormatVersion: 2\n"
+    f"guid: {INSTALL_ROOT_GUID}\n"
+    "folderAsset: yes\n"
+    "DefaultImporter:\n"
+    "  externalObjects: {}\n"
+    "  userData: \n"
+    "  assetBundleName: \n"
+    "  assetBundleVariant: \n"
+)
+
 EXCLUDE = [
     r"^\.git(/|$)",
     r"^\.github(/|$)",
@@ -72,6 +86,11 @@ def build(version: str) -> Path:
     seen: dict[str, str] = {}
     with tempfile.TemporaryDirectory() as tmp:
         stage = Path(tmp)
+        root_entry = stage / INSTALL_ROOT_GUID
+        root_entry.mkdir()
+        (root_entry / "asset.meta").write_bytes(INSTALL_ROOT_META.encode("utf-8"))
+        (root_entry / "pathname").write_bytes(INSTALL_ROOT.encode("utf-8"))
+        seen[INSTALL_ROOT_GUID] = INSTALL_ROOT
         for path, meta, rel, guid in entries():
             if guid in seen:
                 raise SystemExit(f"{rel} shares guid {guid} with {seen[guid]}")
@@ -82,7 +101,7 @@ def build(version: str) -> Path:
                 shutil.copy2(path, entry / "asset")
             shutil.copy2(meta, entry / "asset.meta")
             (entry / "pathname").write_text(f"{INSTALL_ROOT}/{rel}", encoding="utf-8")
-        with tarfile.open(out, "w:gz") as tar:
+        with tarfile.open(out, "w:gz", format=tarfile.GNU_FORMAT) as tar:
             for entry in sorted(stage.iterdir()):
                 tar.add(entry, arcname=entry.name)
     print(f"{out.name}: {len(seen)} entries, {out.stat().st_size / 1024:.1f} KB")
